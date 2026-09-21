@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+.env
+*.age
+.nexus/pending/*
+!.nexus/pending/.gitkeep
+# OMO пишет служебные файлы в .sisyphus — трекаем ТОЛЬКО планы
+.sisyphus/*
+!.sisyphus/plans/
+.opencode/*.log

@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members  = ["crates/nexus-core", "crates/nexus-registry"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.80"
+
+# ЕДИНСТВЕННЫЙ разрешённый набор зависимостей (см. AGENTS.md §5).
+# Расширение — только отдельным packet'ом с меткой contract-change.
+[workspace.dependencies]
+clap       = { version = "4", features = ["derive"] }
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml       = "0.8"
+anyhow     = "1"
+thiserror  = "1"
+tokio      = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time"] }
+tracing    = "0.1"
+sha2       = "0.10"
+# rmcp = "0.x"   # ⚠️verify: официальный Rust MCP SDK — имя/версию проверить перед включением
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "deny"

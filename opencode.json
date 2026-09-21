@@ -1,0 +1,31 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "subagent_depth": 1,
+  "mcp": {
+    "polyforge": { "type": "local", "command": ["polyforge-mcp"], "enabled": true }
+  },
+  "permission": {
+    "polyforge_evidence_append": "allow",
+    "polyforge_evidence_verify": "allow",
+    "polyforge_gate_report":     "allow",
+    "polyforge_gate_evaluate":   "allow",
+    "edit":  "allow",
+    "write": "allow",
+    "webfetch": "deny",
+    "bash": {
+      "*": "ask",
+      "cargo test*": "allow", "cargo fmt*": "allow", "cargo clippy*": "allow",
+      "cargo build*": "allow", "cargo check*": "allow",
+      "just *": "allow",
+      "git status": "allow", "git diff*": "allow", "git log*": "allow",
+      "cargo add*": "deny", "cargo install*": "deny",
+      "rm *": "deny", "curl *": "deny", "wget *": "deny",
+      "git push*": "deny", "git reset --hard*": "deny", "git checkout -- *": "deny"
+    }
+  },
+  "agent": {
+    "sisyphus": { "permission": { "bash": { "git *": "deny" } } },
+    "momus":    { "permission": { "edit": "deny", "write": "deny",
+                                  "bash": { "*": "deny", "cargo test*": "allow", "cargo clippy*": "allow" } } }
+  }
+}
