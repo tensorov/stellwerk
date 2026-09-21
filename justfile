@@ -2,13 +2,20 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 default: check
 
-fmt:      ; cargo fmt --all -- --check
-lint:     ; cargo clippy --workspace --all-targets -- -D warnings
-test:     ; cargo test --workspace
+fmt:
+    cargo fmt --all -- --check
+
+lint:
+    cargo clippy --workspace --all-targets -- -D warnings
+
+test:
+    cargo test --workspace
+
 check: fmt lint test
 
 # приёмка плана Prometheus до вызова Momus/Metis
-plan-lint: ; ./scripts/plan-lint.sh
+plan-lint:
+    ./scripts/plan-lint.sh
 
 # приёмка dev-станции (уровень 0)
 doctor:
