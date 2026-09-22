@@ -19,11 +19,7 @@ pub enum ModelError {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Calibration {
-    #[serde(
-        rename = "tokens_per_byte",
-        alias = "bytes_per_token",
-        default
-    )]
+    #[serde(rename = "tokens_per_byte", alias = "bytes_per_token", default)]
     pub tokens_per_byte: f64,
     pub measured_at: String,
 }

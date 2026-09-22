@@ -309,28 +309,19 @@ mod tests {
 
     #[test]
     fn run_badcmd_exit2() {
-        let code = run(vec![
-            "stellwerk".into(),
-            "badcmd".into(),
-        ]);
+        let code = run(vec!["stellwerk".into(), "badcmd".into()]);
         assert_eq!(code, 2);
     }
 
     #[test]
     fn run_module_no_subcmd_exit2() {
-        let code = run(vec![
-            "stellwerk".into(),
-            "module".into(),
-        ]);
+        let code = run(vec!["stellwerk".into(), "module".into()]);
         assert_eq!(code, 2);
     }
 
     #[test]
     fn run_help_exit0() {
-        let code = run(vec![
-            "stellwerk".into(),
-            "--help".into(),
-        ]);
+        let code = run(vec!["stellwerk".into(), "--help".into()]);
         assert_eq!(code, 0);
     }
 
