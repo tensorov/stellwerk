@@ -13,8 +13,9 @@ measured_at     = ""    # ISO8601
 kind     = "mcp"
 autoload = true
 risk     = "R3"
-source   = { git = "https://github.com/tensorov/polyforge", rev = "PIN_ME" }
+source   = { git = "https://github.com/tensorov/polyforge", rev = "71c295c6f29546743a2c1fe43a64a04a07c9516c" }
 command  = "polyforge-mcp"
 tools    = ["evidence_append", "evidence_verify", "gate_evaluate", "gate_report"]
-context_cost_tokens = 0   # заполнит `nexus module measure`
+context_cost_tokens = 0
+# заполнит `stellwerk module measure`
 update   = { channel = "tag", policy = "pr" }

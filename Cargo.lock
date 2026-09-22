@@ -238,29 +238,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nexus-core"
-version = "0.0.1"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "nexus-registry"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "clap",
- "nexus-core",
- "serde",
- "serde_json",
- "sha2",
- "thiserror",
- "tokio",
- "toml",
- "tracing",
-]
-
-[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -367,6 +344,29 @@ checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
  "errno",
  "libc",
+]
+
+[[package]]
+name = "stellwerk-core"
+version = "0.0.1"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "stellwerk-registry"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+ "sha2",
+ "stellwerk-core",
+ "thiserror",
+ "tokio",
+ "toml",
+ "tracing",
 ]
 
 [[package]]

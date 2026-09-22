@@ -4,5 +4,5 @@
 
 - audit для skill-модулей (SKILL.md)
 - точный токенизатор qwen
-- nexus-gateway, nexus-bus, nexus-sync, nexus-nag, nexus-hooks
+- stellwerk-gateway, stellwerk-bus, stellwerk-sync, stellwerk-nag, stellwerk-hooks
 - kanban / Hermes / OpenResearch / CRM / Obsidian-проекция / IoT / TTS

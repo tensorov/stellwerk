@@ -1,4 +1,4 @@
-# nexus-federation
+# stellwerk-federation
 
 Control plane для агентной работы. Ядро скучное: events, RBAC, sync, evidence, registry.
 Агенты сменные. Память разделена. Obsidian — окно. PolyForge — закон.

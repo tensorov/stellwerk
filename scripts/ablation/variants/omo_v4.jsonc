@@ -1,0 +1,75 @@
+// OMO variant V4: agents diet (disabled_agents max).
+// = V2 (full OMO) + disabled_agents: все канонические КРОМЕ sisyphus + build и plan.
+// sisyphus остаётся (активный); при старте открыта нужды в build/plan нет.
+{
+  "[opencode]": {
+    "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/omo.schema.json",
+    "disabled_mcps": ["websearch", "context7", "codegraph"],
+    "disabled_agents": [
+      "atlas", "explore", "hephaestus", "librarian", "metis", "momus",
+      "multimodal-looker", "oracle", "prometheus", "sisyphus-junior",
+      "build", "plan"
+    ],
+    "agents": {
+      "hephaestus": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "oracle": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "librarian": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "explore": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "multimodal-looker": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "prometheus": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "metis": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "momus": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "atlas": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "sisyphus-junior": {
+        "model": "opencode/gpt-5-nano"
+      }
+    },
+    "categories": {
+      "visual-engineering": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "ultrabrain": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "deep": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "artistry": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "quick": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "unspecified-low": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "unspecified-high": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "writing": {
+        "model": "opencode/gpt-5-nano"
+      }
+    }
+  },
+  "_migrations": [
+    "2026-08-reasoning-unification"
+  ]
+}

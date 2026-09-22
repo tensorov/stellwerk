@@ -1,0 +1,95 @@
+// OMO variant V5h: V5 diet + disabled_hooks — ПОЛНЫЙ HookNameSchema (56 имён,
+// сверено с dist/index.js: enum и все runtime-вызовы isHookEnabled совпадают).
+// Отключение моделирует «diet»: не является рекомендацией для боевого запуска.
+{
+  "[opencode]": {
+    "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/omo.schema.json",
+    "disabled_mcps": ["websearch", "context7", "grep_app", "lsp", "codegraph"],
+    "disabled_agents": [
+      "atlas", "explore", "hephaestus", "librarian", "metis", "momus",
+      "multimodal-looker", "oracle", "prometheus", "sisyphus-junior",
+      "build", "plan"
+    ],
+    "disabled_hooks": [
+      "todo-continuation-enforcer", "session-notification", "comment-checker",
+      "tool-output-truncator", "question-label-truncator", "directory-agents-injector",
+      "directory-readme-injector", "empty-task-response-detector", "think-mode",
+      "model-fallback", "anthropic-context-window-limit-recovery", "preemptive-compaction",
+      "rules-injector", "background-notification", "auto-update-checker",
+      "codegraph-bootstrap", "ast-grep-sg-provision", "startup-toast", "keyword-detector",
+      "agent-usage-reminder", "non-interactive-env", "interactive-bash-session",
+      "tool-pair-validator", "monitor-status-injector", "goal", "category-skill-reminder",
+      "compaction-context-injector", "compaction-todo-preserver", "claude-code-hooks",
+      "auto-slash-command", "edit-error-recovery", "json-error-recovery",
+      "delegate-task-retry", "prometheus-md-only", "sisyphus-junior-notepad",
+      "team-tool-gating", "no-sisyphus-gpt", "no-hephaestus-non-gpt",
+      "hephaestus-agents-md-injector", "start-work", "atlas", "unstable-agent-babysitter",
+      "task-resume-info", "stop-continuation-guard", "tasks-todowrite-disabler",
+      "runtime-fallback", "write-existing-file-guard", "notepad-write-guard",
+      "bash-file-read-guard", "hashline-read-enhancer", "read-image-resizer",
+      "todo-description-override", "webfetch-redirect-guard", "fsync-skip-warning",
+      "plan-format-validator", "legacy-plugin-toast"
+    ],
+    "agents": {
+      "hephaestus": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "oracle": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "librarian": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "explore": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "multimodal-looker": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "prometheus": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "metis": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "momus": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "atlas": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "sisyphus-junior": {
+        "model": "opencode/gpt-5-nano"
+      }
+    },
+    "categories": {
+      "visual-engineering": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "ultrabrain": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "deep": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "artistry": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "quick": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "unspecified-low": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "unspecified-high": {
+        "model": "opencode/gpt-5-nano"
+      },
+      "writing": {
+        "model": "opencode/gpt-5-nano"
+      }
+    }
+  },
+  "_migrations": [
+    "2026-08-reasoning-unification"
+  ]
+}

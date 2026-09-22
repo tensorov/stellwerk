@@ -1,4 +1,4 @@
-# Nexus Federation — инварианты
+# Stellwerk Federation — инварианты
 
 ## Закон
 1. Модель не верифицирует себя. Любое «готово» = ToolAttestation от PolyForge, не текст.
@@ -10,7 +10,7 @@
 
 ## Границы правки
 - ≤ 3 файла и ≤ 200 строк diff на один task packet. Больше — верни SPLIT_REQUIRED.
-- Не трогай: modules.lock, .github/workflows/, crates/nexus-core/src/contract.rs,
+- Не трогай: modules.lock, .github/workflows/, crates/stellwerk-core/src/contract.rs,
   корневой Cargo.toml (только через отдельный packet с меткой contract-change).
 
 ## Протокол завершения

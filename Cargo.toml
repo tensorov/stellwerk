@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members  = ["crates/nexus-core", "crates/nexus-registry"]
+members  = ["crates/stellwerk-core", "crates/stellwerk-registry"]
 
 [workspace.package]
 edition = "2021"

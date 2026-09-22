@@ -1,5 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "plugin": ["oh-my-openagent@latest"],
   "subagent_depth": 1,
   "mcp": {
     "polyforge": { "type": "local", "command": ["polyforge-mcp"], "enabled": true }
