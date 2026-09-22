@@ -20,7 +20,7 @@ pub enum Command {
 
 #[derive(Debug, Subcommand)]
 pub enum ModuleCommand {
-    Add(AddArgs),
+    Add(Box<AddArgs>),
     Measure(NameArgs),
     Audit(NameArgs),
     Update(NameArgs),
@@ -80,17 +80,50 @@ pub struct NameArgs {
 }
 
 /// Parse command-line arguments.
-///
-/// RED-stub: always returns an error. Implementation in packet-04.
-pub fn parse_from<I, T>(_args: I) -> Result<Cli, clap::Error>
+pub fn parse_from<I, T>(args: I) -> Result<Cli, clap::Error>
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
-    Err(clap::Error::raw(
-        clap::error::ErrorKind::InvalidValue,
-        "RED: not implemented",
-    ))
+    Cli::try_parse_from(args)
+}
+
+/// Dispatch CLI — run() with exit codes.
+pub fn dispatch(cli: &Cli) -> i32 {
+    match &cli.command {
+        Command::Module { command } => match command {
+            ModuleCommand::Add(_) => {
+                eprintln!("module add: not implemented (packet-05)");
+                1
+            }
+            ModuleCommand::Measure(_) => {
+                eprintln!("module measure: not implemented (packet-07a)");
+                1
+            }
+            ModuleCommand::Audit(_) => {
+                eprintln!("module audit: not implemented (packet-09)");
+                1
+            }
+            ModuleCommand::Update(_) => {
+                eprintln!("module update: not implemented (packet-11)");
+                1
+            }
+        },
+    }
+}
+
+/// Run the CLI, returning an exit code.
+pub fn run(args: Vec<std::ffi::OsString>) -> i32 {
+    match parse_from(args) {
+        Err(e) => {
+            let _ = e.print();
+            match e.kind() {
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => 0,
+                _ => 2,
+            }
+        }
+        Ok(cli) => dispatch(&cli),
+    }
 }
 
 #[cfg(test)]
@@ -272,5 +305,49 @@ mod tests {
                 _ => panic!("expected Update"),
             },
         }
+    }
+
+    #[test]
+    fn run_badcmd_exit2() {
+        let code = run(vec![
+            "stellwerk".into(),
+            "badcmd".into(),
+        ]);
+        assert_eq!(code, 2);
+    }
+
+    #[test]
+    fn run_module_no_subcmd_exit2() {
+        let code = run(vec![
+            "stellwerk".into(),
+            "module".into(),
+        ]);
+        assert_eq!(code, 2);
+    }
+
+    #[test]
+    fn run_help_exit0() {
+        let code = run(vec![
+            "stellwerk".into(),
+            "--help".into(),
+        ]);
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn run_module_add_placeholder_exit1() {
+        let code = run(vec![
+            "stellwerk".into(),
+            "module".into(),
+            "add".into(),
+            "polyforge".into(),
+            "--kind".into(),
+            "mcp".into(),
+            "--git".into(),
+            "https://e/x".into(),
+            "--rev".into(),
+            "abc".into(),
+        ]);
+        assert_eq!(code, 1);
     }
 }
