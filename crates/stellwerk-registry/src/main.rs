@@ -1,5 +1,4 @@
 fn main() {
-    // Точка входа `stellwerk`. Подкоманды появятся по packets M0 (сначала тесты).
-    eprintln!("stellwerk: not implemented (M0 in progress)");
-    std::process::exit(2);
+    let code = stellwerk_registry::cli::run(std::env::args_os().collect());
+    std::process::exit(code);
 }
