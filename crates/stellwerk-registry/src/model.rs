@@ -94,6 +94,7 @@ pub struct Registry {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ModulesFile {
     pub registry: Registry,
+    #[serde(default)]
     pub module: BTreeMap<String, Module>,
 }
 

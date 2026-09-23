@@ -1,5 +1,6 @@
 //! CLI definitions — packet-03 (RED).
 
+use crate::cmd_add;
 use clap::{Parser, Subcommand, ValueEnum};
 
 /// stellwerk — federation manager
@@ -92,9 +93,14 @@ where
 pub fn dispatch(cli: &Cli) -> i32 {
     match &cli.command {
         Command::Module { command } => match command {
-            ModuleCommand::Add(_) => {
-                eprintln!("module add: not implemented (packet-05)");
-                1
+            ModuleCommand::Add(a) => {
+                match cmd_add::run(a, &std::env::current_dir().unwrap()) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        1
+                    }
+                }
             }
             ModuleCommand::Measure(_) => {
                 eprintln!("module measure: not implemented (packet-07a)");
