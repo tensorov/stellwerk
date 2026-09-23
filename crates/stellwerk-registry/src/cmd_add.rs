@@ -147,7 +147,11 @@ fn build_module_block(args: &AddArgs, src: &SourceSpec) -> String {
 
     let source_line = match (src.git.as_deref(), src.npm.as_deref(), src.cargo.as_deref()) {
         (Some(g), None, None) => {
-            format!(r#"source = {{ git = "{}", rev = "{}" }}"#, g, src.rev.as_deref().unwrap_or(""))
+            format!(
+                r#"source = {{ git = "{}", rev = "{}" }}"#,
+                g,
+                src.rev.as_deref().unwrap_or("")
+            )
         }
         (None, Some(n), None) => {
             if let Some(v) = &src.npm_version {
@@ -182,7 +186,10 @@ fn build_module_block(args: &AddArgs, src: &SourceSpec) -> String {
     if tools.is_empty() {
         lines.push("tools    = []".to_owned());
     } else {
-        let items: Vec<String> = tools.iter().map(|t| format!("\"{}\"", escape_toml_string(t))).collect();
+        let items: Vec<String> = tools
+            .iter()
+            .map(|t| format!("\"{}\"", escape_toml_string(t)))
+            .collect();
         lines.push(format!("tools    = [{}]", items.join(", ")));
     }
 
@@ -219,23 +226,36 @@ mod tests {
     }
     fn nanos() -> u64 {
         std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64
     }
     fn fixture(dir: &Path) {
         std::fs::write(dir.join("modules.toml"),
             "[registry.calibration]\nbytes_per_token = 0.813\nmeasured_at = \"2025-01-01T00:00:00Z\"\n").unwrap();
     }
     fn git_args(name: &str, cmd: &str) -> AddArgs {
-        AddArgs { name: name.to_owned(), kind: crate::cli::KindArg::Mcp,
-            git: Some("https://github.com/x/y".into()), rev: Some("abc123".into()),
-            npm: None, npm_version: String::new(), cargo: None, cargo_version: String::new(),
-            command: Some(cmd.to_owned()), tools: Vec::new(), risk: None,
-            no_autoload: false, update_channel: None, }
+        AddArgs {
+            name: name.to_owned(),
+            kind: crate::cli::KindArg::Mcp,
+            git: Some("https://github.com/x/y".into()),
+            rev: Some("abc123".into()),
+            npm: None,
+            npm_version: String::new(),
+            cargo: None,
+            cargo_version: String::new(),
+            command: Some(cmd.to_owned()),
+            tools: Vec::new(),
+            risk: None,
+            no_autoload: false,
+            update_channel: None,
+        }
     }
 
     #[test]
     fn valid_git_add() {
-        let d = tmp(); fixture(&d);
+        let d = tmp();
+        fixture(&d);
         run(&git_args("foo", "/run/foo"), &d).unwrap();
         let c = std::fs::read_to_string(d.join("modules.toml")).unwrap();
         assert!(c.contains("[module.foo]"));
@@ -248,12 +268,15 @@ mod tests {
 
     #[test]
     fn valid_npm_add() {
-        let d = tmp(); fixture(&d);
+        let d = tmp();
+        fixture(&d);
         let mut a = git_args("my-npm", "/run");
         a.kind = crate::cli::KindArg::Skill;
-        a.git = None; a.rev = None;
+        a.git = None;
+        a.rev = None;
         a.command = None;
-        a.npm = Some("@scope/pkg".into()); a.npm_version = "1.0.0".into();
+        a.npm = Some("@scope/pkg".into());
+        a.npm_version = "1.0.0".into();
         run(&a, &d).unwrap();
         let c = std::fs::read_to_string(d.join("modules.toml")).unwrap();
         assert!(c.contains("[module.my-npm]"));
@@ -262,10 +285,13 @@ mod tests {
 
     #[test]
     fn valid_cargo_add() {
-        let d = tmp(); fixture(&d);
+        let d = tmp();
+        fixture(&d);
         let mut a = git_args("my-crate", "/run");
-        a.git = None; a.rev = None;
-        a.cargo = Some("my-crate".into()); a.cargo_version = "2.0.0".into();
+        a.git = None;
+        a.rev = None;
+        a.cargo = Some("my-crate".into());
+        a.cargo_version = "2.0.0".into();
         run(&a, &d).unwrap();
         let mf = ModulesFile::load(&d.join("modules.toml")).unwrap();
         assert!(mf.module.contains_key("my-crate"));
@@ -288,7 +314,8 @@ mod tests {
 
     #[test]
     fn bad_name_rejected() {
-        let d = tmp(); fixture(&d);
+        let d = tmp();
+        fixture(&d);
         assert!(run(&git_args("Foo", ""), &d).is_err());
         assert!(run(&git_args("-x", ""), &d).is_err());
         assert!(run(&git_args("a b", ""), &d).is_err());
@@ -297,15 +324,18 @@ mod tests {
 
     #[test]
     fn no_source_err() {
-        let d = tmp(); fixture(&d);
+        let d = tmp();
+        fixture(&d);
         let mut a = git_args("x", "/run");
-        a.git = None; a.rev = None;
+        a.git = None;
+        a.rev = None;
         assert!(run(&a, &d).is_err());
     }
 
     #[test]
     fn two_sources_err() {
-        let d = tmp(); fixture(&d);
+        let d = tmp();
+        fixture(&d);
         let mut a = git_args("x", "/run");
         a.npm = Some("pkg".into());
         assert!(run(&a, &d).is_err());
@@ -313,7 +343,8 @@ mod tests {
 
     #[test]
     fn mcp_needs_command() {
-        let d = tmp(); fixture(&d);
+        let d = tmp();
+        fixture(&d);
         let mut a = git_args("x", "");
         a.command = None;
         assert!(run(&a, &d).is_err());
@@ -321,7 +352,8 @@ mod tests {
 
     #[test]
     fn skill_no_command_ok() {
-        let d = tmp(); fixture(&d);
+        let d = tmp();
+        fixture(&d);
         let mut a = git_args("x", "");
         a.kind = crate::cli::KindArg::Skill;
         a.command = None;
@@ -330,7 +362,8 @@ mod tests {
 
     #[test]
     fn skill_with_command_err() {
-        let d = tmp(); fixture(&d);
+        let d = tmp();
+        fixture(&d);
         let mut a = git_args("x", "/run");
         a.kind = crate::cli::KindArg::Skill;
         assert!(run(&a, &d).is_err());
@@ -338,16 +371,21 @@ mod tests {
 
     #[test]
     fn duplicate_err() {
-        let d = tmp(); fixture(&d);
+        let d = tmp();
+        fixture(&d);
         run(&git_args("dup", "/run/dup"), &d).unwrap();
         let before = std::fs::read_to_string(d.join("modules.toml")).unwrap();
         assert!(run(&git_args("dup", "/run/dup2"), &d).is_err());
-        assert_eq!(before, std::fs::read_to_string(d.join("modules.toml")).unwrap());
+        assert_eq!(
+            before,
+            std::fs::read_to_string(d.join("modules.toml")).unwrap()
+        );
     }
 
     #[test]
     fn autoload_and_tools_and_ctx() {
-        let d = tmp(); fixture(&d);
+        let d = tmp();
+        fixture(&d);
         let mut a = git_args("t", "/run");
         a.no_autoload = true;
         a.tools = vec!["read".into(), "write".into()];
@@ -362,7 +400,8 @@ mod tests {
 
     #[test]
     fn update_channel_present() {
-        let d = tmp(); fixture(&d);
+        let d = tmp();
+        fixture(&d);
         let mut a = git_args("u", "/run");
         a.update_channel = Some("tag".into());
         run(&a, &d).unwrap();
@@ -374,7 +413,8 @@ mod tests {
 
     #[test]
     fn no_update_channel_absent() {
-        let d = tmp(); fixture(&d);
+        let d = tmp();
+        fixture(&d);
         run(&git_args("n", "/run"), &d).unwrap();
         let c = std::fs::read_to_string(d.join("modules.toml")).unwrap();
         assert!(!c.contains("update   = {"));
