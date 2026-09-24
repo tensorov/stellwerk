@@ -12,3 +12,9 @@
 .ablation/
 # временно переименованные конфиги во время вариантов
 *.ablation_bak_*
+
+# рабочие дерева и артефакты воркеров не принадлежат репозиторию
+/.worktrees/
+/.sisyphus/plans/**/*.result.*
+/.ablation*/
+/.stellwerk/pending/
