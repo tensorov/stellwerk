@@ -18,3 +18,11 @@
 /.sisyphus/plans/**/*.result.*
 /.ablation*/
 /.stellwerk/pending/
+
+# OMO runtime/evidence артефакты — конфиг .omo/omo.jsonc остаётся трекаемым
+.omo/run-continuation/
+.omo/plans/**/*.result.*
+.omo/*.bak.*
+.pf/
+.debug-journal.md
+**/__pycache__/
