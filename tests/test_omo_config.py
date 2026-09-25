@@ -6,7 +6,7 @@ repository's model-routing contract:
 * 183 `[opencode].agents` + 8 `categories`, each with the ordered chain
   space-bunny-free -> mimo-v2.6-flash-free -> big-pickle;
 * `momus` and `metis` are reviewers: primary mimo-v2.6-flash-free with
-  big-pickle fallback only;
+  space-bunny-free -> big-pickle fallback;
 * big-pickle is never a primary;
 * every primary model has a documented context floor >= 200_000
   (observed floors: space-bunny 1_048_576, mimo 200_000,
@@ -37,7 +37,7 @@ EXPECTED_CATEGORY_COUNT = 8
 GENERAL_PRIMARY = "opencode/space-bunny-free"
 GENERAL_FALLBACKS = ["opencode/mimo-v2.6-flash-free", "opencode/big-pickle"]
 REVIEWER_PRIMARY = "opencode/mimo-v2.6-flash-free"
-REVIEWER_FALLBACKS = ["opencode/big-pickle"]
+REVIEWER_FALLBACKS = ["opencode/space-bunny-free", "opencode/big-pickle"]
 REVIEWER_AGENTS = frozenset({"momus", "metis"})
 
 PLUGIN_PIN = "oh-my-openagent@4.19.4"
