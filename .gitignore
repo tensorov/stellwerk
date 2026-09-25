@@ -17,6 +17,16 @@
 /.worktrees/
 /.sisyphus/plans/**/*.result.*
 /.ablation*/
+!/.ablation-solpi/
+# внутри .ablation-solpi трекаются только артефакты протокола (BRIEF/STATE/workloads/
+# scripts/ledger.tsv/REPORT.md); рантайм и копии auth.json — вне репозитория
+/.ablation-solpi/harness.sh
+/.ablation-solpi/pi-home*/
+/.ablation-solpi/runs/
+/.ablation-solpi/src/
+/.ablation-solpi/wt/
+/.ablation-solpi/reports/
+/.ablation-solpi/results/
 /.stellwerk/pending/
 
 # OMO runtime/evidence артефакты — конфиг .omo/omo.jsonc остаётся трекаемым

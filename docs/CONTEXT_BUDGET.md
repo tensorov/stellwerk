@@ -11,6 +11,23 @@
 | D | C + polyforge             | 57 001 | +777         |
 | E | D + all MCP (lsp; grep_app недоступен) | 58 038 | +1 037 |
 
+## Planner: context window (источник `opencode models opencode --verbose`)
+
+Строки C/D/E — это **prompt-стоимость** OMO, а не окно модели. ОMO измерен на
+big-pickle; для space-bunny это измерение НЕ перепроверялось (дополнение 46k+ токенов
+зависит от состава плагина, а не от окна модели).
+
+| Модель            | context | input | output | Роль      |
+|-------------------|--------:|------:|-------:|-----------|
+| space-bunny-free  | 1 048 576 | 524 288 | 524 288 | planner primary |
+| mimo-v2.6-flash-free |   200 000 |     — |  32 000 | planner reviewer, fallback |
+| big-pickle        |   200 000 | 160 000 |  32 000 | fallback, public only |
+| qwen3.6-unlim-noreason | 46 112 |     — |   8 000 | worker (Pi) |
+
+Вывод: planner-порог 128k выполняется для всех трёх planner-моделей. OMO-надбавка
+(строки C/D/E) для space-bunny не переизмерялась — при замене planner-модели
+переизмерить, а не переносить числа big-pickle.
+
 ## Решения
 - Worker: конфиг B. Лимит qwen 46 112, свободно 36 697.
 - OMO: недопустим для любой модели <64k окна. Только planner ≥128k.

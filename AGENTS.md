@@ -28,3 +28,5 @@ EVIDENCE: <chain tail hash>
 ## Запрещено
 Правки без теста, «рефакторинг заодно», подавление предупреждений, #[allow(...)],
 #[ignore], skip тестов, мок вместо реализации без пометки в packet, cargo add.
+команды, печатающие resolved config или секреты (opencode debug config,
+cat auth.json, env | grep KEY и подобные).
