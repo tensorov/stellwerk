@@ -3,11 +3,13 @@ context_budget_tokens  = 44000
 autoload_budget_tokens = 3000
 lazy_budget_tokens     = 5000
 
-# Коэффициенты байты->токены для qwen 35b a3b. Замерить один раз руками:
-# пустая сессия без PolyForge vs с PolyForge, разницу поделить на байты схем.
+# Коэффициенты байты->токены для qwen 35b a3b. Замерено один раз:
+# пустая сессия без PolyForge vs с PolyForge (docs/CONTEXT_BUDGET.md, 8602 -> 9415),
+# разница 813 токенов поделена на байты схем реального polyforge-mcp (4034 байта,
+# `stellwark module measure polyforge`).
 [registry.calibration]
-bytes_per_token = 0.0   # PIN_ME после ручного замера
-measured_at     = ""    # ISO8601
+tokens_per_byte = 0.2015369360   # 813 / 4034
+measured_at     = "2026-09-26T21:47:46Z"
 
 [module.polyforge]
 kind     = "mcp"

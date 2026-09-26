@@ -1,6 +1,8 @@
 //! CLI definitions — packet-03 (RED).
 
 use crate::cmd_add;
+use crate::cmd_measure;
+use crate::cmd_update;
 use clap::{Parser, Subcommand, ValueEnum};
 
 /// stellwerk — federation manager
@@ -100,17 +102,27 @@ pub fn dispatch(cli: &Cli) -> i32 {
                     1
                 }
             },
-            ModuleCommand::Measure(_) => {
-                eprintln!("module measure: not implemented (packet-07a)");
-                1
+            ModuleCommand::Measure(a) => {
+                match cmd_measure::run(a, &std::env::current_dir().unwrap()) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        1
+                    }
+                }
             }
             ModuleCommand::Audit(_) => {
                 eprintln!("module audit: not implemented (packet-09)");
                 1
             }
-            ModuleCommand::Update(_) => {
-                eprintln!("module update: not implemented (packet-11)");
-                1
+            ModuleCommand::Update(a) => {
+                match cmd_update::run(a, &std::env::current_dir().unwrap()) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        1
+                    }
+                }
             }
         },
     }

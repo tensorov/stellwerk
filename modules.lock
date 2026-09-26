@@ -1,3 +1,6 @@
-# Генерируется `stellwerk module update`. Руками не править.
+# Генерируется `stellwark module measure` / `stellwerk module update`. Руками не править.
 # Формат: один модуль = один блок, блоки отсортированы по имени (детерминированно).
 version = 1
+
+[polyforge]
+context_cost_tokens = 813
