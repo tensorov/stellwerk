@@ -406,7 +406,7 @@ allowlist. Разница в безопасности, а не в трудоза
 
 ---
 
-## F-2026-09-27-09 — `permission_for` не видит уровня сессии, но чинить это не надо (RESOLVED, в M3-03)
+## F-2026-09-27-09 — `permission_for` не видит уровня сессии, но чинить это не надо (RESOLVED by `bd3a20d`)
 
 **Наблюдение.** `permission_for(ToolRisk)` не получает ни `PolicyLevel`, ни признака
 интерактивности, поэтому два утверждения В1/В2 в ней не выразимы:
@@ -480,6 +480,30 @@ Acceptance теперь привязан к 17 сценариям M3-03.
 
 Достаточное условие закрытия: `cargo test -p stellwerk-gateway --test gate` и
 `--test gate_ask` → 0 failed в `canary/m3-packet-04` (реализация `decide`).
+
+**RESOLVED by `bd3a20d` (2026-09-27, M3-04).** `decide` реализован, и обе
+заявленные половины доказаны тестами, а не декларацией:
+
+| утверждение | чем доказано | аттестация |
+|---|---|---|
+| уровень проверяется отдельно от `permission_for` | `r2_at_l2_is_deny_not_ask`, `r3_at_l4_is_deny_after_adr_0002` — нехватка уровня отказывает **до** Ask | `cargo test --test gate` exit 0, entry 31 |
+| `Ask` в неинтерактивном прогоне переводится в `Suspended` | `ask_in_noninteractive_run_is_suspended_not_deny` | `cargo test --test gate_ask` exit 0, entry 32 |
+| `Unclassified` не попадает в `Allow` | `unclassified_*`, три теста, включая интерактивный `L5Owner → Ask` | entry 32 |
+
+`permission_for(ToolRisk)` **не расширялся** — форма `permission_for(risk, level,
+interactive)` из первоначальной формулировки F-09 так и не появилась и не должна:
+ось полномочий живёт в `decide`, где есть `CallRequest.caller` и `interactive`.
+`Unclassified` в `permission_for` по-прежнему даёт `Deny` (у функции нет контекста
+сессии), и `decide` перекрывает это осознанно и с комментарием.
+
+PolyForge: claim 30 → Verified ×2, `gate_evaluate` passed, chain tail
+`5a332fd38948d21cfd586d3ff4ace4e864165d2e69fa32b690085e0781cd47a0`.
+Крейт `stellwerk-gateway` 27/27 (0 RED).
+
+**Остаточная половина F-11 на месте:** тесты доказывают, что `decide` РАЗЛИЧАЕТ
+`Suspended` и `Deny`, но producer'а у `interactive` по-прежнему нет, и ни один
+пакет не требует маппинга `AwaitingApproval → TaskStatus::Suspended`. То есть
+различение доказано на уровне `Verdict`, но не на уровне статуса задачи в БД.
 
 **Проверка, которая это поймала, стоила дешевле, чем реализация:** `grep` за
 словами `интерактив|Unclassified` по M3-03 дал пустоту на слово «интерактив», и
