@@ -312,3 +312,68 @@ loop_guard → validity_gate) отработал без вмешательств
 (дубль `/tmp/stellwerk-sandbox`). `rm` запрещён, поэтому каталог **перемещён** в
 `/tmp/opencode/night2-salvage/` (данные не потеряны, репозиторий очищен).
 Фаза 2 создаст на его месте минимальный экспорт с INDEX.md.
+
+## Фаза 2 — DONE: архив .night/exports
+
+Каталог `.night/exports/control-run-20260927-004804/` (7 файлов, 12K):
+`packet.md`, `validity.json`, `metrics.json`, `sandbox.diff`, `sandbox.numstat`,
+`RESULT.md`, `git-show-merge-stat.txt`. Плюс `.night/exports/INDEX.md` — реестр
+контрольных прогонов (packet, lane, вердикт, приёмка, куда смержено).
+
+**Два пробела задокументированы, а не выдуманы:**
+1. **Воркер не создаёт `RESULT.md`** — в формате dispatch вердикт уходит в
+   `validity.json`. Файл написан интегратором по фактическим артефактам, это
+   прямо написано в его шапке.
+2. **Merge-коммита нет** (прогон не смержен). Вместо `git show <merge>` записан
+   `git-show-merge-stat.txt` с объяснением: коммиты без разрешения владельца
+   запрещены, веток `m1/*` нет, workspace_policy в main даёт 4/8 против 8/8 в песочнице.
+
+`run.jsonl` (484K, 824 события) в репозиторий **не скопирован** намеренно: сводные
+метрики вынесены в `metrics.json`, путь к оригиналу указан в RESULT.md.
+Ошибка в пути: `RESULT.md` сначала писался некавычным heredoc, и `` `RESULT.md` ``
+исполнился как команда (`zsh: command not found`) — файл перезаписан кавычным
+heredoc, повреждений не осталось.
+
+Коммит: `57ef15b docs(night): archive control-run export with INDEX`.
+
+## Фаза 3 — DONE: конфликт M1-05/M1-06 разрешён, BREAKING нет
+
+**Диагноз.** Имена вариантов в пакетах и в `contract.rs` совпадают — расхождения
+там не было. Настоящий конфликт — **отсутствующее правило композиции** между двумя
+таблицами, измеряющими разные единицы:
+- `packet-05` → `PolicyLevel::permits`: `Action → min PolicyLevel`;
+- `packet-06` → `RiskClass::required_level`: `RiskClass → min PolicyLevel`.
+
+**Конкретное противоречие:** `permits_min(RunTask) = L2Contributor`, но
+`risk_table[R2].min_policy_level = L3Maintainer`. Исполнитель уровня
+`L2Contributor` удовлетворяет проверке действия и **не** удовлетворяет проверке
+риска. Ни один пакет не определял, кто побеждает, поэтому воркер, сделавший
+только `packet-05`, построил бы таблицу, молча разрешающую сетевой вызов при L2.
+
+**Решение (принято архитектором, единственная таблица — источник истины):**
+- Одна таблица `risk_class → (min_policy_level, verdict)` на 6 строк;
+  `min_policy_level` совпадает с лестницей packet-06 без изменений, `verdict`
+  совпадает с лестницей `permission_for` из M3/packet-02 (R0–R1 Allow, R2–R3 Ask,
+  R4–R5 Deny) — расхождений нет;
+- правило композиции: `effective_level = max(две таблицы)`;
+  `Deny` абсолютен и **не** эскалируется уровнем, даже `L5Owner`;
+- 5 проверяемых инвариантов INV-RB-1…5.
+
+**Что изменено:** в `packet-05.md` и `packet-06.md` вставлен раздел
+«Единая таблица `risk_class` — источник истины» (63 строки) — **буквально
+идентичный**, сверено md5 `c4d378235c3e70186343ba65ff49da8f` с обеих сторон.
+В `M1/index.md` добавлен раздел со ссылкой и обоснованием.
+
+**BREAKING: нет.** Обоснование:
+1. `workspace_policy.rs` (control-run ночной сессии #1) **не содержит** ни одного
+   упоминания `PolicyLevel`, `required_level`, `permits` или `RiskClass` —
+   совпадения в grep были только частью имён функций NetworkPolicy
+   (`allow_list_permits_only_listed_hosts`). Правка его не задевает.
+2. `rbac_level.rs` кодирует **только** Action-таблицу (`permits`), устаревшей
+   версии `required_level` в нём нет → **тесты не менялись вообще**, включая
+   4 уже зелёных.
+3. `packet-06` создаёт новый файл `risk_level_policy.rs`, которого ещё нет,
+   поэтому конфликт не мог быть закодирован ни в одном существующем тесте.
+
+**Изменённые файлы фазы 3:** `.sisyphus/plans/M1/packet-05.md`,
+`.sisyphus/plans/M1/packet-06.md`, `.sisyphus/plans/M1/index.md`, `.night/STATE.md`.
