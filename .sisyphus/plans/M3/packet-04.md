@@ -4,7 +4,7 @@ goal: Реализовать `decide`: три независимых прави�
 files_allowed: [crates/stellwerk-gateway/src/gate.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-gateway --test gate
-acceptance: `cargo test -p stellwerk-gateway --test gate` → 12 passed; 0 failed (включая Suspended/approval_timeout и абсолютность R5).
+acceptance: `cargo test -p stellwerk-gateway --test gate` → 15 passed; 0 failed (базовые 8 + Suspended/approval_timeout/различение Denied-vs-timeout + абсолютность R5 + ось полномочий: R4 по уровню, Unclassified по интерактивности).
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
 depends_on: [03]
 data_class: public
@@ -43,6 +43,23 @@ lane: m3/gate
 `Deny` перестаёт быть «любым запретом». Вердикт `Deny` неэскалируется уровнем
 только для `R5`; `R4` при нехватке уровня даёт `Deny`, но при `L5Owner` — `Ask`.
 Правило композиции сохраняется: любой `Deny` побеждает.
+
+### Ось полномочий живёт здесь, а не в `permission_for`
+
+Два утверждения из В1/В2 невозможно проверить в `permission_for`, потому что
+она не получает ни уровня, ни признака интерактивности. Оба — здесь, где есть и
+то, и другое:
+
+- `R4` при `L4Admin` и ниже → `Deny`; при `L5Owner` → `Ask` (В1). Уровень берётся
+  из контракта, `caller` — из `CallRequest`.
+- `Unclassified` в **интерактивной** сессии `L5Owner` → `Ask`; в неинтерактивной →
+  `Deny`, без suspend (В2). `permission_for` для неинтерактивной части уже
+  отвечает `Deny`; здесь проверяется, что интерактивная ветка действительно
+  существует и что она не превращается в молчаливый `Allow`.
+
+Тесты на эти два случая пишутся здесь, а не в M3-01: `packet-01` не имеет
+права создавать тесты, а `packet-02` не имеет права их править. Если эти
+утверждения не покрыть здесь, они не будут покрыты нигде.
 
 ### В4 — `Ask` в неинтерактивном прогоне: Suspended, а не Deny
 
