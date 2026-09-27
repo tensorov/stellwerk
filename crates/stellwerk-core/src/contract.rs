@@ -466,8 +466,15 @@ impl PolicyLevel {
     /// Инварианты: только `L5Owner` меняет политики; `ManageMembers` требует `L4Admin`;
     /// `ReadWorkspace` доступен с `L0Local`.
     pub fn permits(self, action: Action) -> bool {
-        let _ = (self, action);
-        todo!("RED: PolicyLevel::permits")
+        let required = match action {
+            Action::ReadWorkspace => PolicyLevel::L0Local,
+            Action::WriteWorkspace => PolicyLevel::L2Contributor,
+            Action::RunTask => PolicyLevel::L2Contributor,
+            Action::UpdateModule => PolicyLevel::L3Maintainer,
+            Action::ManageMembers => PolicyLevel::L4Admin,
+            Action::GrantRoles => PolicyLevel::L5Owner,
+        };
+        self >= required
     }
 }
 
