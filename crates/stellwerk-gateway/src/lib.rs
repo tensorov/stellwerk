@@ -8,4 +8,5 @@
 //! `RiskClass::required_level`, `PolicyLevel::permits`,
 //! `DataClass::permits_model` (все реализованы в M1).
 
+pub mod gate;
 pub mod permission;
