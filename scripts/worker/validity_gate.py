@@ -6,6 +6,8 @@ invalid, если хотя бы одно (пороги в dispatch.conf):
   tool_steps == 0                      (воркер не сделал ни одного действия)
   turns < 2                            (меньше двух ходов — не содержательная работа)
   timeout == true и turns < 2          (умер до первого содержательного хода)
+  tool_steps > MAX_TOOL_STEPS          (бюджет шагов исчерпан)
+  input_cum > MAX_INPUT_CUM             (бюджет контекста исчерпан)
 
 Код возврата: 0 — valid, 3 — invalid (packet возвращается, не мержится).
 Дополнительно (информационно) проверяет наличие хвоста STATUS/FILES/TEST/EVIDENCE.
@@ -24,6 +26,11 @@ def main():
     ap.add_argument('--out', default='')
     ap.add_argument('--pi-exit', type=int, default=0)
     ap.add_argument('--timeout', default='false')
+    # Бюджетные пороги (0 = выключено). Происхождение: сессия #2, 3 из 10
+    # прогонов ушли в повтор на 480–790k input при окне 46112 — это ~17 полных
+    # контекстов подряд, и ни consec-guard, ни пост-фактум это не ловили.
+    ap.add_argument('--max-tool-steps', type=int, default=0)
+    ap.add_argument('--max-input-cum', type=int, default=0)
     a = ap.parse_args()
 
     turns = tool_steps = 0
@@ -74,6 +81,10 @@ def main():
         reasons.append('turns<2')
     if timeout and turns < 2:
         reasons.append('timeout_before_content')
+    if a.max_tool_steps > 0 and tool_steps > a.max_tool_steps:
+        reasons.append('budget:tool_steps=%d>%d' % (tool_steps, a.max_tool_steps))
+    if a.max_input_cum > 0 and input_cum > a.max_input_cum:
+        reasons.append('budget:input_cum=%d>%d' % (input_cum, a.max_input_cum))
 
     res = {
         'valid': not reasons,
@@ -84,6 +95,8 @@ def main():
         'tool_steps': tool_steps,
         'timeout': timeout,
         'total_input_cum': input_cum,
+        'max_tool_steps': a.max_tool_steps,
+        'max_input_cum': a.max_input_cum,
         'tail_ok': bool(TAIL.search('\n'.join(text))),
     }
     if a.out:

@@ -12,6 +12,8 @@
 #   sandbox_integrity_snapshot <repo> <out>       → снимок состояния репо
 #   sandbox_integrity_check <repo> <snapshot>     → 0 ok, 5 BLOCKED (пишем вне песочницы)
 #   sandbox_diff <base_copy> <sandbox> <out>      → numstat + unified diff
+#   sandbox_build_patch <sandbox> <out.patch>     → git-применимый патч (до удаления .base)
+#   sandbox_postflight <sandbox>                  → cargo fmt + clippy; !=0 → экспорт запрещён
 #   sandbox_export <sandbox> <target_branch>      → ЯВНЫЙ экспорт после приёмки
 set -uo pipefail
 
@@ -92,22 +94,73 @@ sandbox_diff() {
   cat "$out.numstat"
 }
 
-sandbox_export() {
-  local sb="$1" target="$2" repo="$3"
-  local patch
-  patch="$(mktemp /tmp/stellwerk-export.XXXXXX.patch)"
-  ( cd "$sb" && find . -type f | sort ) > /tmp/.sb.new
-  ( cd "$sb.base" && find . -type f | sort ) > /tmp/.sb.base
-  local rel
+# sandbox_build_patch — собрать патч, применимый через `git apply`.
+#
+# Происхождение (FINDING-02, сессия #2): sandbox_export пересобирал патч из
+# `$sb.base`, но dispatch удалял `.base` в конце прогона (`rm -rf "$SB.base"`),
+# и экспорт всегда рапортовал «изменений нет». Теперь патч собирается ВО ВРЕМЯ
+# прогона, пока `.base` жив, и лежит рядом с логом.
+sandbox_build_patch() {
+  local sb="$1" out="$2"
+  mkdir -p "$(dirname "$out")"
+  : > "$out"
+  [ -d "$sb.base" ] || { echo "export: нет $sb.base" >&2; return 1; }
+  local rel tmp
+  tmp="$(mktemp)"
+  ( cd "$sb" && find . -type f | sort ) > "$tmp"
   while read -r rel; do
+    # find . выдаёт './x'; в label это даёт 'a/./x', а git apply такой путь
+    # отвергает («Invalid path»). Ведущий ./ убираем.
+    rel="${rel#./}"
+    [ -n "$rel" ] || continue
     [ -f "$sb/$rel" ] || continue
     if ! cmp -s "$sb.base/$rel" "$sb/$rel"; then
-      diff -u --label "a/$rel" --label "b/$rel" "$sb.base/$rel" "$sb/$rel" >> "$patch" || true
+      diff -u --label "a/$rel" --label "b/$rel" "$sb.base/$rel" "$sb/$rel" >> "$out" || true
     fi
-  done < /tmp/.sb.new
+  done < "$tmp"
+  rm -f "$tmp"
+  [ -s "$out" ] && { echo "export: патч собран ($out)"; return 0; }
+  echo "export: изменений нет"; return 3
+}
+
+# sandbox_postflight — привести песочницу к состоянию, которое вообще можно
+# мержить: rustfmt, затем clippy -D warnings.
+#
+# Происхождение (сессия #2): воркер не запускает ни fmt, ни clippy, поэтому 2 из
+# 5 первых пакетов требовали ручной правки интегратора, а clippy-ошибка всплывала
+# уже после merge. Теперь это ловится до экспорта.
+sandbox_postflight() {
+  local sb="$1"
+  [ -f "$sb/Cargo.toml" ] || { echo "postflight: нет Cargo.toml, пропуск"; return 0; }
+  if ! ( cd "$sb" && cargo fmt --all ) >/dev/null 2>&1; then
+    echo "postflight: cargo fmt не отработал" >&2; return 4
+  fi
+  if ! ( cd "$sb" && cargo clippy --workspace --all-targets -- -D warnings ) > "$sb.postflight-clippy.log" 2>&1; then
+    echo "FAILED(clippy): clippy -D warnings не прошёл, экспорт запрещён" >&2
+    head -15 "$sb.postflight-clippy.log" >&2
+    return 5
+  fi
+  echo "postflight: fmt+clippy чисто"
+  return 0
+}
+
+sandbox_export() {
+  local sb="$1" target="$2" repo="$3"
+  local patch="$sb.run/sandbox.patch"
+  # Путь 1: паток собран во время прогона (предпочтительно — .base уже удалён).
+  if [ ! -s "$patch" ]; then
+    # Путь 2: .base ещё жив (SANDBOX_KEEP=1 или экспорт до очистки).
+    sandbox_build_patch "$sb" "$patch" >/dev/null 2>&1
+  fi
   if [ ! -s "$patch" ]; then
     echo "export: изменений нет"
-    return 0
+    return 3
+  fi
+  # Чистота обязана подтверждаться post-flight, иначе в ветку уедет код,
+  # который не проходит gate.
+  if ! sandbox_postflight "$sb"; then
+    echo "export: postflight не пройден, экспорт запрещён" >&2
+    return 6
   fi
   echo "export: применяю patch в $target"
   git -C "$repo" apply --check "$patch" || { echo "export: patch не применился, отказ"; return 1; }

@@ -34,6 +34,10 @@ def main():
     ap.add_argument('--total-limit', type=int, default=0)
     ap.add_argument('--kill-after', type=int, default=10)
     ap.add_argument('--interval', type=float, default=1.5)
+    # Бюджетные пороги: ловим на лету то, что consec-guard пропускает —
+    # длинный прогон с РАЗНЫМИ вызовами (реальный режим отказа qwen в сессии #2).
+    ap.add_argument('--max-tool-steps', type=int, default=0)
+    ap.add_argument('--max-input-cum', type=int, default=0)
     ap.add_argument('--dry-run', action='store_true')
     a = ap.parse_args()
 
@@ -61,7 +65,34 @@ def main():
                     cm, wc = consec, s
                 if totals[s] > tm:
                     tm, wt = totals[s], s
-        fired = cm > a.consec_limit or (a.total_limit > 0 and tm > a.total_limit)
+        # В dry-run суммарные шаги считаем по всему файлу, а не по подряд идущим.
+        total_steps = 0
+        total_input = 0
+        with open(a.jsonl, errors='replace') as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if o.get('type') == 'tool_execution_start':
+                    total_steps += 1
+                elif o.get('type') == 'turn_end':
+                    u = ((o.get('message') or {}).get('usage') or {})
+                    if isinstance(u, dict):
+                        total_input += int(u.get('input', 0) or 0) + \
+                                       int(u.get('cacheRead', 0) or 0) + \
+                                       int(u.get('cacheWrite', 0) or 0)
+        over_steps = a.max_tool_steps > 0 and total_steps > a.max_tool_steps
+        over_input = a.max_input_cum > 0 and total_input > a.max_input_cum
+        fired = (cm > a.consec_limit or (a.total_limit > 0 and tm > a.total_limit)
+                 or over_steps or over_input)
+        if over_steps:
+            print('   бюджет шагов: %d > %d' % (total_steps, a.max_tool_steps))
+        if over_input:
+            print('   бюджет контекста: %d > %d' % (total_input, a.max_input_cum))
         print('dry-run: consec_max=%d total_max=%d limit=%d → %s'
               % (cm, tm, a.consec_limit, 'СРАБОТАЕТ' if fired else 'не сработает'))
         if fired and cm > a.consec_limit:
@@ -72,6 +103,8 @@ def main():
 
     offset = 0
     consec = last = 0
+    seen_steps = 0
+    input_cum = 0
     totals = {}
     while True:
         time.sleep(a.interval)
@@ -98,20 +131,33 @@ def main():
             s = signature(obj)
             if s is None:
                 continue
+            seen_steps += 1
             consec = consec + 1 if s == last else 1
             last = s
             totals[s] = totals.get(s, 0) + 1
+            if obj.get('type') == 'turn_end':
+                u = ((obj.get('message') or {}).get('usage') or {})
+                if isinstance(u, dict):
+                    input_cum += int(u.get('input', 0) or 0) + \
+                                 int(u.get('cacheRead', 0) or 0) + \
+                                 int(u.get('cacheWrite', 0) or 0)
             hit = None
+            if a.max_tool_steps > 0 and seen_steps > a.max_tool_steps:
+                hit = 'budget:tool_steps=%d>%d' % (seen_steps, a.max_tool_steps)
+            elif a.max_input_cum > 0 and input_cum > a.max_input_cum:
+                hit = 'budget:input_cum=%d>%d' % (input_cum, a.max_input_cum)
             if consec > a.consec_limit:
                 hit = 'consecutive=%d' % consec
             elif a.total_limit > 0 and totals[s] > a.total_limit:
                 hit = 'total=%d' % totals[s]
             if hit:
                 with open(a.trigger, 'w') as tf:
-                    json.dump({'reason': 'FAILED(loop)', 'trigger': hit, 'signature': s[:200],
+                    json.dump({'reason': 'FAILED(budget)' if 'budget' in hit else 'FAILED(loop)',
+                           'trigger': hit, 'signature': s[:200],
                                'tool_steps_seen': sum(totals.values()),
                                'consec_limit': a.consec_limit}, tf, indent=1)
                 sys.stderr.write('LOOP_GUARD: %s (%s)\n' % (hit, s[:90]))
+                globals()['_BUDGET'] = hit
                 if a.pid:
                     for sig, delay in ((signal.SIGTERM, 0), (signal.SIGKILL, a.kill_after)):
                         if delay:
