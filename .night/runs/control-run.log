@@ -1,0 +1,11 @@
+sandbox: /tmp/stellwerk-sandbox/m1-core-net-packet-20260927-004804 (base=cf120fdbbdd95763512f879d9106feffc0401bd0, .git отсутствует)
+pi exit=0 timeout=false
+VALIDITY GATE: VALID (pi_exit=0 stop=stop turns=20 steps=9 input_cum=99048)
+files_changed=0
+0 insertions=24 deletions=2
+files_changed=0
+0 insertions=24 deletions=2
+STDOUT: OK — packet выполнен в песочнице, репозиторий не тронут.
+ЭКСПОРТ (явный, после приёмки):
+  stellwerk-dispatch --export '/tmp/stellwerk-sandbox/m1-core-net-packet-20260927-004804' <branch>
+== packet → /tmp/stellwerk-sandbox/m1-core-net-packet-20260927-004804.run (sandbox /tmp/stellwerk-sandbox/m1-core-net-packet-20260927-004804)
