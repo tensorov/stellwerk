@@ -40,6 +40,12 @@ pub enum StoreError {
     NotImplemented(&'static str),
 }
 
+impl From<rusqlite::Error> for StoreError {
+    fn from(e: rusqlite::Error) -> Self {
+        StoreError::Sqlite(e.to_string())
+    }
+}
+
 /// Запись реестра модулей в том виде, в каком её хранит федерация.
 ///
 /// Это проекция `stellwerk_registry::model::Module`, а не его копия: крейт store
