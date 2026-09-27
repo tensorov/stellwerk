@@ -1,8 +1,6 @@
-mod cli;
 use clap::Parser;
+use stellwerk_task::cli::{self, Cli};
 
 fn main() {
-    let cli = cli::Cli::parse();
-    let rc = cli::run(cli);
-    std::process::exit(rc);
+    std::process::exit(cli::run(Cli::parse()));
 }
