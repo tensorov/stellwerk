@@ -321,23 +321,95 @@ impl EventStore for SqliteStore {
 impl ModuleStore for SqliteStore {
     fn get(
         &self,
-        _name: &str,
+        name: &str,
     ) -> impl std::future::Future<Output = Result<Option<ModuleRecord>, StoreError>> + Send {
-        async { todo!("RED: SqliteStore::get — SELECT из modules по имени") }
+        async move {
+            let conn = self.conn.lock().expect("store mutex poisoned");
+            let row = conn.query_row(
+                "SELECT data FROM modules WHERE name = ?1",
+                rusqlite::params![name],
+                |row| row.get::<_, String>(0),
+            );
+            match row {
+                Ok(json) => Ok(Some(serde_json::from_str(&json)?)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(StoreError::Sqlite(e.to_string())),
+            }
+        }
     }
 
     fn list(
         &self,
     ) -> impl std::future::Future<Output = Result<Vec<ModuleRecord>, StoreError>> + Send {
-        async { todo!("RED: SqliteStore::list — SELECT из modules ORDER BY name") }
+        async move {
+            let conn = self.conn.lock().expect("store mutex poisoned");
+            let mut stmt = conn
+                .prepare("SELECT data FROM modules ORDER BY name")
+                .map_err(|e| StoreError::Sqlite(e.to_string()))?;
+            let rows = stmt
+                .query_map(rusqlite::params![], |row| {
+                    let json: String = row.get(0)?;
+                    Ok(json)
+                })
+                .map_err(|e| StoreError::Sqlite(e.to_string()))?;
+            let mut records = Vec::new();
+            for row_result in rows {
+                let json: String = row_result.map_err(|e| StoreError::Sqlite(e.to_string()))?;
+                records.push(serde_json::from_str(&json)?);
+            }
+            Ok(records)
+        }
     }
 
     fn upsert_lock_entry(
         &self,
-        _record: ModuleRecord,
+        record: ModuleRecord,
     ) -> impl std::future::Future<Output = Result<(), StoreError>> + Send {
-        async {
-            todo!("RED: SqliteStore::upsert_lock_entry — INSERT ... ON CONFLICT(name) DO UPDATE")
+        async move {
+            let data_json = serde_json::to_string(&record)?;
+            let risk_str = record
+                .risk
+                .as_ref()
+                .map(|r| serde_json::to_string(r).unwrap());
+
+            let name = record.name.clone();
+            let conn = self.conn.lock().expect("store mutex poisoned");
+
+            // Check if a row with this name already exists.
+            let existing: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM modules WHERE name = ?1",
+                    rusqlite::params![&name],
+                    |row| row.get(0),
+                )
+                .ok();
+
+            let id = existing.unwrap_or_else(|| name.clone());
+
+            // On CONFLICT(id): update name/risk/data/updated_at, keep created_at.
+            let result = conn.execute(
+                "INSERT INTO modules (id, name, risk, data, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, \
+                         strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), \
+                         strftime('%Y-%m-%dT%H:%M:%SZ', 'now')) \
+                 ON CONFLICT(id) DO UPDATE SET \
+                     name=excluded.name, \
+                     risk=excluded.risk, \
+                     data=excluded.data, \
+                     updated_at=excluded.updated_at, \
+                     created_at=modules.created_at",
+                rusqlite::params![id, &name, risk_str.as_deref(), data_json],
+            );
+
+            match result {
+                Ok(_) => Ok(()),
+                Err(rusqlite::Error::SqliteFailure(err, _))
+                    if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+                {
+                    Err(StoreError::Conflict(format!("module conflict: {name}")))
+                }
+                Err(e) => Err(StoreError::Sqlite(e.to_string())),
+            }
         }
     }
 }
