@@ -1,0 +1,20 @@
+[package]
+name = "stellwerk-store"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+stellwerk-core  = { path = "../stellwerk-core" }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+thiserror       = { workspace = true }
+rusqlite        = { workspace = true }
+tokio           = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true
