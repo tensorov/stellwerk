@@ -366,8 +366,8 @@ impl DataClass {
     /// Инвариант: `Personal` не допускает `RetentionClass::ThirdParty` — это и есть
     /// запрет на «personal → Big Pickle».
     pub fn permits_model(self, binding: &ModelBinding) -> bool {
-        let _ = (self, binding);
-        todo!("RED: DataClass::permits_model")
+        self <= binding.data_class
+            && (binding.retention == RetentionClass::FirstParty || self == DataClass::Public)
     }
 }
 
