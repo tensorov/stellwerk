@@ -8,6 +8,10 @@
 5. Не добавляй зависимости. Разрешены только крейты из [workspace.dependencies]
    корневого Cargo.toml (подключать через `workspace = true`). Нужен новый — верни BLOCKED.
 
+Lint-политика (исключения в `[workspace.lints.clippy]` или `[lints.clippy]`
+крейта) меняется только packet'ом с меткой `contract-change` **и** ADR в
+`docs/adr/`: `#[allow(...)]` в коде запрещён безусловно.
+
 ## Границы правки
 - ≤ 3 файла и ≤ 200 строк diff на один task packet. Больше — верни SPLIT_REQUIRED.
 - Не трогай: modules.lock, .github/workflows/, crates/stellwerk-core/src/contract.rs,

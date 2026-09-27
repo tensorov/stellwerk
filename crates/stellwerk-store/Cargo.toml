@@ -18,3 +18,12 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true
+# ADR: docs/adr/0001-manual-async-fn.md
+# Линт предлагает заменить `fn .. -> impl Future<Output=..> + Send` на `async fn`.
+# Замена НЕ эквивалентна: `async fn` в публичном трейте не позволяет задать
+# auto-trait bounds (rustc: "use of `async fn` in public traits is discouraged as
+# auto trait bounds cannot be specified"), а при -D warnings это ошибка. Send здесь
+# не стилистика, а требование: tests/concurrent.rs использует `tokio::spawn`,
+# требующий Future: Send, для проверки конкурентной записи 10 писателей.
+# Исключение локально для этого крейта: async-трейты есть только здесь.
+"clippy::manual_async_fn" = "allow"

@@ -26,26 +26,7 @@ rmcp       = { version = "3.4.0", default-features = false, features = ["client"
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
-all = { level = "deny", priority = -1 }
-# manual_async_fn — ЛОЖНОЕ срабатывание в stellwerk-store, отключено намеренно.
-#
-# Линт предлагает заменить `fn .. -> impl Future<Output=..> + Send` на `async fn`.
-# Замена НЕ эквивалентна: `async fn` в публичном трейте не позволяет задать
-# auto-trait bounds, о чём rustc и предупреждает сам
-# ("use of `async fn` in public traits is discouraged as auto trait bounds
-# cannot be specified"). При `-D warnings` это становится ошибкой, то есть
-# оба варианта одновременно не проходят gate.
-#
-# Send-гарантия здесь не стилистика, а требование: crates/stellwerk-store/tests/
-# concurrent.rs использует `tokio::spawn` (требует Future: Send) для проверки
-# конкурентной записи 10 писателей. Согласившись на предложение линта, мы
-# потеряли бы Send молча и тест перестал бы проверять то, ради чего написан.
-#
-# Альтернативы рассмотрены и отвергнуты:
-#   * async-trait (крейт)   — запрещено: новая зависимость;
-#   * синхронные трейты     — rusqlite синхронен by design, но 21 RED-тест
-#                             написан с `.await`; переписывание тестов означало
-#                             бы смену приказа, а не его исполнение;
-#   * #[allow(..)] в коде   — прямо запрещено AGENTS.md.
-# Это политика уровня проекта (Cargo.toml), а не атрибут в коде.
-manual_async_fn = "allow"
+all = "deny"
+# Исключения lint-политики живут в крейтах, а не здесь: workspace-lints
+# применяются ко всем крейтам сразу и не могут нести обоснование,
+# относящееся к одному крейту. См. docs/adr/0001-manual-async-fn.md.
