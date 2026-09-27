@@ -5,7 +5,12 @@ files_allowed: [Cargo.toml, Cargo.lock, crates/stellwerk-gateway/Cargo.toml, cra
 limit_waiver: пакет создаёт крейт: Cargo.lock генерирует cargo, плюс отдельные модули permission/gate. Скелет крейта не укладывается в 3 файла по природе задачи.
 max_diff_lines: 200
 test: cargo test -p stellwerk-gateway --test permission && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings
-acceptance: RED: `bash -c 'cargo build -p stellwerk-gateway && cargo test -p stellwerk-gateway --test permission --no-run && ! cargo test -p stellwerk-gateway --test permission'` → exit 0: собирается, тест компилируется, падает на assert.
+acceptance: >
+  RED: `bash -c 'cargo build -p stellwerk-gateway && cargo test -p stellwerk-gateway --test permission --no-run && ! cargo test -p stellwerk-gateway --test permission'`
+  → exit 0: собирается, тест компилируется, падает на заглушке. Ровно 9 тестов в
+  `tests/permission.rs`: 6 по одному на класс риска, 1 на полноту таблицы, 2 на
+  `Unclassified`. Плюс `cargo fmt --all -- --check` и
+  `cargo clippy --workspace --all-targets -- -D warnings` — обе чисто.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
 depends_on: [—]
 data_class: public
@@ -77,10 +82,34 @@ Note: ADR не требуется — правило «contract-change + ADR» �
 проверкой не той оси.
 
 **Ловушка, которую этот раздел закрывает.** `packet-02` содержит в `forbidden`
-«правка тестов». Если тест из этого пакета утверждает `R4 → Deny`, то воркер
-M3-02 окажется перед двумя взаимоисключающими требованиями: реализовать В1 или
-не трогать тест. Оба нарушения. Поэтому правильная таблица должна появиться
-здесь, в пакете-источнике, а не появляться правкой теста в следующем пакете.
+«правка тестов», а его `files_allowed` — только `src/permission.rs`, без
+тестового файла. То есть M3-02 не может создать ни одного теста: он может
+только реализовать код так, чтобы уже написанные тесты прошли. Поэтому **весь**
+набор тестов, включая проверку `R4 → Ask`, рождается здесь.
+
+### Сигнатура и `ToolRisk` (В2) — тоже здесь, не в M3-02
+
+`permission_for` обязана принимать **не** `RiskClass`, а `ToolRisk`:
+
+```rust
+pub enum ToolRisk { Classified(RiskClass), Unclassified }
+pub fn permission_for(risk: ToolRisk) -> Result<Permission, PermissionError>
+```
+
+Почему это нельзя отложить на M3-02: тест вызывает `permission_for(...)`
+напрямую, и если он передаёт `ToolRisk::Classified(*risk)`, то смена типа
+параметра ломает уже написанный тест, а править тест M3-02 запрещено. Ровно та
+же ловушка, что и с вердиктом R4, только на уровне сигнатуры.
+
+- `Classified(rc)` → вердикт по таблице выше, уровень берётся из контракта.
+- `Unclassified` → **всегда `Deny`**, без suspend: приостанавливать задачу ради
+  неизвестного инструмента бессмысленно. `Ask` допустим только интерактивно при
+  `L5Owner`, и это решает вызывающий, а не эта функция.
+
+Тесты на `Unclassified` (2 шт., в этом же пакете): неинтерактивный worker →
+`Deny`; тот же инструмент в интерактивной сессии `L5Owner` → `Ask`. И третий,
+негативный: `Unclassified` **не** обязан возвращать `Allow` ни при каком
+уровне — это проверка на отсутствие молчаливого разрешения.
 
 ### Обязательный самопровер перед завершением
 

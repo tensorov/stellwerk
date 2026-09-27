@@ -4,7 +4,7 @@ goal: Реализовать отображение RiskClass → Permission п�
 files_allowed: [crates/stellwerk-gateway/src/permission.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-gateway --test permission
-acceptance: `cargo test -p stellwerk-gateway --test permission` → 9 passed; 0 failed (6 классов риска + полнота таблицы + 2 на Unclassified).
+acceptance: `cargo test -p stellwerk-gateway --test permission` → 9 passed; 0 failed. Все 9 тестов написаны в M3/packet-01; этот пакет реализует `permission.rs` так, чтобы они прошли, и НЕ создаёт тестов.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
 depends_on: [01]
 data_class: public
@@ -64,8 +64,9 @@ enum ToolRisk { Classified(RiskClass), Unclassified }
   ответ — классифицировать его в `modules.toml` и перезапустить.
 - `Ask` при `Unclassified` допустим **только** в интерактивной сессии `L5Owner`,
   где человек видит имя инструмента и аргументы.
-- RED-тест, обязательный: **новый MCP-тул без `risk` в манифесте → `Deny`, а не `Allow`.**
-  Второй: `Unclassified` при `L5Owner` интерактивно → `Ask`.
+Тесты на `Unclassified` (включая обязательный «новый MCP-тул без `risk` в манифесте
+→ `Deny`, а не `Allow`») написаны в **M3/packet-01**, потому что этот пакет не
+имеет права трогать тесты. Здесь они только исполняются.
 
 ## Evidence
 
