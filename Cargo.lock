@@ -456,6 +456,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "stellwerk-gateway"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "stellwerk-core",
+ "stellwerk-store",
+ "thiserror",
+]
+
+[[package]]
 name = "stellwerk-registry"
 version = "0.0.1"
 dependencies = [
