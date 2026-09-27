@@ -27,9 +27,26 @@ lane: m3/gate-red
 ## Что сделать
 
 1. `src/gate.rs`:
-   - `pub struct CallRequest { tool: String, module: String, risk: RiskClass,
-     caller: PolicyLevel, data: DataClass, model: ModelBinding }`;
-   - `pub enum Verdict { Allow, Ask, Deny { reason: String } }`;
+   - `pub struct CallRequest { tool: String, module: String, risk: ToolRisk,
+     caller: PolicyLevel, data: DataClass, model: ModelBinding,
+     interactive: bool }`.
+     **`risk: ToolRisk`, а не `RiskClass`.** Иначе `Unclassified` структурно не
+     может попасть в `decide`, и В2 («Unclassified → Ask только в интерактивной
+     L5-сессии») окажется непроверяемым не потому, что про него забыли, а
+     потому, что для него нет места в типе.
+     **`interactive: bool`** объявляется здесь, а не в packet-04: тест на это
+     поле пишется в этом пакете, а тест, ссылающийся на несуществующее поле, не
+     скомпилируется — а acceptance этого пакета требует, чтобы компилировался.
+     Значение по умолчанию — `false`: неинтерактивный прогон безопаснее, и
+     выдавать `Ask` по умолчанию значило бы превратить «не спросили» в «спросили,
+     возможно разрешили»;
+   - `pub enum Verdict { Allow, Ask, Suspended, Deny { reason: String } }`.
+     `Suspended` объявляется здесь, а не в packet-04: тесты на В4 пишутся в этом
+     пакете, а тест, ссылающийся на ещё не существующий вариант, не компилируется.
+     Разделение пакетов поэтому такое: packet-03 объявляет ВСЮ публичную
+     поверхность (`CallRequest`, `Verdict`, `interactive`), packet-04 наполняет
+     только логикой. Иначе тесты RED-пакета систематически оказываются впереди
+     своего типа;
    - `pub fn decide(req: &CallRequest) -> Verdict` — **RED-заглушка**.
 2. Правила решения (три независимых, порядок важен):
    1. **Риск инструмента** (`permission_for`): Deny → `Deny` сразу, Ask → кандидат на Ask;
@@ -51,7 +68,19 @@ lane: m3/gate-red
    - R4 + L4 → Deny; R4 + L5 → **Ask на одно действие** (В1), не Deny;
    - R5 → Deny при любом уровне, включая L5Owner (необратимо — не делегируется);
    - Personal + third-party binding → Deny, даже при R0 и L5Owner;
-   - Public + third-party → не Deny по данным.
+   - Public + third-party → не Deny по данным;
+   - `Unclassified` + `interactive: false` → **Deny** (неинтерактивный прогон;
+     suspend неуместен — правильный ответ классифицировать тул в modules.toml);
+   - `Unclassified` + `interactive: true` + `L5Owner` → **Ask** (В2: человек
+     видит имя инструмента и аргументы);
+   - `Unclassified` + `interactive: true` + ниже `L5Owner` → **Deny**, не `Ask`;
+   - `Ask` в неинтерактивном прогоне → **`Suspended`**, не `Deny` (В4: «запрещено
+     политикой» и «никто не ответил» — разные ситуации, и в статусе они должны
+     различаться, иначе расследование не сможет их различить);
+   - по истечении таймаута ожидания `Suspended` становится `Deny` — `Deny` лишь
+     дефолт по таймауту, а не самостоятельный исход (В4);
+   - `Suspended` и `Deny` различаются в статусе: у `Deny` непустой `reason`, у
+     `Suspended` — нет.
 4. `Verdict::Deny` обязан нести причину: без неё агент не поймёт, что делать.
 
 ## Evidence
