@@ -28,11 +28,15 @@ lane: m3/mount-red
 
 1. `src/mount.rs`:
    - `pub struct Candidate { pub name: String, pub kind: ModuleKind, pub cost_tokens: u64,
-     pub risk: Option<RiskClass>, pub risk_delta: i64 }`;
+     pub risk: ToolRisk, pub risk_delta: i64 }`;
      `risk_delta` — насколько модуль меняет бюджет риска сессии (у PolyForge −1: он
      СНИМАЕТ риск, потому что даёт проверенный путь; у сетевого MCP +1);
+   - `pub enum ToolRisk { Classified(RiskClass), Unclassified }` — **В2, не
+     `Option<RiskClass>`**. `Option` не выражает «риск неизвестен» как отдельное
+     состояние: `None` молча превращается в `R0`, то есть отсутствие данных
+     становится разрешением. `Unclassified` — состояние, а не пустота;
    - `pub struct MountPlan { pub mounted: Vec<String>, pub skipped: Vec<(String, SkipReason)> }`;
-   - `pub enum SkipReason { OverBudget, TooRisky, Duplicate, Disabled }`;
+   - `pub enum SkipReason { OverBudget, TooRisky, Duplicate, Disabled, Unclassified }`;
    - `pub fn plan(candidates: &[Candidate], budget_tokens: u64) -> Result<MountPlan, MountError>` — **RED-заглушка**.
 2. Правила, которые задают тесты:
    - модули монтируются **по возрастанию `cost_tokens`** (дешёвые базовые инструменты
@@ -40,7 +44,15 @@ lane: m3/mount-red
      набором модулей получают разные бюджеты;
    - модуль не влезает в остаток бюджета → `SkipReason::OverBudget`, монтирование
      продолжается (жадный проход, а не отказ);
-   - модуль, поднимающий риск выше `RiskClass::R2`, → `SkipReason::TooRisky`;
+   - модуль с `ToolRisk::Unclassified` → `SkipReason::Unclassified`, **никогда** `R0`
+     и никогда `Allow` (В2). Причина пропуска обязана быть различима: «не
+     классифицирован» и «дорого» — разные вещи, и в расследовании их нельзя
+     смешивать;
+   - отсечение по риску касается **только R5** → `SkipReason::TooRisky`.
+     Р3 и R4 монтируются: их вердикт `Ask` выносится на момент вызова в `decide`
+     (M3-04), и отсекать их здесь означало бы сделать решения В1 (R4 одобряем
+     владельцем на одно действие) и В4 (`Ask` → `Suspended`) недостижимым кодом.
+     Монтаж решает, что влезает в бюджет контекста, а не что разрешено;
    - повторное имя → `SkipReason::Duplicate`;
    - `ModuleKind::Skill` не монтируется всегда: его цену уже платит контекст, а
      инструментов он не даёт — `SkipReason::Disabled` (проверь, что это решение

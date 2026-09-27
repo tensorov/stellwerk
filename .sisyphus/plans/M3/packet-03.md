@@ -37,13 +37,18 @@ lane: m3/gate-red
       `RiskClass::required_level`): у вызывающего нет нужного уровня → `Deny`;
    3. **Данные** (`DataClass::permits_model`): класс данных выше, чем binding держит →
       `Deny` (это и есть «Personal не уходит в Big Pickle»).
-   Итог: Deny по любому пункту; иначе Ask, если риск R2/R3; иначе Allow.
+   Итог: Deny по любому пункту; иначе Ask, если риск R2/R3/R4; иначе Allow.
+   R5 — Deny всегда, он не попадает в ветку Ask (ADR-0002, В1).
 3. Тесты в `tests/gate.rs`:
    - R0 + L2 + Public + first-party binding → Allow;
    - R1 + L0 → Deny (нет прав писать);
-   - R2 + L2 → Ask (спрашиваем);
-   - R3 + L4 → Ask (человек решает доступ к секретам);
-   - R4 → Deny при любом уровне;
+   - R2 + L2 → **Deny**: R2 требует `L3Maintainer`, у L2 нет прав (правило 2
+     срабатывает раньше Ask — этот случай раньше был записан как «R2 + L2 → Ask»,
+     что противоречило собственному правилу пакета);
+   - R2 + L3 → Ask (спрашиваем);
+   - R3 + L4 → **Deny**: после ADR-0002 R3 требует `L5Owner`, L4 недостаточен;
+   - R3 + L5 → Ask (человек решает доступ к секретам);
+   - R4 + L4 → Deny; R4 + L5 → **Ask на одно действие** (В1), не Deny;
    - R5 → Deny при любом уровне, включая L5Owner (необратимо — не делегируется);
    - Personal + third-party binding → Deny, даже при R0 и L5Owner;
    - Public + third-party → не Deny по данным.
