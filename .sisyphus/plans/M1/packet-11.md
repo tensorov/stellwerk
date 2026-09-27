@@ -1,7 +1,7 @@
 # packet-11
 plan_id: M1
 goal: Реализовать `EventStore::append`, `list_since` и `list_by_task` — поток событий должен пережить конкурентную запись.
-files_allowed: [crates/stellwerk-store/src/sqlite.rs]
+files_allowed: [crates/stellwerk-store/src/sqlite.rs, crates/stellwerk-store/src/migrations.rs, crates/stellwerk-store/src/migrations/*.sql]
 max_diff_lines: 200
 test: cargo test -p stellwerk-store --test event_append
 acceptance: `cargo test -p stellwerk-store --test event_append` → 4 passed; 0 failed. Затем `cargo test -p stellwerk-store --test concurrent` → 3 passed — это проверка потокобезопасности, она обязана позеленеть вместе с `append`.

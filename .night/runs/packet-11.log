@@ -1,0 +1,11 @@
+sandbox: /tmp/stellwerk-sandbox/m1/store-events-packet-11-20260927-070852 (base=main, .git отсутствует)
+pi exit=0 timeout=false
+VALIDITY GATE: VALID (pi_exit=0 stop=stop turns=81 steps=43 input_cum=787190 [хвост STATUS/... не найден])
+files_changed=2
+0 insertions=79 deletions=7
+files_changed=2
+0 insertions=79 deletions=7
+STDOUT: OK — packet выполнен в песочнице, репозиторий не тронут.
+ЭКСПОРТ (явный, после приёмки):
+  stellwerk-dispatch --export '/tmp/stellwerk-sandbox/m1/store-events-packet-11-20260927-070852' <branch>
+== packet-11 → /tmp/stellwerk-sandbox/m1/store-events-packet-11-20260927-070852.run (sandbox /tmp/stellwerk-sandbox/m1/store-events-packet-11-20260927-070852)

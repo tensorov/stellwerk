@@ -1,11 +1,15 @@
-sandbox: /tmp/stellwerk-sandbox/m1/store-task-crud-packet-08-20260927-070005 (base=main, .git отсутствует)
+sandbox: /tmp/stellwerk-sandbox/m1/store-task-crud-packet-08-20260927-070722 (base=main, .git отсутствует)
 pi exit=0 timeout=false
-VALIDITY GATE: VALID (pi_exit=0 stop=stop turns=79 steps=38 input_cum=650318)
+VALIDITY GATE: VALID (pi_exit=0 stop=stop turns=8 steps=3 input_cum=22138)
 files_changed=0
-0 insertions=100 deletions=5
+0 insertions=0
+0 deletions=0
+0
 files_changed=0
-0 insertions=100 deletions=5
+0 insertions=0
+0 deletions=0
+0
 STDOUT: OK — packet выполнен в песочнице, репозиторий не тронут.
 ЭКСПОРТ (явный, после приёмки):
-  stellwerk-dispatch --export '/tmp/stellwerk-sandbox/m1/store-task-crud-packet-08-20260927-070005' <branch>
-== packet-08 → /tmp/stellwerk-sandbox/m1/store-task-crud-packet-08-20260927-070005.run (sandbox /tmp/stellwerk-sandbox/m1/store-task-crud-packet-08-20260927-070005)
+  stellwerk-dispatch --export '/tmp/stellwerk-sandbox/m1/store-task-crud-packet-08-20260927-070722' <branch>
+== packet-08 → /tmp/stellwerk-sandbox/m1/store-task-crud-packet-08-20260927-070722.run (sandbox /tmp/stellwerk-sandbox/m1/store-task-crud-packet-08-20260927-070722)
