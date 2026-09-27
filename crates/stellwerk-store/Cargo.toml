@@ -37,5 +37,6 @@ unsafe_code = "forbid"
 
 # Исключение локально для этого крейта: async-трейты есть только здесь.
 [lints.clippy]
-all = "deny"
+# priority = -1 обязателен: иначе группа all перебивает точечное исключение
+all = { level = "deny", priority = -1 }
 manual_async_fn = "allow"
