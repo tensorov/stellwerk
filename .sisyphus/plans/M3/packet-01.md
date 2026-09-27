@@ -2,6 +2,7 @@
 plan_id: M3
 goal: Создать крейт `stellwerk-gateway` и падающий тест отображения RiskClass → permission. contract-change: добавляется член workspace.
 files_allowed: [Cargo.toml, crates/stellwerk-gateway/Cargo.toml, crates/stellwerk-gateway/src/lib.rs, crates/stellwerk-gateway/src/permission.rs, crates/stellwerk-gateway/tests/permission.rs]
+limit_waiver: пакет создаёт крейт: Cargo.lock генерирует cargo, плюс отдельные модули permission/gate. Скелет крейта не укладывается в 3 файла по природе задачи.
 max_diff_lines: 200
 test: cargo test -p stellwerk-gateway --test permission
 acceptance: RED: `bash -c 'cargo build -p stellwerk-gateway && cargo test -p stellwerk-gateway --test permission --no-run && ! cargo test -p stellwerk-gateway --test permission'` → exit 0: собирается, тест компилируется, падает на assert.

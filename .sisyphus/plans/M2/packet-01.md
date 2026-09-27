@@ -2,6 +2,7 @@
 plan_id: M2
 goal: Создать крейт `stellwerk-task`: Cargo.toml, lib/main, и падающий тест загрузки TaskSpec из TOML. contract-change: добавляется член workspace.
 files_allowed: [Cargo.toml, Cargo.lock, crates/stellwerk-task/Cargo.toml, crates/stellwerk-task/src/lib.rs, crates/stellwerk-task/src/main.rs, crates/stellwerk-task/src/taskfile.rs, crates/stellwerk-task/src/cli.rs, crates/stellwerk-task/tests/taskfile.rs]
+limit_waiver: пакет создаёт крейт: Cargo.lock генерирует cargo, migrations и main — отдельные компилируемые единицы. Скелет крейта не укладывается в 3 файла по природе задачи.
 max_diff_lines: 200
 test: cargo test -p stellwerk-task --test taskfile
 acceptance: RED: `bash -c 'cargo build -p stellwerk-task && cargo test -p stellwerk-task --test taskfile --no-run && ! cargo test -p stellwerk-task --test taskfile'` → exit 0: крейт собирается, тест компилируется, прогон падает на assert, а НЕ на ошибке компиляции.

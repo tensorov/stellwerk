@@ -4,7 +4,7 @@ goal: Зафиксировать RED-базлайн хранилища: 20 из 
 files_allowed: [crates/stellwerk-store/tests/baseline_red.md]
 max_diff_lines: 200
 test: cargo test -p stellwerk-store
-acceptance: Вывод показывает 20 failed и 1 passed; каждый panic содержит `not implemented: SqliteStore::`; зелёный ровно `task_crud::open_applies_migrations_without_error`.
+acceptance: RED-набор действительно падает: вывод `cargo test -p stellwerk-store` показывает 20 failed и 1 passed, т.е. тест **должен упасть** (ожидается падение), а каждый panic содержит `not implemented: SqliteStore::`. Если хотя бы один набор зелёный — вернуться BLOCKED, причина не разобрана.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
 depends_on: [—]
 data_class: public
