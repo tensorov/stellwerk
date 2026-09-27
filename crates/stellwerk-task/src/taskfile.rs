@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use stellwerk_core::contract::{DataClass, TaskSpec};
+use stellwerk_core::contract::{DataClass, TaskLimits, TaskSpec};
 use thiserror::Error;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -12,6 +12,10 @@ pub enum TaskFileError {
     Parse(#[from] toml::de::Error),
     #[error("validation error: {0}")]
     Validation(String),
+    /// Файл не прочитан. Отдельный вариант, а не Validation: отсутствие файла —
+    /// это операционная ошибка, и путать её с опечаткой в содержимом нельзя.
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -68,22 +72,67 @@ impl Default for TaskFileLimits {
 // ═══════════════════════════════════════════════════════════════════════════
 
 impl TaskFile {
-    /// Загрузить TaskFile из TOML-строки.
+    /// Загрузить TaskFile из TOML-строки и проверить то, что не выражается типами.
     ///
-    /// **TODO (packet-02):** реализовать десериализацию.
-    /// Сейчас — заглушка, всегда возвращающая ошибку.
-    pub fn from_toml_str(_s: &str) -> Result<Self, TaskFileError> {
-        Err(TaskFileError::Validation(
-            "not yet implemented — stub".into(),
-        ))
+    /// Проверки валидации существенны: `deny_unknown_fields` отвергает опечатку
+    /// в имени ключа, но не отвергает `max_files = 0`, а нулевой лимит молча
+    /// отключил бы ограничение задачи.
+    pub fn from_toml_str(s: &str) -> Result<Self, TaskFileError> {
+        let file: Self = toml::from_str(s)?;
+        file.validate()?;
+        Ok(file)
+    }
+
+    /// Прочитать TaskFile с диска.
+    pub fn load(path: &std::path::Path) -> Result<Self, TaskFileError> {
+        let raw = std::fs::read_to_string(path)?;
+        Self::from_toml_str(&raw)
+    }
+
+    fn validate(&self) -> Result<(), TaskFileError> {
+        let t = &self.spec;
+        let bad = |m: String| Err(TaskFileError::Validation(m));
+        if t.id.trim().is_empty() {
+            return bad("id обязан быть непустым".into());
+        }
+        if t.goal.trim().is_empty() {
+            return bad("goal обязан быть непустым".into());
+        }
+        if t.limits.max_files == 0 {
+            return bad("max_files обязан быть > 0".into());
+        }
+        if t.limits.max_diff_lines == 0 {
+            return bad("max_diff_lines обязан быть > 0".into());
+        }
+        if t.limits.timeout_seconds == 0 {
+            return bad("timeout_seconds обязан быть > 0".into());
+        }
+        Ok(())
     }
 
     /// Конвертировать в `TaskSpec` контракта.
     ///
-    /// **TODO (packet-02):** реализовать маппинг.
+    /// Структура `TaskSpec` здесь НЕ дублируется: она уже живёт в
+    /// `stellwerk_core::contract`. Дублирование разошлось бы с контрактом при
+    /// первом же изменении лимитов.
     pub fn into_spec(self) -> Result<TaskSpec, TaskFileError> {
-        Err(TaskFileError::Validation(
-            "not yet implemented — stub".into(),
-        ))
+        let t = self.spec;
+        let limits = TaskLimits {
+            max_files: t.limits.max_files,
+            max_diff_lines: t.limits.max_diff_lines,
+            timeout_seconds: t.limits.timeout_seconds,
+            max_retries: t.limits.max_retries,
+            context_budget_tokens: t.limits.context_budget_tokens,
+            data_class: t.limits.data_class,
+        };
+        Ok(TaskSpec {
+            id: t.id,
+            goal: t.goal,
+            workspace_ref: t.workspace_ref,
+            model_ref: t.model_ref,
+            packet: t.packet,
+            limits,
+            evidence_policy: t.evidence_policy,
+        })
     }
 }

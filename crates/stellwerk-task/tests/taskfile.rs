@@ -11,6 +11,7 @@ goal = "Add unit tests for TaskLimits"
 workspace_ref = "ws-main"
 model_ref = "binding-01"
 packet = "packet-01"
+evidence_policy = "ToolAttestation"
 
 [task.limits]
 max_files = 10
@@ -19,8 +20,6 @@ timeout_seconds = 300
 max_retries = 3
 context_budget_tokens = 8192
 data_class = "internal"
-
-task.evidence_policy = "ToolAttestation"
 "#;
 
 // ═══════════════════════════════════════════════════════════════════════════
