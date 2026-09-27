@@ -52,7 +52,14 @@ impl RiskClass {
     /// Минимальный уровень, на котором операция этого класса допускается без
     /// дополнительных условий. Требует реализации (RED-спецификация).
     pub fn required_level(self) -> PolicyLevel {
-        todo!("RED: policy::required_level — таблица R0→L0 … R5→L4")
+        match self {
+            RiskClass::R0 => PolicyLevel::L0Local,
+            RiskClass::R1 => PolicyLevel::L2Contributor,
+            RiskClass::R2 => PolicyLevel::L3Maintainer,
+            RiskClass::R3 => PolicyLevel::L4Admin,
+            RiskClass::R4 => PolicyLevel::L5Owner,
+            RiskClass::R5 => PolicyLevel::L5Owner,
+        }
     }
 }
 
