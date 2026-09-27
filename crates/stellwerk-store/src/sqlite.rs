@@ -15,10 +15,70 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use rusqlite::Connection;
+use rusqlite::OptionalExtension;
 use stellwerk_core::contract::{Event, TaskSpec, TaskStatus};
 
 use crate::migrations::MIGRATIONS;
 use crate::traits::{EventStore, ModuleRecord, ModuleStore, StoreError, TaskStore};
+
+/// Текущее время в формате RFC 3339 UTC.
+fn now_rfc3339() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before epoch")
+        .as_secs();
+    // Convert unix epoch to a simple RFC 3339 string.
+    // We use a naive approach: compute date/time from unix epoch.
+    // For simplicity, use strftime via SQLite — but we need the value
+    // in Rust. Use a helper: seconds since epoch -> YYYY-MM-DDTHH:MM:SSZ.
+    let days = secs / 86400;
+    let time_of_day = secs % 86400;
+    let hours = time_of_day / 3600;
+    let minutes = (time_of_day % 3600) / 60;
+    let seconds = time_of_day % 60;
+
+    // Compute year/month/day from days since 1970-01-01
+    let (y, m, d) = days_to_ymd(days);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        y, m, d, hours, minutes, seconds
+    )
+}
+
+/// Convert days since 1970-01-01 to (year, month, day).
+fn days_to_ymd(days: u64) -> (u64, u64, u64) {
+    // Days from 1970-01-01
+    let n = days as i64;
+    // Convert to Julian day number
+    let jdn = n + 2440588;
+    // Convert JDN to calendar date (Fliegel-Van Flanden algorithm)
+    let f = jdn + 1401 + (((4 * jdn + 274277) / 146097) * 3) / 4 - 38;
+    let e = 4 * f + 3;
+    let g = (e % 1461) / 4;
+    let h = 5 * g + 2;
+    let day = (h % 153) / 5 + 1;
+    let month = ((h / 153 + 2) % 12) + 1;
+    let year = (e / 1461) + 1900 + ((243 - month) / 12);
+    (year as u64, month as u64, day as u64)
+}
+
+/// Струнное представление TaskStatus (PascalCase, как в схеме).
+fn status_str(s: TaskStatus) -> &'static str {
+    match s {
+        TaskStatus::Draft => "Draft",
+        TaskStatus::Planned => "Planned",
+        TaskStatus::Reviewed => "Reviewed",
+        TaskStatus::Delegated => "Delegated",
+        TaskStatus::Running => "Running",
+        TaskStatus::Suspended => "Suspended",
+        TaskStatus::EvidenceSubmitted => "EvidenceSubmitted",
+        TaskStatus::Done => "Done",
+        TaskStatus::Failed => "Failed",
+        TaskStatus::Verified => "Verified",
+        TaskStatus::Validated => "Validated",
+        TaskStatus::Blocked => "Blocked",
+    }
+}
 
 /// Хранилище на SQLite.
 ///
@@ -82,40 +142,127 @@ impl SqliteStore {
 impl TaskStore for SqliteStore {
     fn create(
         &self,
-        _spec: TaskSpec,
+        spec: TaskSpec,
     ) -> impl std::future::Future<Output = Result<TaskSpec, StoreError>> + Send {
-        async { todo!("RED: SqliteStore::create — INSERT в tasks, status из spec") }
+        async move {
+            let data = serde_json::to_string(&spec).map_err(StoreError::Serialization)?;
+            let now = now_rfc3339();
+            let workspace_id = spec.workspace_ref.clone();
+            let conn = self.conn.lock().expect("store mutex poisoned");
+            conn.execute(
+                "INSERT INTO tasks (id, status, workspace_id, data, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                [
+                    &spec.id,
+                    status_str(TaskStatus::Draft),
+                    &workspace_id,
+                    &data,
+                    &now,
+                    &now,
+                ],
+            )
+            .map_err(|e| {
+                if e.to_string().contains("UNIQUE") {
+                    StoreError::Conflict(format!("task {} already exists", spec.id))
+                } else {
+                    StoreError::Sqlite(e.to_string())
+                }
+            })?;
+            Ok(spec)
+        }
     }
 
     fn get(
         &self,
-        _id: &str,
+        id: &str,
     ) -> impl std::future::Future<Output = Result<Option<TaskSpec>, StoreError>> + Send {
-        async { todo!("RED: SqliteStore::get — SELECT data по id") }
+        async move {
+            let conn = self.conn.lock().expect("store mutex poisoned");
+            let data: Option<String> = conn
+                .query_row("SELECT data FROM tasks WHERE id = ?1", [id], |row| {
+                    row.get(0)
+                })
+                .optional()
+                .map_err(|e| StoreError::Sqlite(e.to_string()))?;
+            match data {
+                Some(d) => {
+                    let spec: TaskSpec =
+                        serde_json::from_str(&d).map_err(StoreError::Serialization)?;
+                    Ok(Some(spec))
+                }
+                None => Ok(None),
+            }
+        }
     }
 
     fn update_status(
         &self,
-        _id: &str,
-        _status: TaskStatus,
+        id: &str,
+        status: TaskStatus,
     ) -> impl std::future::Future<Output = Result<TaskSpec, StoreError>> + Send {
-        async {
-            todo!("RED: SqliteStore::update_status — UPDATE status + data, NotFound при отсутствии")
+        async move {
+            let now = now_rfc3339();
+            let status_val = status_str(status);
+            let conn = self.conn.lock().expect("store mutex poisoned");
+            // Сначала читаем данные
+            let data: String = conn
+                .query_row("SELECT data FROM tasks WHERE id = ?1", [id], |row| {
+                    row.get(0)
+                })
+                .optional()
+                .map_err(|e| StoreError::Sqlite(e.to_string()))?
+                .ok_or_else(|| StoreError::NotFound(id.to_owned()))?;
+            let spec: TaskSpec = serde_json::from_str(&data).map_err(StoreError::Serialization)?;
+            // Обновляем статус
+            conn.execute(
+                "UPDATE tasks SET status = ?2, updated_at = ?3 WHERE id = ?1",
+                [id, status_val, &now],
+            )
+            .map_err(|e| StoreError::Sqlite(e.to_string()))?;
+            Ok(spec)
         }
     }
 
     fn list_by_status(
         &self,
-        _status: TaskStatus,
+        status: TaskStatus,
     ) -> impl std::future::Future<Output = Result<Vec<TaskSpec>, StoreError>> + Send {
-        async { todo!("RED: SqliteStore::list_by_status — SELECT по idx_tasks_status") }
+        async move {
+            let conn = self.conn.lock().expect("store mutex poisoned");
+            let mut stmt = conn
+                .prepare("SELECT data FROM tasks WHERE status = ?1 ORDER BY id")
+                .map_err(|e| StoreError::Sqlite(e.to_string()))?;
+            let specs: Vec<TaskSpec> = stmt
+                .query_map([status_str(status)], |row| {
+                    let d: String = row.get(0)?;
+                    serde_json::from_str(&d).map_err(|_e| rusqlite::Error::QueryReturnedNoRows)
+                })
+                .map_err(|e| StoreError::Sqlite(e.to_string()))?
+                .filter_map(|r| r.transpose())
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(specs)
+        }
     }
 
     fn list_by_workspace(
         &self,
-        _workspace_id: &str,
+        workspace_id: &str,
     ) -> impl std::future::Future<Output = Result<Vec<TaskSpec>, StoreError>> + Send {
-        async { todo!("RED: SqliteStore::list_by_workspace — SELECT по idx_tasks_workspace") }
+        async move {
+            let conn = self.conn.lock().expect("store mutex poisoned");
+            let mut stmt = conn
+                .prepare("SELECT data FROM tasks WHERE workspace_id = ?1 ORDER BY id")
+                .map_err(|e| StoreError::Sqlite(e.to_string()))?;
+            let specs: Vec<TaskSpec> = stmt
+                .query_map([workspace_id], |row| {
+                    let d: String = row.get(0)?;
+                    serde_json::from_str(&d).map_err(|_e| rusqlite::Error::QueryReturnedNoRows)
+                })
+                .map_err(|e| StoreError::Sqlite(e.to_string()))?
+                .filter_map(|r| r.transpose())
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(specs)
+        }
     }
 }
 
