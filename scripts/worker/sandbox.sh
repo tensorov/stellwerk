@@ -114,8 +114,14 @@ sandbox_build_patch() {
     rel="${rel#./}"
     [ -n "$rel" ] || continue
     [ -f "$sb/$rel" ] || continue
-    if ! cmp -s "$sb.base/$rel" "$sb/$rel"; then
-      diff -u --label "a/$rel" --label "b/$rel" "$sb.base/$rel" "$sb/$rel" >> "$out" || true
+    if [ ! -f "$sb.base/$rel" ]; then
+      # НОВЫЙ файл: в базе его нет, обычный diff падает на отсутствующей левой
+      # стороне, и файл ТИХО выпадал из патча. Для git новая сущность
+      # обозначается /dev/null слева — без этого пакет, создающий файл,
+      # экспортировался бы неполно. (Поймано тестом T9b.)
+      diff -u --label "/dev/null" --label "b/$rel" /dev/null "$sb/$rel" >> "$out" 2>/dev/null || true
+    elif ! cmp -s "$sb.base/$rel" "$sb/$rel"; then
+      diff -u --label "a/$rel" --label "b/$rel" "$sb.base/$rel" "$sb/$rel" >> "$out" 2>/dev/null || true
     fi
   done < "$tmp"
   rm -f "$tmp"
@@ -147,9 +153,9 @@ sandbox_postflight() {
 sandbox_export() {
   local sb="$1" target="$2" repo="$3"
   local patch="$sb.run/sandbox.patch"
-  # Путь 1: паток собран во время прогона (предпочтительно — .base уже удалён).
+
+  # Путь 1: патч собран во время прогона (предпочтительно — .base уже удалён).
   if [ ! -s "$patch" ]; then
-    # Путь 2: .base ещё жив (SANDBOX_KEEP=1 или экспорт до очистки).
     sandbox_build_patch "$sb" "$patch" >/dev/null 2>&1
   fi
   if [ ! -s "$patch" ]; then
@@ -162,7 +168,49 @@ sandbox_export() {
     echo "export: postflight не пройден, экспорт запрещён" >&2
     return 6
   fi
-  echo "export: применяю patch в $target"
-  git -C "$repo" apply --check "$patch" || { echo "export: patch не применился, отказ"; return 1; }
-  git -C "$repo" apply "$patch" && echo "export: OK"
+
+  # Рабочее дерево должно быть ЧИСТЫМ. Иначе коммит смешает правки пакета с
+  # чужими незакоммиченными изменениями, и diff перестаёт быть проверяемым.
+  if ! git -C "$repo" diff --quiet || ! git -C "$repo" diff --cached --quiet; then
+    echo "export: рабочее дерево не чистое, отказ (иначе патч смешается с чужими правками)" >&2
+    git -C "$repo" status --porcelain >&2
+    return 7
+  fi
+
+  if git -C "$repo" rev-parse --verify --quiet "$target" >/dev/null; then
+    echo "export: ветка $target уже существует, отказ (переиспользование веток неоднозначно)" >&2
+    return 8
+  fi
+
+  # Имена файлов берём ИЗ ПАТЧА (строки '+++ b/<path>'), и добавляем в индекс
+  # только их: `git add -A` захватил бы посторонние untracked-файлы.
+  local files orig
+  files="$(awk '/^\+\+\+ /{sub(/^\+\+\+ b\//,""); print}' "$patch")"
+  orig="$(git -C "$repo" rev-parse --abbrev-ref HEAD)"
+  [ -n "$files" ] || { echo "export: в патче нет файлов"; return 9; }
+
+  git -C "$repo" checkout -q -b "$target" || {
+    echo "export: не создать ветку $target" >&2; return 1; }
+  if ! git -C "$repo" apply "$patch"; then
+    echo "export: patch не применился, откат на $orig" >&2
+    git -C "$repo" checkout -q --force "$orig" 2>/dev/null
+    git -C "$repo" branch -D "$target" >/dev/null 2>&1
+    return 1
+  fi
+  # shellcheck disable=SC2086
+  git -C "$repo" add -- $files
+  if git -C "$repo" diff --cached --quiet; then
+    echo "export: патч не дал изменений, откат" >&2
+    git -C "$repo" checkout -q --force "$orig" 2>/dev/null
+    git -C "$repo" branch -D "$target" >/dev/null 2>&1
+    return 9
+  fi
+  git -C "$repo" commit -q -m "export: $target (stellwerk-dispatch)" \
+    -m "Пакет перенесён из песочницы штатным путём: sandbox_build_patch + postflight." \
+    -m "Export-Limit-Waiver: нет. Branch: $target" || {
+      echo "export: коммит не создан" >&2
+      git -C "$repo" checkout -q --force "$orig" 2>/dev/null; return 1; }
+  git -C "$repo" checkout -q "$orig"
+  echo "export: OK → ветка $target (1 коммит, $(printf '%s\n' "$files" | wc -l | tr -d ' ') файл(ов)); рабочее дерево возвращено на $orig"
+  return 0
 }

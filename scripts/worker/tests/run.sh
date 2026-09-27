@@ -76,16 +76,17 @@ printf 'fn main() { println!("hi"); }\n' > "$SB1/main.rs"
 # Шаг прогона: патч собирается, ПОКА .base жив (это и есть исправление).
 sandbox_build_patch "$SB1" "$SB1.run/sandbox.patch" >/dev/null 2>&1
 # Имитация конца прогона: .base удаляется, как это делает dispatch.
-rm -rf "$SB1.base"
+mv "$SB1.base" "$TMP/base1-gone"
 ( sandbox_export "$SB1" t1-branch "$T1REPO" ) > "$TMP/t1.log" 2>&1
 T1RC=$?
-git -C "$T1REPO" diff --quiet 2>/dev/null; T1DIRTY=$?
-git -C "$T1REPO" stash list >/dev/null 2>&1
-T1CNT=$(grep -c 'println' "$T1REPO/main.rs" 2>/dev/null || echo 0)
-if [ "$T1RC" -eq 0 ] && [ "$T1DIRTY" -ne 0 ] && [ "${T1CNT:-0}" -gt 0 ]; then
-  ok "T1 export применил изменение в репо"
+# Контракт export: ветка создана, изменение в ней, дерево не запачкано.
+T1BR=$(git -C "$T1REPO" rev-parse --verify --quiet t1-branch >/dev/null && echo yes || echo no)
+T1IN=$(git -C "$T1REPO" show t1-branch:main.rs 2>/dev/null | grep -c println || echo 0)
+T1CLEAN=$(git -C "$T1REPO" status --porcelain | wc -l | tr -d ' ')
+if [ "$T1RC" -eq 0 ] && [ "$T1BR" = yes ] && [ "$T1IN" -gt 0 ] && [ "$T1CLEAN" -eq 0 ]; then
+  ok "T1 export создал ветку с изменением, дерево осталось чистым"
 else
-  bad "T1 export не применил изменение" "rc=$T1RC repo_dirty=$T1DIRTY println_in_repo=$T1CNT" "лог: $(tail -2 "$TMP/t1.log" | tr '\n' ' ')"
+  bad "T1 export не выполнил контракт" "rc=$T1RC branch=$T1BR изменение_в_ветке=$T1IN дерево_грязное=$T1CLEAN" "лог: $(tail -2 "$TMP/t1.log" | tr '\n' ' ')"
 fi
 
 # ── T2: export без изменений ────────────────────────────────────────────────
@@ -275,6 +276,59 @@ if [ -d "$TR" ] && ls "$TR"/*.jsonl.gz >/dev/null 2>&1; then
   fi
 else
   bad "T8 нет корпуса трасс" "каталог $TR пуст — калибровка непроверяема"
+fi
+
+# ── T9: export создаёт ветку, а не просто пачкает дерево ────────────────────
+# Canary сессии #3 поймал: экспорт печатал 'export: OK', НЕ создавал ветку и
+# применял патч прямо в рабочее дерево. Аргумент <branch> использовался только
+# в тексте сообщения. Проверяем явно все три следствия.
+head2 "T9 export: ветка создаётся, дерево остаётся чистым"
+T9REPO="$TMP/repo9"; mkdir -p "$T9REPO"
+git -C "$T9REPO" init -q
+printf 'fn main() {}\n' > "$T9REPO/main.rs"
+git -C "$T9REPO" add -A && git -C "$T9REPO" -c user.email=t@t -c user.name=t commit -qm init
+SB9="$(sandbox_create "$T9REPO" HEAD t9 2>/dev/null)"
+printf 'fn main() { println!("canary"); }\n' > "$SB9/main.rs"
+printf 'fn extra() {}\n' > "$SB9/extra.rs"          # новый файл — тоже должен попасть
+sandbox_build_patch "$SB9" "$SB9.run/sandbox.patch" >/dev/null 2>&1
+mv "$SB9.base" "$TMP/base9-gone"
+( sandbox_export "$SB9" t9-branch "$T9REPO" ) > "$TMP/t9.log" 2>&1
+T9RC=$?
+# a) ветка существует
+if git -C "$T9REPO" rev-parse --verify --quiet t9-branch >/dev/null; then T9A=ok; else T9A=bad; fi
+# b) в ветке ровно один коммит сверх базы и ровно 2 файла
+T9N=$(git -C "$T9REPO" rev-list --count main2..t9-branch 2>/dev/null || git -C "$T9REPO" rev-list --count HEAD..t9-branch 2>/dev/null || echo err)
+T9F=$(git -C "$T9REPO" show --name-only --format="" t9-branch 2>/dev/null | grep -c . || echo 0)
+# c) рабочее дерево осталось на исходной ветке и чистое
+T9CLEAN=$(git -C "$T9REPO" status --porcelain | wc -l | tr -d ' ')
+T9CUR=$(git -C "$T9REPO" rev-parse --abbrev-ref HEAD)
+[ "$T9A" = ok ] && ok "T9a ветка t9-branch создана" || { bad "T9a ветка НЕ создана (rc=$T9RC)"; sed 's/^/        /' "$TMP/t9.log"; }
+if [ "$T9N" = "1" ] && [ "$T9F" = "2" ]; then
+  ok "T9b в ветке 1 коммит и 2 файла (main.rs + новый extra.rs)"
+else
+  bad "T9b состав неверный" "коммитов=$T9N файлов=$T9F (ожидались 1 и 2)"
+fi
+if [ "$T9CLEAN" = "0" ] && [ "$T9CUR" != "t9-branch" ]; then
+  ok "T9c дерево чистое и возвращено на $T9CUR (патч не остался в нём)"
+else
+  bad "T9c дерево загрязнено" "незакоммиченных=$T9CLEAN текущая ветка=$T9CUR"
+fi
+# d) повторный export в существующую ветку отвергается
+( sandbox_export "$SB9" t9-branch "$T9REPO" ) > "$TMP/t9d.log" 2>&1
+if [ $? -ne 0 ] && grep -qi 'уже существует' "$TMP/t9d.log"; then
+  ok "T9d повторный export в существующую ветку отвергнут (без тихой перезаписи)"
+else
+  bad "T9d повторный export не отвергнут" "$(tail -2 "$TMP/t9d.log" | tr '\n' ' ')"
+fi
+# e) грязное рабочее дерево отвергается (иначе коммит смешает правки)
+printf '// stray\n' >> "$T9REPO/main.rs"
+( sandbox_export "$SB9" t9-dirty "$T9REPO" ) > "$TMP/t9e.log" 2>&1
+T9ERC=$?
+git -C "$T9REPO" restore main.rs 2>/dev/null || git -C "$T9REPO" checkout -q -- main.rs
+if [ "$T9ERC" -ne 0 ] && grep -qi 'не чистое' "$TMP/t9e.log"; then
+  ok "T9e export при грязном дереве отвергнут"
+else
+  bad "T9e export прошёл при грязном дереве" "rc=$T9ERC"
 fi
 
 # ── итог ───────────────────────────────────────────────────────────────────
