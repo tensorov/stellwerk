@@ -6,4 +6,6 @@
 pub const MIGRATIONS: &[(&str, &str)] = &[
     ("0001_init", include_str!("migrations/0001_init.sql")),
     ("0002_indexes", include_str!("migrations/0002_indexes.sql")),
+    ("0003_payload", include_str!("migrations/0003_payload.sql")),
+    ("0004_data", include_str!("migrations/0004_data.sql")),
 ];

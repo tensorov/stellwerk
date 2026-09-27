@@ -239,25 +239,82 @@ impl TaskStore for SqliteStore {
 impl EventStore for SqliteStore {
     fn append(
         &self,
-        _event: Event,
+        event: Event,
     ) -> impl std::future::Future<Output = Result<(), StoreError>> + Send {
-        async {
-            todo!("RED: SqliteStore::append — INSERT в events, task_id выделен в колонку")
+        async move {
+            let task_id = event.payload.get("task_id").cloned();
+            let data_json = serde_json::to_string(&event).map_err(StoreError::Serialization)?;
+
+            let conn = self.conn.lock().expect("store mutex poisoned");
+            let result = conn.execute(
+                "INSERT INTO events (id, task_id, ts, created_at, data)
+                 VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), ?4)",
+                rusqlite::params![event.id, task_id.as_deref(), event.ts, data_json,],
+            );
+
+            match result {
+                Ok(_) => Ok(()),
+                Err(rusqlite::Error::SqliteFailure(err, _))
+                    if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+                {
+                    Err(StoreError::Conflict(format!(
+                        "event already exists: {}",
+                        event.id
+                    )))
+                }
+                Err(e) => Err(StoreError::Sqlite(e.to_string())),
+            }
         }
     }
 
     fn list_since(
         &self,
-        _ts: &str,
+        ts: &str,
     ) -> impl std::future::Future<Output = Result<Vec<Event>, StoreError>> + Send {
-        async { todo!("RED: SqliteStore::list_since — SELECT WHERE ts >= ?1 ORDER BY ts") }
+        async move {
+            let conn = self.conn.lock().expect("store mutex poisoned");
+            let mut stmt = conn
+                .prepare("SELECT data FROM events WHERE ts >= ?1 ORDER BY ts, id")
+                .map_err(|e| StoreError::Sqlite(e.to_string()))?;
+            let rows = stmt
+                .query_map(rusqlite::params![ts], |row| {
+                    let data_json: String = row.get(0)?;
+                    serde_json::from_str(&data_json)
+                        .map_err(|_e: serde_json::Error| rusqlite::Error::QueryReturnedNoRows)
+                })
+                .map_err(|e| StoreError::Sqlite(e.to_string()))?;
+
+            let mut events = Vec::new();
+            for row_result in rows {
+                events.push(row_result.map_err(|e| StoreError::Sqlite(e.to_string()))?);
+            }
+            Ok(events)
+        }
     }
 
     fn list_by_task(
         &self,
-        _task_id: &str,
+        task_id: &str,
     ) -> impl std::future::Future<Output = Result<Vec<Event>, StoreError>> + Send {
-        async { todo!("RED: SqliteStore::list_by_task — SELECT по idx_events_task") }
+        async move {
+            let conn = self.conn.lock().expect("store mutex poisoned");
+            let mut stmt = conn
+                .prepare("SELECT data FROM events WHERE task_id = ?1 ORDER BY ts, id")
+                .map_err(|e| StoreError::Sqlite(e.to_string()))?;
+            let rows = stmt
+                .query_map(rusqlite::params![task_id], |row| {
+                    let data_json: String = row.get(0)?;
+                    serde_json::from_str(&data_json)
+                        .map_err(|_e: serde_json::Error| rusqlite::Error::QueryReturnedNoRows)
+                })
+                .map_err(|e| StoreError::Sqlite(e.to_string()))?;
+
+            let mut events = Vec::new();
+            for row_result in rows {
+                events.push(row_result.map_err(|e| StoreError::Sqlite(e.to_string()))?);
+            }
+            Ok(events)
+        }
     }
 }
 
