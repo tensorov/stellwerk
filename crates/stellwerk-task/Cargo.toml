@@ -1,0 +1,22 @@
+[package]
+name = "stellwerk-task"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+stellwerk-core  = { path = "../stellwerk-core" }
+stellwerk-store = { path = "../stellwerk-store" }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+toml            = { workspace = true }
+thiserror       = { workspace = true }
+clap            = { workspace = true }
+tokio           = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

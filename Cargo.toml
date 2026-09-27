@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members  = ["crates/stellwerk-core", "crates/stellwerk-registry", "crates/stellwerk-store"]
+members  = ["crates/stellwerk-core", "crates/stellwerk-registry", "crates/stellwerk-store", "crates/stellwerk-task"]
 
 [workspace.package]
 edition = "2021"
