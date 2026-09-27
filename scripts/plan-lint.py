@@ -481,6 +481,16 @@ def self_test():
     expect(is_red({'goal': 'Создать крейт и падающий тест',
                    'acceptance': 'RED: собирается, падает'}),
            'RED-пакет без слова RED в goal распознаётся по началу приёмки')
+    # 8) пустой каталог — не «всё чисто», а «проверять было нечего»
+    import sys as _sys
+    _saved = _sys.argv
+    try:
+        _sys.argv = ['plan-lint.py', '/nonexistent/milestone']
+        expect(main() == 2, 'пустой/несуществующий каталог даёт exit 2, а не 0')
+        # Проверять main('--self-test') отсюда нельзя: main зовёт self_test, а
+        # self_test звал бы main — рекурсия до переполнения.
+    finally:
+        _sys.argv = _saved
     # 9) C5: отозванное решение, прописанное как живое указание, — ловим
     revoked_bad = ([('packet-v', {'goal': 'GREEN: x', 'files_allowed': 'a.rs',
                                   'acceptance': 'exit 0'})],
@@ -587,10 +597,16 @@ def main():
                    if os.path.isdir(os.path.join(base, d))]
 
     total = 0
+    # Каталог без пакетов — это не «всё чисто», а «проверять было нечего».
+    # Раньше такой случай печатался и давал exit 0, то есть гейт, наведённый на
+    # неверный путь, отчитывался об успехе, не проверив ни одного пакета.
+    # Тот же класс, что вакуумный PASS теста.
+    empty_targets = 0
     for d in targets:
         packets = load_plan(d)
         if not packets:
             print('%s: пакетов нет' % d)
+            empty_targets += 1
             continue
         bad = check(os.path.basename(d.rstrip('/')), packets, load_raw(d), a.max_files)
         name = os.path.basename(d.rstrip('/'))
@@ -625,6 +641,9 @@ def main():
             print('  [%s] %s: %s' % (code, where, msg))
     else:
         print('ТАБЛИЦА risk_class: совпадает с contract.rs во всех трёх документах')
+    if empty_targets:
+        print('ПРОВЕРЕНО ПУСТЫХ КАТАЛОГОВ: %d — их содержимое не проверено' % empty_targets)
+        return 2
     return 1 if total else 0
 
 
