@@ -6,7 +6,8 @@ max_diff_lines: 200
 test: cargo test -p stellwerk-core --test data_class_routing
 acceptance: `cargo test -p stellwerk-core --test data_class_routing` → 7 passed; 0 failed.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
-depends_on: [01]
+depends_on: [01, 02, 03]
+parallelism: sequential-only (single file lock — contract.rs)
 data_class: public
 lane: m1/core-data
 

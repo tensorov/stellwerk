@@ -6,7 +6,8 @@ max_diff_lines: 200
 test: cargo test -p stellwerk-core --test workspace_policy
 acceptance: `cargo test -p stellwerk-core --test workspace_policy` → 8 passed; 0 failed.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
-depends_on: [01]
+depends_on: [01, 02]
+parallelism: sequential-only (single file lock — contract.rs)
 data_class: public
 lane: m1/core-net
 

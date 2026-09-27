@@ -13,16 +13,61 @@
 - `stellwerk-core`: 47 тестов — 20 passed, **27 failed** (`not yet implemented: RED: …`);
 - `stellwerk-store`: 21 тест — 1 passed, **20 failed** (`not implemented: SqliteStore::…`).
 
+## Contract file strategy
+
+**Решено: ВАРИАНТ A — последовательное выполнение, один lane, файл не делится.**
+Принято в сессии #2, Фаза 4.
+
+### Обоснование (арифметика, а не вкус)
+
+| | Вариант A (секвенциально) | Вариант B (разбить на 6 модулей) |
+|---|---|---|
+| потеря/выигрыш параллелизма | — | **+10 мин** (5 packets × ~2 мин) |
+| работа на подготовку | 0 | **20–30 мин** (создать `contract/{event,task,workspace,model,evidence,rbac}.rs`, переписать импорты в `tests/*.rs`, переписать тексты 5 packets) |
+| риск | 0 — файлы не трогаем | сломать **20 GREEN** в core и **1 GREEN** в store, перепроверить 36 packets |
+| обратимость | полная | низкая (изменение формы модуля ломает чужие импорты) |
+
+Выигрыш B (~10 мин) меньше его стоимости и риска → **A**. Правило применяется ко
+всем 5 пакетам: при 5 пакетах разбиение почти никогда не окупается.
+
+### Что это значит для раздачи
+
+Пакеты **02 → 03 → 04 → 05 → 06 выполняются строго по очереди**, одним lane
+`m1/contract-core`, в одном воркере за раз. Параллельная раздача запрещена.
+
+`depends_on` выстроен в цепочку (вместо прежнего общего `[01]`), поэтому
+диспетчер, читающий только `depends_on`, не сможет случайно запустить их вместе:
+
+| packet | depends_on | почему ждёт предыдущий |
+|---|---|---|
+| packet-02 | 01 | базалин |
+| packet-03 | 01, 02 | предыдущий держал тот же файл |
+| packet-04 | 01, 02, 03 | предыдущий держал тот же файл |
+| packet-05 | 01, 02, 03, 04 | предыдущий держал тот же файл |
+| packet-06 | 01, 02, 03, 04, 05 | предыдущий держал тот же файл |
+
+Каждый из пяти пакетов помечен строкой
+`parallelism: sequential-only (single file lock — contract.rs)`.
+
+### Почему конфликт был терпим и раньше, но стал опасен
+
+До решения Фазы 3 пять пакетов правли один файл, но тексты не противоречили друг
+другу на уровне правил. После Фазы 3 в `packet-05` и `packet-06` появился
+**буквально идентичный раздел** — и теперь любая правка одного из них обязана быть
+продублирована в другой. При параллельной раздаче это гарантированный конфликт
+содержания, а не только текста. Секвенирование здесь — не про удобство, а про
+невозможность разойтись в правилах.
+
 ## Карта packet → lane → depends_on
 
 | packet | lane | depends_on | test | состояние |
 | --- | --- | --- | --- | --- |
 | packet-01 | m1/core-red | — | `cargo test -p stellwerk-core` | RED-базалир |
-| packet-02 | m1/core-task | 01 | `--test task_lifecycle` | GREEN: TaskStatus |
-| packet-03 | m1/core-net | 01 | `--test workspace_policy` | GREEN: NetworkPolicy |
-| packet-04 | m1/core-data | 01 | `--test data_class_routing` | GREEN: DataClass |
-| packet-05 | m1/core-rbac | 01 | `--test rbac_level` | GREEN: PolicyLevel |
-| packet-06 | m1/core-risk | 01 | `--test risk_level_policy` | RED+GREEN: required_level |
+| packet-02 | m1/contract-core | 01 | `--test task_lifecycle` | GREEN: TaskStatus |
+| packet-03 | m1/contract-core | 01, 02 | `--test workspace_policy` | GREEN: NetworkPolicy |
+| packet-04 | m1/contract-core | 01, 02, 03 | `--test data_class_routing` | GREEN: DataClass |
+| packet-05 | m1/contract-core | 01, 02, 03, 04 | `--test rbac_level` | GREEN: PolicyLevel |
+| packet-06 | m1/contract-core | 01, 02, 03, 04, 05 | `--test risk_level_policy` | RED+GREEN: required_level |
 | packet-07 | m1/store-red | — | `cargo test -p stellwerk-store` | RED-базалир |
 | packet-08 | m1/store-task-crud | 07 | `--test task_crud` | GREEN: create/get |
 | packet-09 | m1/store-task-status | 08 | `--test task_crud` | GREEN: update_status/list |
@@ -49,6 +94,11 @@
 кодирует только Action-таблицу, устаревшей версии в нём нет.
 
 ## Волны и параллелизм
+
+> ⚠️ **Перечитай «Contract file strategy» перед раздачей.** Пакеты 02–06 образуют
+> ОДИН последовательный lane `m1/contract-core` (все правят `contract.rs`) и
+> **не раздаются параллельно**. Прежняя формулировка ниже описывала волны,
+> существовавшие до решения Фазы 4.
 
 ```
 волна 0 (параллельно): 01  ‖  07          — базлайны, кода не пишут

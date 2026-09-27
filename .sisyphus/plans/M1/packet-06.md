@@ -6,7 +6,8 @@ max_diff_lines: 200
 test: cargo test -p stellwerk-core --test risk_level_policy
 acceptance: Новый тест сначала падает на `not yet implemented: RED: policy::required_level` (зафиксировать вывод), затем после реализации проходит. Итог по крейту: 21 passed, 27 failed.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
-depends_on: [01]
+depends_on: [01, 02, 03, 04, 05]
+parallelism: sequential-only (single file lock — contract.rs)
 data_class: public
 lane: m1/core-risk
 

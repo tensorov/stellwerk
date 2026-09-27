@@ -7,6 +7,7 @@ test: cargo test -p stellwerk-core --test task_lifecycle
 acceptance: `cargo test -p stellwerk-core --test task_lifecycle` → 11 passed; 0 failed. Результат остальных core-тестов не меняется.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
 depends_on: [01]
+parallelism: sequential-only (single file lock — contract.rs)
 data_class: public
 lane: m1/core-task
 
