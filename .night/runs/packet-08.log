@@ -1,0 +1,11 @@
+sandbox: /tmp/stellwerk-sandbox/m1/store-task-crud-packet-08-20260927-070005 (base=main, .git отсутствует)
+pi exit=0 timeout=false
+VALIDITY GATE: VALID (pi_exit=0 stop=stop turns=79 steps=38 input_cum=650318)
+files_changed=0
+0 insertions=100 deletions=5
+files_changed=0
+0 insertions=100 deletions=5
+STDOUT: OK — packet выполнен в песочнице, репозиторий не тронут.
+ЭКСПОРТ (явный, после приёмки):
+  stellwerk-dispatch --export '/tmp/stellwerk-sandbox/m1/store-task-crud-packet-08-20260927-070005' <branch>
+== packet-08 → /tmp/stellwerk-sandbox/m1/store-task-crud-packet-08-20260927-070005.run (sandbox /tmp/stellwerk-sandbox/m1/store-task-crud-packet-08-20260927-070005)

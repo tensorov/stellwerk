@@ -1,0 +1,11 @@
+### packet-10 (lane m1/store-task-ws)
+  gate: VALIDITY GATE: VALID (pi_exit=0 stop=stop turns=103 steps=50 input_cum=1020352)
+  (b) тест пакета: cargo test -p stellwerk-store --test task_crud list_by_workspace
+      test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.01s
+  (c) целостность: тесты не тронуты
+  (d) лимиты: файлов=2/3, строк=161/200
+    файлов в патче: 2
+    слито: fd0c580 merge: packet-10 (m1/m1-store-task-ws-packet-10)
+  ИТОГ: stellwerk-core: 55/55 (0 RED, expected — architecture spec)
+  gate: PASS
+  packet-10: OK

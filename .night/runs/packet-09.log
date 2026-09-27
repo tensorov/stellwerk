@@ -1,0 +1,17 @@
+sandbox: /tmp/stellwerk-sandbox/m1/store-task-status-packet-09-20260927-070005 (base=main, .git отсутствует)
+pi exit=0 timeout=false
+VALIDITY GATE: VALID (pi_exit=0 stop=stop turns=85 steps=43 input_cum=791705)
+files_changed=0
+0 insertions=123 deletions=12
+files_changed=0
+0 insertions=123 deletions=12
+BLOCKED: воркер писал вне песочницы (HEAD/статус репо изменились):
+--- /tmp/stellwerk-sandbox/m1/store-task-status-packet-09-20260927-070005.run/repo.before	2026-09-27 07:00:05.640715403 +0200
++++ /tmp/stellwerk-sandbox/m1/store-task-status-packet-09-20260927-070005.run/repo.before.current	2026-09-27 07:05:45.823116475 +0200
+@@ -1,4 +1,4 @@
+-HEAD 92dd649e1011b2f052c08b6a2fc49dc55b1cdbb8
++HEAD fd0c580bbf9da9b985ea850416c8af4928b53332
+ --- status ---
+ ?? .night/cycle.sh
+ ?? .night/run-packet.sh
+STDOUT: BLOCKED — воркер писал вне песочницы, packet возвращается, экспорт запрещён

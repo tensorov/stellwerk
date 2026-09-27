@@ -1,0 +1,11 @@
+sandbox: /tmp/stellwerk-sandbox/m1/contract-core-packet-05-20260927-065658 (base=main, .git отсутствует)
+pi exit=0 timeout=false
+VALIDITY GATE: VALID (pi_exit=0 stop=stop turns=12 steps=5 input_cum=56596)
+files_changed=0
+0 insertions=9 deletions=2
+files_changed=0
+0 insertions=9 deletions=2
+STDOUT: OK — packet выполнен в песочнице, репозиторий не тронут.
+ЭКСПОРТ (явный, после приёмки):
+  stellwerk-dispatch --export '/tmp/stellwerk-sandbox/m1/contract-core-packet-05-20260927-065658' <branch>
+== packet-05 → /tmp/stellwerk-sandbox/m1/contract-core-packet-05-20260927-065658.run (sandbox /tmp/stellwerk-sandbox/m1/contract-core-packet-05-20260927-065658)
