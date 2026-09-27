@@ -16,16 +16,26 @@ tokio           = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
-[lints]
-workspace = true
-
 # ADR: docs/adr/0001-manual-async-fn.md
+#
+# ОТКЛОНЕНИЕ от буквы задания. Cargo не допускает сочетания `lints.workspace = true`
+# с локальными override в том же `[lints]` («cannot override workspace.lints in
+# lints»). Наследовать workspace-lints и одновременно объявить исключение в этом
+# крейте невозможно. Раз инвалидировать весь workspace нельзя, крейт объявляет
+# политику явно: те же значения, что в [workspace.lints], плюс обоснованное
+# исключение. Следствие — крейт не унаследует будущие изменения workspace-lints;
+# это цена локальности, принятая осознанно (см. ADR, раздел «Границы»).
 # Линт предлагает заменить `fn .. -> impl Future<Output=..> + Send` на `async fn`.
 # Замена НЕ эквивалентна: `async fn` в публичном трейте не позволяет задать
 # auto-trait bounds (rustc: "use of `async fn` in public traits is discouraged as
 # auto trait bounds cannot be specified"), а при -D warnings это ошибка. Send здесь
 # не стилистика, а требование: tests/concurrent.rs использует `tokio::spawn`,
 # требующий Future: Send, для проверки конкурентной записи 10 писателей.
+# Политика повторяет [workspace.lints] корневого Cargo.toml.
+[lints.rust]
+unsafe_code = "forbid"
+
 # Исключение локально для этого крейта: async-трейты есть только здесь.
 [lints.clippy]
-"clippy::manual_async_fn" = "allow"
+all = "deny"
+manual_async_fn = "allow"

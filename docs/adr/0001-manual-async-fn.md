@@ -50,9 +50,29 @@ clippy; `async fn` — 2 ошибки rustc.
 
 ## Решение
 
-Исключение `clippy::manual_async_fn` объявлено в
-`crates/stellwerk-store/Cargo.toml` в секции `[lints.clippy]` — **локально для
-одного крейта**, с обоснованием в комментарии и ссылкой на этот ADR.
+Исключение `manual_async_fn` объявлено в `crates/stellwerk-store/Cargo.toml` в
+секции `[lints.clippy]` — **локально для одного крейта**, с обоснованием в
+комментарии и ссылкой на этот ADR.
+
+### Отклонение от буквы задания: наследование workspace-lints несовместимо
+
+Задание предписывало «перенести исключение в `crates/stellwerk-store/Cargo.toml`
+`[lints.clippy]`», оставив остальное как есть. Cargo этого не позволяет:
+сочетание `lints.workspace = true` с любым локальным override в том же `[lints]`
+даёт ошибку
+
+> cannot override `workspace.lints` in `lints`, either remove the overrides or
+> `lints.workspace = true` and manually specify the lints
+
+Вариантов было два: инвалидировать исключение для всего workspace (что означало бы
+раздать его всем крейтам, включая те, где async-трейтов нет) или объявить политику
+крейта явно. Выбран второй: `stellwerk-store` перечисляет свои lints сам
+(`unsafe_code = "forbid"`, `all = "deny"`, плюс исключение), зеркаля workspace.
+
+Цена решения зафиксирована: крейт **не унаследует** будущие изменения
+`[workspace.lints]`. При изменении workspace-политики `stellwerk-store` нужно
+обновить руками. Это цена локальности, принятая осознанно: исключение не должно
+достаться крейтам, которым async-трейты не нужны.
 
 Почему локально, а не в `[workspace.lints]`: workspace-lints применяются ко всем
 крейтам сразу и не могут нести обоснование, относящееся к одному крейту.
