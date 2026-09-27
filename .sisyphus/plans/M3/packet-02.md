@@ -4,7 +4,7 @@ goal: Реализовать отображение RiskClass → Permission п�
 files_allowed: [crates/stellwerk-gateway/src/permission.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-gateway --test permission
-acceptance: `cargo test -p stellwerk-gateway --test permission` → 7 passed; 0 failed (6 классов + 1 на полноту таблицы).
+acceptance: `cargo test -p stellwerk-gateway --test permission` → 9 passed; 0 failed (6 классов риска + полнота таблицы + 2 на Unclassified).
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
 depends_on: [01]
 data_class: public
@@ -35,6 +35,37 @@ lane: m3/permission
    по ней: тогда тест «полнота таблицы» проверяет, что в ней ровно все классы
    (сравни длину с числом вариантов через исчерпывающий счётчик в тесте).
 4. Убери `NotImplemented` из ошибок, если вариант стал неиспользуемым.
+
+### В1 — R4: `Deny` → `Ask`, и только при `L5Owner`
+
+Таблица берёт **уровень из контракта** (`RiskClass::required_level`, см. ADR-0002),
+ gateway своих копий уровней не заводит. R4 — это `L5Owner` + `Ask`:
+
+- при `L4Admin` и ниже R4 даёт `Deny`;
+- при `L5Owner` — `Ask`, разрешение на **одно действие**;
+- `ApproveForTask` для R4 — **явное отдельное действие человека**, не дефолт:
+  одобрение одного `gh pr create` не открывает все внешние вызовы до конца задачи.
+- Таймаут ожидания R4 — **4 часа** (внешние действия теряют актуальность; общий
+  дефолт 24ч применяется к R2/R3).
+- R5 остаётся `Deny` безусловно для любого уровня, включая `L5Owner`. Владелец
+  делает `push --force` руками, не через агента.
+
+### В2 — неклассифицированный инструмент: отдельное состояние, не `R0`
+
+`risk.unwrap_or(R0)` запрещён: отсутствие данных превращается в разрешение —
+ровно тот класс ошибки, ради которого существует M3.
+
+```rust
+enum ToolRisk { Classified(RiskClass), Unclassified }
+```
+
+- `Unclassified` в неинтерактивном прогоне → **всегда `Deny`**, без suspend.
+  Приостанавливать задачу ради неизвестного инструмента бессмысленно: правильный
+  ответ — классифицировать его в `modules.toml` и перезапустить.
+- `Ask` при `Unclassified` допустим **только** в интерактивной сессии `L5Owner`,
+  где человек видит имя инструмента и аргументы.
+- RED-тест, обязательный: **новый MCP-тул без `risk` в манифесте → `Deny`, а не `Allow`.**
+  Второй: `Unclassified` при `L5Owner` интерактивно → `Ask`.
 
 ## Evidence
 

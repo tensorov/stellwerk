@@ -39,17 +39,40 @@ lane: m3/session-red
    1. инструмент есть в смонтированных? иначе `Verdict::Deny { reason: not_mounted }`
       и вызов НЕ доходит до backend;
    2. `decide(req)`; при `Deny` — чек пишется, `shaped` пуст, backend не вызывается;
-   3. при `Allow`/`Ask` — вызов backend; при `Ask` подтверждение моделируется полем
-      `ask_resolved: bool` в `CallRequest` (без подтверждения `Ask` трактуется как Deny);
+   3. при `Allow` — вызов backend. При `Ask` — НЕ Deny: в неинтерактивном Run
+      это `TaskStatus::Suspended` + `ApprovalRequest { run_id, tool, risk, args_hash,
+      requested_at, expires_at }` + запись в `.stellwerk/inbox/<run_id>.json`,
+      backend НЕ вызывается.
    4. shaping результата;
    5. чек в поток.
 4. Тесты в `tests/session.rs` с поддельным backend:
    - неизвестный инструмент → Deny, backend НЕ вызван;
    - Deny по риску → backend не вызван, чек есть;
-   - Ask без подтверждения → backend не вызван;
-   - Ask с подтверждением → вызван, shaped присутствует;
+   - Ask в неинтерактивном Run → backend не вызван, статус `Suspended`, в inbox
+     лежит `ApprovalRequest` с `args_hash`; это НЕ `Deny`;
+   - истёкший `Ask` → `Failed(reason = approval_timeout)`, и это НЕ `Deny` —
+     тест обязан различать `Denied` и `approval_timeout`;
+   - R5 → `Deny` немедленно, `Suspended` не возникает, inbox пуст;
+   - `risk >= R2` → субагенты запрещены: `subagent_depth == 0` (см. В3 ниже);
    - успешный вызов → ровно один чек, `calls` увеличился;
    - ошибка backend → `SessionError::Tool`, чек всё равно записан (неудача видна).
+
+### В3 — субагенты запрещены при `risk >= R2`, на уровне permission
+
+`decide` вызывается **до** запуска процесса, поэтому вызовы, порождённые внутри
+процесса (субагент), повторно через gateway не проходят. Это дыра, и её не
+закрывает ни один пакет M3.
+
+- Запрет обязателен на **уровне permission**, а не текстом в промпте: модель
+  текстовые запреты игнорирует (наблюдение F1: ловил только post-flight детектор).
+  Значит `subagent_depth = 0` (или эквивалент) для любого Run с `risk >= R2`,
+  **проверяемый гейтом**, а не инструкцией.
+- В `DEFERRED` записывается не «изоляция», а точная формулировка дыры:
+  *«decide вызывается до запуска процесса; вызовы, порождённые внутри процесса,
+  повторно через gateway не проходят»*. Через полгода это будет единственное,
+  что позволит понять, что именно чинить.
+- Полноценная изоляция (podman/bubblewrap, namespace) остаётся в `DEFERRED`
+  вместе с namespace-песочницей.
 
 ## Evidence
 

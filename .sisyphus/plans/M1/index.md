@@ -74,6 +74,7 @@
 | packet-10 | m1/store-task-ws | 09 | `--test task_crud list_by_workspace` | GREEN: list_by_workspace |
 | packet-11 | m1/store-events | 10 | `--test event_append` + `concurrent` | GREEN: события |
 | packet-12 | m1/store-modules | 11 | `--test module_store` | GREEN: модули |
+| packet-13 | m1/core-risk | 06 | `--test risk_level_policy` | GREEN: R3 требует L5Owner (contract-change, ADR-0002) |
 
 ## permits / required_level: единая таблица
 

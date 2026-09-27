@@ -1,0 +1,9 @@
+sandbox: /tmp/stellwerk-sandbox/m2/cli-red-packet-03-20260927-090729 (base=main, .git отсутствует)
+pi exit=0 timeout=false
+VALIDITY GATE: INVALID -> packet возвращается (pi_exit=0 stop=stop turns=77 steps=40 input_cum=655622)
+  причины: budget:input_cum=655622>400000
+files_changed=0
+0 insertions=148 deletions=1
+files_changed=0
+0 insertions=148 deletions=1
+STDOUT: FAILED — packet возвращается, НЕ мержится. Экспорт только после починки.
