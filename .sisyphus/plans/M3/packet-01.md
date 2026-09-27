@@ -10,6 +10,9 @@ forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[al
 depends_on: [—]
 data_class: public
 lane: m3/skeleton
+Contract-Change: root Cargo.toml [workspace].members += "crates/stellwerk-gateway"
+Reason: создаётся новый член workspace; AGENTS.md запрещает трогать корневой Cargo.toml без packet'а с меткой contract-change
+Note: ADR не требуется — правило «contract-change + ADR» в AGENTS.md касается ЛИНТ-политики, а не состава workspace
 
 ## Контекст
 
