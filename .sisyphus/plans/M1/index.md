@@ -1,0 +1,64 @@
+# M1-index — карта packets
+
+> Хранение: контент пакетов — в `.sisyphus/plans/M1/`. Воркер `stellwerk-micro` видит
+> ТОЛЬКО свой `packet-NN.md`. Формат — по `docs/PROMETHEUS_PROMPT.md`.
+> Все пакеты `data_class: public` (исходный код, публичные данные).
+
+## Зачем этот milestone
+
+Ночная сессия оставила **готовые типы и падающие тесты**, но не реализацию. M1
+превращает RED в GREEN без изменения тестов: тесты — приказ, а не предложение.
+
+Состояние на входе (проверено ночной сессией, фазы 3–4):
+- `stellwerk-core`: 47 тестов — 20 passed, **27 failed** (`not yet implemented: RED: …`);
+- `stellwerk-store`: 21 тест — 1 passed, **20 failed** (`not implemented: SqliteStore::…`).
+
+## Карта packet → lane → depends_on
+
+| packet | lane | depends_on | test | состояние |
+| --- | --- | --- | --- | --- |
+| packet-01 | m1/core-red | — | `cargo test -p stellwerk-core` | RED-базалир |
+| packet-02 | m1/core-task | 01 | `--test task_lifecycle` | GREEN: TaskStatus |
+| packet-03 | m1/core-net | 01 | `--test workspace_policy` | GREEN: NetworkPolicy |
+| packet-04 | m1/core-data | 01 | `--test data_class_routing` | GREEN: DataClass |
+| packet-05 | m1/core-rbac | 01 | `--test rbac_level` | GREEN: PolicyLevel |
+| packet-06 | m1/core-risk | 01 | `--test risk_level_policy` | RED+GREEN: required_level |
+| packet-07 | m1/store-red | — | `cargo test -p stellwerk-store` | RED-базалир |
+| packet-08 | m1/store-task-crud | 07 | `--test task_crud` | GREEN: create/get |
+| packet-09 | m1/store-task-status | 08 | `--test task_crud` | GREEN: update_status/list |
+| packet-10 | m1/store-task-ws | 09 | `--test task_crud list_by_workspace` | GREEN: list_by_workspace |
+| packet-11 | m1/store-events | 10 | `--test event_append` + `concurrent` | GREEN: события |
+| packet-12 | m1/store-modules | 11 | `--test module_store` | GREEN: модули |
+
+## Волны и параллелизм
+
+```
+волна 0 (параллельно): 01  ‖  07          — базлайны, кода не пишут
+волна 1 (параллельно): 02 03 04 05 06     — ядро: 5 разных предикатов
+волна 2 (параллельно): 08                 — store: create/get
+волна 3 (строго):      09 → 10 → 11 → 12  — store: зависит от предыдущего
+```
+
+**Волна 1 параллельна только формально**: все пять пакетов правят ОДИН файл
+`crates/stellwerk-core/src/contract.rs`. При раздаче воркерам одновременно получите
+конфликт на весь файл. Раздавайте **по очереди** либо объединяйте 02–06 в один пакет
+на одного воркера. Это осознанный компромисс: `contract.rs` — единственный файл,
+который дорого разделять.
+
+Волна 3 строго последовательна: каждый пакет опирается на колонки, заведённые
+предыдущим (packet-08 заводит `workspace_id`, 09 — `status`, 11 — `task_id`).
+
+## Точки конфликта при merge
+
+1. `crates/stellwerk-core/src/contract.rs` — пять параллельных пакетов на одном файле.
+   Разрешается вручную, порядок правок не важен (все в разных телах функций).
+2. `crates/stellwerk-store/src/sqlite.rs` — пять последовательных пакетов, конфликтов нет.
+3. `crates/stellwerk-core/src/lib.rs` и `src/traits.rs` **не трогаются** ни одним пакетом M1.
+
+## Предикат приёмки milestone
+
+```bash
+cargo test -p stellwerk-core && cargo test -p stellwerk-store
+```
+
+Оба креита — 0 failed. `cargo test --workspace` зелёный целиком.
