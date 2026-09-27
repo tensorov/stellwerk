@@ -371,6 +371,30 @@ else
   bad "T10 sandbox_postflight не объявлена" "правка sandbox.sh не добавила post-flight функцию"
 fi
 
+# ── T11: устаревший патч не должен уезжать в ветку ──────────────────────────
+# Canary #3: патч собирался ДО postflight, а postflight переформатировал
+# песочницу. Гейт рапортовал «чисто» про состояние, которого в ветке не было.
+# Проверяем инвариант «экспортируется ровно проверенное состояние».
+head2 "T11 экспорт отправляет проверенное состояние, а не устаревший патч"
+T11REPO="$TMP/repo11"; mkdir -p "$T11REPO"
+git -C "$T11REPO" init -q
+printf 'fn main() {}\n' > "$T11REPO/main.rs"
+git -C "$T11REPO" add -A && git -C "$T11REPO" -c user.email=t@t -c user.name=t commit -qm init
+SB11="$(sandbox_create "$T11REPO" HEAD t11 2>/dev/null)"
+# Состояние A: патч собирается ЗДЕСЬ.
+printf 'fn main() { println!("STATE_A_stale"); }\n' > "$SB11/main.rs"
+sandbox_build_patch "$SB11" "$SB11.run/sandbox.patch" >/dev/null 2>&1
+# Состояние B: рабочий агент переписал файл ПОСЛЕ сборки патча.
+printf 'fn main() { println!("STATE_B_checked"); }\n' > "$SB11/main.rs"
+( sandbox_export "$SB11" t11-branch "$T11REPO" ) > "$TMP/t11.log" 2>&1
+T11RC=$?
+T11GOT=$(git -C "$T11REPO" show t11-branch:main.rs 2>/dev/null | grep -oE "STATE_[AB]_[a-z]+" || echo none)
+if [ "$T11RC" -eq 0 ] && [ "$T11GOT" = "STATE_B_checked" ]; then
+  ok "T11 в ветку уехало проверенное состояние B, а не устаревший патч A"
+else
+  bad "T11 уехал устаревший патч" "в ветке=$T11GOT rc=$T11RC (ожидалось STATE_B_checked)"
+fi
+
 # ── итог ───────────────────────────────────────────────────────────────────
 printf '\n────────────────────────────────────────\n'
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"
