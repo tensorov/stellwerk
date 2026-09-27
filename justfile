@@ -9,26 +9,40 @@ lint:
     cargo clippy --workspace --all-targets -- -D warnings
 
 # ─── GATE: строгие проверки, падают при любой ошибке ────────────────────────
-# Ровно они определяют, можно ли мержить. stellwerk-core и stellwerk-store
-# сюда НЕ входят намеренно: они содержат RED-спецификацию (todo!()), которая
-# записывает будущую работу как падающие тесты. Включение их в gate означало бы,
-# что «зелёный» статус CI означает «спецификация удалена», а не «работа сделана».
-# Пока RED не превращён в GREEN пакетами M1, фиксируем это разделением рецептов.
+# ПРАВИЛО: крейт переезжает в gate в момент закрытия его milestone.
+#
+# Пока milestone активен, красные тесты в его крейте — это ожидаемая
+# RED-спецификация, и гейт обязан её терпеть. Как только milestone закрыт, тот же
+# красный тест становится регрессией, и гейт обязан падать. Список крейтов в
+# gate и в status — не вкусовое, а выводится из этого правила.
+#
+# Закрытые milestone'ы: M0 (stellwerk-registry), M1 (stellwerk-core, stellwerk-store).
 test-registry:
     cargo test -p stellwerk-registry --locked --no-fail-fast
 
-check-gate: fmt lint test-registry
+test-core:
+    cargo test -p stellwerk-core --locked --no-fail-fast
+
+test-store:
+    cargo test -p stellwerk-store --locked --no-fail-fast
+
+check-gate: fmt lint test-registry test-core test-store
 
 # ─── STATUS: информативные проверки, НЕ падают ─────────────────────────────
-# Печатают счётчики GREEN/RED, чтобы «сколько спецификации осталось» было
-# видно в логе без чтения отчёта. --no-fail-fast обязателен: без него cargo
-# останавливается после первого упавшего набора и показывает 1/7 вместо 20/47.
+# Только крейты АКТИВНЫХ milestone'ов: M2 (stellwerk-task), M3 (stellwerk-gateway).
+# Печатают счётчики GREEN/RED, чтобы «сколько спецификации осталось» было видно
+# в логе без чтения отчёта. Перечислять все крейты workspace нельзя: молчащий
+# отчёт о крейте, которого здесь нет, занижает остаток работ (F-06).
+# --no-fail-fast обязателен: без него cargo останавливается после первого
+# Счётчики GREEN/RED по крейтам активных milestone. Не падает.
 test-status:
-    @for c in stellwerk-core stellwerk-store; do \
-        counts=$(cargo test -p "$c" --no-fail-fast 2>&1 | grep -E "^test result:" | awk -F"[ ;.]+" '{p += $4; f += $6} END {print p+0, f+0}' || true); \
-        set -- $counts; \
-        total=$(( $1 + $2 )); \
-        echo "$c: $1/$total ($2 RED, expected — architecture spec)"; \
+    @for c in stellwerk-task stellwerk-gateway; do \
+        out=$(cargo test -p "$c" --no-fail-fast 2>&1 || true); \
+        failed=$(printf '%s' "$out" | grep -E "^test .* \.\.\. FAILED" | awk '{print $2}' | sort -u | wc -l || true); \
+        passed=$(printf '%s' "$out" | grep -E "^test .* \.\.\. ok" | awk '{print $2}' | sort -u | wc -l || true); \
+        failed=${failed:-0}; passed=${passed:-0}; \
+        total=$(( passed + failed )); \
+        echo "$c: $passed/$total ($failed RED, expected — активный milestone)"; \
     done
 
 check-status: test-status
