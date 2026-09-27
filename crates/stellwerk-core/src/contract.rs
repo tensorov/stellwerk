@@ -57,7 +57,7 @@ impl RiskClass {
             RiskClass::R0 => PolicyLevel::L0Local,
             RiskClass::R1 => PolicyLevel::L2Contributor,
             RiskClass::R2 => PolicyLevel::L3Maintainer,
-            RiskClass::R3 => PolicyLevel::L4Admin,
+            RiskClass::R3 => PolicyLevel::L5Owner,
             RiskClass::R4 => PolicyLevel::L5Owner,
             RiskClass::R5 => PolicyLevel::L5Owner,
         }
