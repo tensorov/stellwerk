@@ -138,8 +138,16 @@ sandbox_build_patch() {
 sandbox_postflight() {
   local sb="$1"
   [ -f "$sb/Cargo.toml" ] || { echo "postflight: нет Cargo.toml, пропуск"; return 0; }
-  if ! ( cd "$sb" && cargo fmt --all ) >/dev/null 2>&1; then
-    echo "postflight: cargo fmt не отработал" >&2; return 4
+  # ВАЖНО: только --check. Раньше здесь стоял `cargo fmt --all`, который
+  # ПЕРЕПИСЫВАЕТ файлы. Патч к этому моменту уже собран из вывода рабочего
+  # агента, поэтому postflight проверял переформатированную копию, а
+  # экспортировал непереформатированный патч: гейт рапортовал «fmt чисто»,
+  # а в ветку уезжал код с 90 строками замечаний fmt. Проверка обязана быть
+  # read-only, иначе она подтверждает не тот артефакт, который уезжает.
+  if ! ( cd "$sb" && cargo fmt --all -- --check ) > "$sb.postflight-fmt.log" 2>&1; then
+    echo "FAILED(fmt): cargo fmt --check не прошёл, экспорт запрещён" >&2
+    head -15 "$sb.postflight-fmt.log" >&2
+    return 5
   fi
   if ! ( cd "$sb" && cargo clippy --workspace --all-targets -- -D warnings ) > "$sb.postflight-clippy.log" 2>&1; then
     echo "FAILED(clippy): clippy -D warnings не прошёл, экспорт запрещён" >&2

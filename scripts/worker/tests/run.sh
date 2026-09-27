@@ -185,25 +185,34 @@ else
   bad "калибровка нарушена" "MAX_TOOL_STEPS=${MAXS:-пусто} (нужно >=40), MAX_INPUT_CUM=${MAXI:-пусто} (нужно <=400000)"
 fi
 
-# ── T6: post-flight форматирования ─────────────────────────────────────────
-head2 "T6 fmt: неотформатированный .rs приводится к rustfmt ДО экспорта"
+# ── T6: post-flight форматирования (read-only) ──────────────────────────────
+# Контракт ИЗМЕНЁН намеренно. Раньше postflight выполнял `cargo fmt --all`,
+# т.е. ПЕРЕПИСЫВАЛ код и рапортовал «чисто». Но патч к этому моменту уже
+# собран из вывода рабочего агента, так что проверялась переформатированная
+# копия, а в ветку уезжал непереформатированный патч (90 строк замечаний
+# в canary/m2-packet-03 при вердикте «fmt чисто»). Теперь только --check.
+head2 "T6 fmt: неотформатированный код ОТВЕРГАЕТСЯ и не переписывается"
 if declare -f sandbox_postflight >/dev/null 2>&1; then
-  T6REPO="$TMP/repo6"; mkdir -p "$T6REPO"
+  T6REPO="$TMP/repo6"; mkdir -p "$T6REPO/src"
   git -C "$T6REPO" init -q
   printf '[package]\nname = "x"\nversion = "0.0.1"\nedition = "2021"\n' > "$T6REPO/Cargo.toml"
-  mkdir -p "$T6REPO/src"
+  # Намеренно неотформатированный src/main.rs: fmt обязан его отвергнуть.
   printf 'fn  main( ) {let x=1;   println!("{}",x);}\n' > "$T6REPO/src/main.rs"
   git -C "$T6REPO" add -A && git -C "$T6REPO" -c user.email=t@t -c user.name=t commit -qm init
   SB6="$(sandbox_create "$T6REPO" HEAD t6 2>/dev/null)"
-  T6PRE=$( cd "$SB6" && cargo fmt --all --check >/dev/null 2>&1; echo $? )
+  T6BEFORE="$(md5sum "$SB6/src/main.rs" | cut -d' ' -f1)"
   ( sandbox_postflight "$SB6" ) > "$TMP/t6.log" 2>&1
   T6RC=$?
-  ( cd "$SB6" && cargo fmt --all --check ) >/dev/null 2>&1
-  T6POST=$?
-  if [ "$T6PRE" -ne 0 ] && [ "$T6POST" -eq 0 ] && [ "$T6RC" -eq 0 ]; then
-    ok "T6 postflight отформатировал файл (было неотформатировано)"
+  T6AFTER="$(md5sum "$SB6/src/main.rs" | cut -d' ' -f1)"
+  if [ "$T6RC" -ne 0 ] && grep -qi 'fmt' "$TMP/t6.log"; then
+    ok "T6a неформатированный код отвергнут (rc=$T6RC)"
   else
-    bad "T6 postflight НЕ отформатировал" "fmt до=$T6PRE после=$T6POST postflight_rc=$T6RC"
+    bad "T6a неформатированный код ПРОПУЩЕН" "rc=$T6RC лог: $(tail -2 "$TMP/t6.log" | tr '\n' ' ')"
+  fi
+  if [ "$T6BEFORE" = "$T6AFTER" ]; then
+    ok "T6b байты песочницы не тронуты (--check, а не --all: гейт проверяет, а не чинит)"
+  else
+    bad "T6b postflight ПЕРЕПИСАЛ код" "fmt --all вместо --check: гейт подтверждал не тот артефакт, что уезжает в ветку"
   fi
 else
   bad "T6 sandbox_postflight не объявлена" "правка sandbox.sh не добавила post-flight функцию"
@@ -224,6 +233,10 @@ fn split(s: &str) -> bool {
 }
 fn main() { let _ = split("a://b"); }
 RS
+  # Фикстуру форматируем ЗАРАНЕЕ. Иначе новый read-only fmt-гейт отвергает её
+  # на fmt-стадии, не дойдя до clippy, и тест проверяет не то, что заявляет.
+  # Тест изолирует ровно clippy-стадию.
+  ( cd "$T7REPO" && cargo fmt --all >/dev/null 2>&1 )
   git -C "$T7REPO" add -A && git -C "$T7REPO" -c user.email=t@t -c user.name=t commit -qm init
   SB7="$(sandbox_create "$T7REPO" HEAD t7 2>/dev/null)"
   ( sandbox_postflight "$SB7" ) > "$TMP/t7.log" 2>&1
@@ -329,6 +342,33 @@ if [ "$T9ERC" -ne 0 ] && grep -qi 'не чистое' "$TMP/t9e.log"; then
   ok "T9e export при грязном дереве отвергнут"
 else
   bad "T9e export прошёл при грязном дереве" "rc=$T9ERC"
+fi
+
+# ── T10: fmt-гейт не превращён в «всегда отказ» ─────────────────────────────
+head2 "T10 fmt: корректно отформатированный код проходит (проверка не сломана)"
+if declare -f sandbox_postflight >/dev/null 2>&1; then
+  T10REPO="$TMP/repo10"; mkdir -p "$T10REPO/src"
+  git -C "$T10REPO" init -q
+  printf '[package]\nname = "z"\nversion = "0.0.1"\nedition = "2021"\n' > "$T10REPO/Cargo.toml"
+  printf 'fn main() {\n    let x = 1;\n    println!("{}", x);\n}\n' > "$T10REPO/src/main.rs"
+  git -C "$T10REPO" add -A && git -C "$T10REPO" -c user.email=t@t -c user.name=t commit -qm init
+  SB10="$(sandbox_create "$T10REPO" HEAD t10 2>/dev/null)"
+  ( sandbox_postflight "$SB10" ) > "$TMP/t10.log" 2>&1
+  T10RC=$?
+  if [ "$T10RC" -eq 0 ]; then
+    ok "T10a корректный код принят postflight (rc=0)"
+  else
+    bad "T10a корректный код отвергнут" "rc=$T10RC лог: $(tail -2 "$TMP/t10.log" | tr '\n' ' ')"
+  fi
+  # Контроль против «залипающего» отказа: после принятия fmt-гейт обязан
+  # дойти до clippy, иначе проверка неполна.
+  if [ "$T10RC" -eq 0 ] && [ -f "$SB10.postflight-clippy.log" ]; then
+    ok "T10b fmt-стадия прошла и postflight дошёл до clippy (проверка полна)"
+  else
+    bad "T10b postflight остановился на fmt" "clippy-стадия не была достигнута — проверка неполна"
+  fi
+else
+  bad "T10 sandbox_postflight не объявлена" "правка sandbox.sh не добавила post-flight функцию"
 fi
 
 # ── итог ───────────────────────────────────────────────────────────────────
