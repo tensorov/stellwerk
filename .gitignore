@@ -18,6 +18,13 @@
 /.sisyphus/plans/**/*.result.*
 /.ablation*/
 !/.ablation-solpi/
+!/.ablation-omp/
+# внутри .ablation-omp трекаются только артефакты протокола (PROBE/REPORT/harness);
+# установка на 154M, прогоны и песочницы — вне репозитория
+/.ablation-omp/omp-install/
+/.ablation-omp/scratch-*/
+/.ablation-omp/runs/
+/.ablation-omp/*.txt
 # внутри .ablation-solpi трекаются только артефакты протокола (BRIEF/STATE/workloads/
 # scripts/ledger.tsv/REPORT.md); рантайм и копии auth.json — вне репозитория
 /.ablation-solpi/harness.sh
