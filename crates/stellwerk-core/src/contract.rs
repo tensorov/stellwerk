@@ -161,13 +161,53 @@ impl TaskStatus {
     /// имеют исходящих переходов; переход в самого себя запрещён; `EvidenceSubmitted`
     /// достижим только из `Running`/`Suspended`.
     pub fn can_transition_to(self, next: TaskStatus) -> bool {
-        let _ = (self, next);
-        todo!("RED: TaskStatus::can_transition_to — таблица переходов")
+        match (self, next) {
+            // Терминальные состояния: исходящих переходов нет.
+            (TaskStatus::Done, _) | (TaskStatus::Failed, _) => false,
+
+            // Переход в себя запрещён.
+            (s, next) if s == next => false,
+
+            // Прямая цепочка: Draft → Planned → Reviewed → Delegated → Running
+            (TaskStatus::Draft, TaskStatus::Planned) => true,
+            (TaskStatus::Planned, TaskStatus::Reviewed) => true,
+            (TaskStatus::Reviewed, TaskStatus::Delegated) => true,
+            (TaskStatus::Delegated, TaskStatus::Running) => true,
+
+            // Running ↔ Suspended
+            (TaskStatus::Running, TaskStatus::Suspended) => true,
+            (TaskStatus::Suspended, TaskStatus::Running) => true,
+
+            // Delegated → Suspended (приостановка до старта прогона)
+            (TaskStatus::Delegated, TaskStatus::Suspended) => true,
+
+            // EvidenceSubmitted достижим только из Running/Suspended
+            (TaskStatus::Running, TaskStatus::EvidenceSubmitted) => true,
+            (TaskStatus::Suspended, TaskStatus::EvidenceSubmitted) => true,
+
+            // EvidenceSubmitted → Verified → Validated
+            (TaskStatus::EvidenceSubmitted, TaskStatus::Verified) => true,
+            (TaskStatus::Verified, TaskStatus::Validated) => true,
+
+            // Validated → Done
+            (TaskStatus::Validated, TaskStatus::Done) => true,
+
+            // Running/Suspended/Delegated → Failed/Blocked
+            (TaskStatus::Running, TaskStatus::Failed) | (TaskStatus::Running, TaskStatus::Blocked) => true,
+            (TaskStatus::Suspended, TaskStatus::Failed) | (TaskStatus::Suspended, TaskStatus::Blocked) => true,
+            (TaskStatus::Delegated, TaskStatus::Failed) | (TaskStatus::Delegated, TaskStatus::Blocked) => true,
+
+            // Blocked → Draft / Blocked → Planned
+            (TaskStatus::Blocked, TaskStatus::Draft) | (TaskStatus::Blocked, TaskStatus::Planned) => true,
+
+            // Все остальные переходы запрещены.
+            _ => false,
+        }
     }
 
     /// Терминальный ли статус.
     pub fn is_terminal(self) -> bool {
-        todo!("RED: TaskStatus::is_terminal")
+        matches!(self, TaskStatus::Done | TaskStatus::Failed)
     }
 }
 
