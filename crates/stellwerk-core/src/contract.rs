@@ -193,12 +193,16 @@ impl TaskStatus {
             (TaskStatus::Validated, TaskStatus::Done) => true,
 
             // Running/Suspended/Delegated → Failed/Blocked
-            (TaskStatus::Running, TaskStatus::Failed) | (TaskStatus::Running, TaskStatus::Blocked) => true,
-            (TaskStatus::Suspended, TaskStatus::Failed) | (TaskStatus::Suspended, TaskStatus::Blocked) => true,
-            (TaskStatus::Delegated, TaskStatus::Failed) | (TaskStatus::Delegated, TaskStatus::Blocked) => true,
+            (TaskStatus::Running, TaskStatus::Failed)
+            | (TaskStatus::Running, TaskStatus::Blocked) => true,
+            (TaskStatus::Suspended, TaskStatus::Failed)
+            | (TaskStatus::Suspended, TaskStatus::Blocked) => true,
+            (TaskStatus::Delegated, TaskStatus::Failed)
+            | (TaskStatus::Delegated, TaskStatus::Blocked) => true,
 
             // Blocked → Draft / Blocked → Planned
-            (TaskStatus::Blocked, TaskStatus::Draft) | (TaskStatus::Blocked, TaskStatus::Planned) => true,
+            (TaskStatus::Blocked, TaskStatus::Draft)
+            | (TaskStatus::Blocked, TaskStatus::Planned) => true,
 
             // Все остальные переходы запрещены.
             _ => false,
