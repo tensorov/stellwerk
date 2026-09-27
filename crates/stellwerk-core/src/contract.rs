@@ -275,8 +275,24 @@ impl NetworkPolicy {
     ///
     /// Инвариант: `Deny` запрещает **любой** URL, включая пустую строку.
     pub fn allows(&self, url: &str) -> bool {
-        let _ = url;
-        todo!("RED: NetworkPolicy::allows")
+        match self {
+            NetworkPolicy::Allow => true,
+            NetworkPolicy::Deny => false,
+            NetworkPolicy::AllowList(hosts) => {
+                // Extract host: substring between "://" and first of "/ ? #".
+                // file:// has empty host.
+                let host = url
+                    .splitn(2, "://")
+                    .nth(1)
+                    .map(|rest| {
+                        rest.find(|c| c == '/' || c == '?' || c == '#')
+                            .map(|end| &rest[..end])
+                            .unwrap_or(rest)
+                    })
+                    .unwrap_or("");
+                hosts.iter().any(|h| h == host)
+            }
+        }
     }
 }
 
