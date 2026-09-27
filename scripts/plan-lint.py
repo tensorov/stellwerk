@@ -27,6 +27,15 @@ C4  Поле задано свёрнутым YAML-блоком ('>' или '|').
     не-RED, потому что маркер 'RED:' оказался в отдельной строке. Пакет прошёл
     не потому, что корректен, а потому, что приёмку никто не прочитал.
 
+  C5  Отозванное решение всё ещё прописано в пакете как живое указание.
+      Происхождение: сессия #4, пять находок подряд, и все пять — на ревью, а
+      не при написании. R4 -> Deny при любом уровне (отозвано В1), R3 -> L4Admin
+      (ADR-0002), risk.unwrap_or(R0) и Option<RiskClass> (В2), Ask без
+      подтверждения = Deny (В4). Проверка смотрит СЫРОЙ текст пакета, а не
+      разобранные поля: предписание может лежать в любом абзаце. Строка, где
+      отозванное решение упомянуто как ЗАПРЕЩЁННОЕ, нарушением не считается —
+      запрещать старое правило и есть правильный способ его отозвать.
+
 Запуск:  scripts/plan-lint.sh              (реальные планы)
           scripts/plan-lint.py --self-test  (фикстуры, включая случай store 09/10)
 Код возврата: 0 — нарушений нет; 1 — нарушения найдены; 2 — ошибка запуска.
@@ -93,6 +102,27 @@ def split_list(value):
 # первым шагом дисциплины. Поэтому формулировка исправлена, а не детектор.
 RED_RE = re.compile(r'\bred\b')
 
+# C5 — отозванные решения, всё ещё прописанные в пакете. Каждый шаблон означает
+# «решение, которое владелец уже отменил», и появлялся в тексте пакета как
+# живое указание, а не как запрет.
+REVOKED = (
+    (re.compile(r'R4\s*[→-]>?\s*Deny\s+при\s+любом\s+уровне'), 'R4=Deny при любом уровне (отозвано В1)'),
+    # Ключ и значение разделяет либо стрелка (проза), либо вертикальная черта
+    # (таблица), а сами идентификаторы почти всегда в backticks. Первая версия
+    # шаблона требовала стрелку и не допускала backticks — и поэтому пропустила
+    # обе строки устаревших таблиц, которые требовалось поймать. Glue допускает
+    # пробелы, черты, backticks и стрелки в любом сочетании.
+    (re.compile(r'R3`?[\s`|]*[→\\-]?[\s`|]*`?L4Admin'), 'R3=L4Admin (отозвано ADR-0002)'),
+    (re.compile(r'risk\.unwrap_or\(R0\)'), 'risk.unwrap_or(R0) (отозвано В2)'),
+    (re.compile(r'pub risk: Option<RiskClass>'), 'Option<RiskClass> (отозвано В2)'),
+    (re.compile(r'`?Ask`?\s+без\s+подтверждения\s*=\s*`?Deny'),
+     'Ask без подтверждения = Deny (отозвано В4)'),
+)
+# Строка, где отозванное решение УПОМИНАЕТСЯ как отменённое или запрещённое, не
+# нарушение: запрещать применение старого правила — правильный способ его отозвать.
+EXEMPT = re.compile(r'раньше стояло|было |было$|запрещ|не выражает|прежнее|отмен|отозв|'
+                    r'нельзя|не имеет права|не должен', re.IGNORECASE)
+
 
 def is_red(p):
     blob = (p.get('goal', '') + ' ' + p.get('acceptance', '')).lower()
@@ -122,6 +152,21 @@ def load_plan(plan_dir):
     return out
 
 
+def load_raw(plan_dir):
+    """Сырой текст пакетов с номерами строк: C5 ищет отозванные решения в тексте,
+    а не в разобранных полях, потому что предписание может лежать в любом абзаце."""
+    out = []
+    if not os.path.isdir(plan_dir):
+        return out
+    for name in sorted(os.listdir(plan_dir)):
+        if re.match(r'^packet-[\w-]+\.md$', name):
+            path = os.path.join(plan_dir, name)
+            with open(path, encoding='utf-8') as fh:
+                lines = [(i, l.rstrip('\n')) for i, l in enumerate(fh, 1)]
+            out.append((name[:-3], lines))
+    return out
+
+
 def _reachable(src, dst, deps):
     seen = set()
     stack = [src]
@@ -148,7 +193,7 @@ def related(a, b, deps):
     return _reachable(a, b, deps) or _reachable(b, a, deps)
 
 
-def check(plan_name, packets, max_files=MAX_FILES_DEFAULT):
+def check(plan_name, packets, raw_packets=(), max_files=MAX_FILES_DEFAULT):
     """Вернуть список нарушений: (код, пакет, сообщение)."""
     known = {n for n, _ in packets}
     deps = {name: [norm_dep(d, known) for d in split_list(p.get('depends_on'))]
@@ -183,6 +228,13 @@ def check(plan_name, packets, max_files=MAX_FILES_DEFAULT):
             acc = p.get('acceptance', '').lower()
             if not any(m in acc for m in INVERT_MARKERS):
                 bad.append(('C3', name, 'RED-пакет, но acceptance не инвертирован: нет маркера падения'))
+
+    # C5 — отозванное решение всё ещё прописано как живое указание
+    for name, raw in raw_packets:
+        for lineno, line in raw:
+            for rx, why in REVOKED:
+                if rx.search(line) and not EXEMPT.search(line):
+                    bad.append(('C5', name, 'строка %d: %s' % (lineno, why)))
 
     # C4 — поле задано свёрнутым блоком: значение молча усекается до маркера
     for name, p in packets:
@@ -280,6 +332,38 @@ def self_test():
            'is_red не срабатывает на required_level (подстрока requi-RED)')
     expect(is_red({'goal': 'RED: спецификация', 'acceptance': 'падает'}),
            'is_red по-прежнему ловит настоящий маркер RED')
+    # 8) C5: отозванное решение, прописанное как живое указание, — ловим
+    revoked_bad = ([('packet-v', {'goal': 'GREEN: x', 'files_allowed': 'a.rs',
+                                  'acceptance': 'exit 0'})],
+                   [('packet-v', [(9, '3. Риск: risk.unwrap_or(R0) + delta')])])
+    expect(any(c == 'C5' for c, _, _ in check('T', *revoked_bad)),
+           'C5 ловит отозванное решение как предписание')
+    # 9) C5 ловит ТАБЛИЧНУЮ форму: `| R3 | `L4Admin` | ...`
+    #    Первая версия шаблона требовала стрелку и пропустила обе строки
+    #    устаревших таблиц, которые как раз требовалось поймать.
+    table_bad = ([('packet-tb', {'goal': 'GREEN: x', 'files_allowed': 'a.rs',
+                                 'acceptance': 'exit 0'})],
+                 [('packet-tb', [(4, '| R3 | `L4Admin` | Ask | доступ к секретам |')])])
+    expect(any(c == 'C5' for c, _, _ in check('T', *table_bad)),
+           'C5 ловит табличную форму R3=L4Admin (с вертикальной чертой и backticks)')
+    # 10) C5 ловит форму с backticks вокруг Ask и Deny
+    ask_bad = ([('packet-ak', {'goal': 'GREEN: x', 'files_allowed': 'a.rs',
+                               'acceptance': 'exit 0'})],
+               [('packet-ak', [(31, '3. `Ask` без подтверждения = `Deny` с причиной.')])])
+    expect(any(c == 'C5' for c, _, _ in check('T', *ask_bad)),
+           'C5 ловит форму `Ask` без подтверждения = `Deny` с backticks')
+    # 11) C5: то же самое, но СПЕЦИАЛЬНО ЗАПРЕЩЁННОЕ — нарушением не является
+    revoked_ok = ([('packet-w', {'goal': 'GREEN: x', 'files_allowed': 'a.rs',
+                                 'acceptance': 'exit 0'})],
+                  [('packet-w', [(9, 'risk.unwrap_or(R0) запрещён: это дефект (В2)')])])
+    expect(not any(c == 'C5' for c, _, _ in check('T', *revoked_ok)),
+           'C5 не срабатывает на запрет отозванного решения')
+    # 10) C5 не должен ловить живую таблицу, обновлённую по ADR-0002
+    table_ok = ([('packet-t', {'goal': 'GREEN: x', 'files_allowed': 'a.rs',
+                               'acceptance': 'exit 0'})],
+                [('packet-t', [(4, '| R3 | `L5Owner` | Ask | необратимая утечка |')])])
+    expect(not any(c == 'C5' for c, _, _ in check('T', *table_ok)),
+           'C5 не срабатывает на актуальной таблице R3=L5Owner')
 
     print('  self-test: провалов %d из %d проверок' % (len(fails), len(ran)))
     return 0 if not fails else 1
@@ -312,7 +396,7 @@ def main():
         if not packets:
             print('%s: пакетов нет' % d)
             continue
-        bad = check(os.path.basename(d.rstrip('/')), packets, a.max_files)
+        bad = check(os.path.basename(d.rstrip('/')), packets, load_raw(d), a.max_files)
         name = os.path.basename(d.rstrip('/'))
         if bad:
             total += len(bad)
