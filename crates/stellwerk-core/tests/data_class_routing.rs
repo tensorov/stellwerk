@@ -35,7 +35,11 @@ fn personal_data_never_goes_to_third_party_retention() {
 /// Персональные данные допустимо обрабатывать своей моделью.
 #[test]
 fn personal_data_is_allowed_on_first_party_models() {
-    let own = binding("qwen-local", DataClass::Personal, RetentionClass::FirstParty);
+    let own = binding(
+        "qwen-local",
+        DataClass::Personal,
+        RetentionClass::FirstParty,
+    );
     assert!(DataClass::Personal.permits_model(&own));
 }
 
@@ -44,7 +48,11 @@ fn personal_data_is_allowed_on_first_party_models() {
 fn internal_data_does_not_go_to_third_party_retention() {
     let external = binding("mimo", DataClass::Internal, RetentionClass::ThirdParty);
     assert!(!DataClass::Internal.permits_model(&external));
-    let own = binding("qwen-local", DataClass::Internal, RetentionClass::FirstParty);
+    let own = binding(
+        "qwen-local",
+        DataClass::Internal,
+        RetentionClass::FirstParty,
+    );
     assert!(DataClass::Internal.permits_model(&own));
 }
 

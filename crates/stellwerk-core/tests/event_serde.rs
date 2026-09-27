@@ -46,8 +46,14 @@ fn event_roundtrip_for_every_source() {
 
 #[test]
 fn event_source_serialization_is_snake_case() {
-    assert_eq!(serde_json::to_value(EventSource::OpenCode).unwrap(), json!("open_code"));
-    assert_eq!(serde_json::to_value(EventSource::Manual).unwrap(), json!("manual"));
+    assert_eq!(
+        serde_json::to_value(EventSource::OpenCode).unwrap(),
+        json!("open_code")
+    );
+    assert_eq!(
+        serde_json::to_value(EventSource::Manual).unwrap(),
+        json!("manual")
+    );
 }
 
 #[test]

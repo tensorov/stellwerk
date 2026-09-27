@@ -46,8 +46,16 @@ async fn append_100_then_list_since_50th_returns_50() {
         .await
         .expect("list_since must succeed");
 
-    assert_eq!(tail.len(), 50, "с 50-го по 99-й включительно — ровно 50 событий");
-    assert_eq!(tail.first().unwrap().id, "evt-0050", "граница включительная");
+    assert_eq!(
+        tail.len(),
+        50,
+        "с 50-го по 99-й включительно — ровно 50 событий"
+    );
+    assert_eq!(
+        tail.first().unwrap().id,
+        "evt-0050",
+        "граница включительная"
+    );
     assert_eq!(tail.last().unwrap().id, "evt-0099");
 }
 
@@ -76,7 +84,11 @@ async fn list_by_task_filters_and_keeps_others_out() {
     store.append(foreign).await.expect("append foreign");
 
     let mine = store.list_by_task("t-1").await.expect("list must succeed");
-    assert_eq!(mine.len(), 1, "события чужой задачи не должны попадать в выборку");
+    assert_eq!(
+        mine.len(),
+        1,
+        "события чужой задачи не должны попадать в выборку"
+    );
     assert_eq!(mine[0].id, "evt-0001");
 }
 
@@ -84,9 +96,15 @@ async fn list_by_task_filters_and_keeps_others_out() {
 async fn append_preserves_payload() {
     let store = store();
     let original = event(7);
-    store.append(original.clone()).await.expect("append must succeed");
+    store
+        .append(original.clone())
+        .await
+        .expect("append must succeed");
     let all = store.list_since(&ts(0)).await.expect("list must succeed");
-    assert_eq!(all[0], original, "событие обязано пережить roundtrip без потерь");
+    assert_eq!(
+        all[0], original,
+        "событие обязано пережить roundtrip без потерь"
+    );
 }
 
 /// Маленький helper, чтобы тест выше не расползался индексами payload.
@@ -96,6 +114,7 @@ trait TaskInPayload {
 
 impl TaskInPayload for Event {
     fn task_in_payload(&mut self, task_id: &str) {
-        self.payload.insert("task_id".to_owned(), task_id.to_owned());
+        self.payload
+            .insert("task_id".to_owned(), task_id.to_owned());
     }
 }

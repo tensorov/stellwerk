@@ -37,23 +37,36 @@ fn store() -> SqliteStore {
 #[tokio::test]
 async fn create_then_get_returns_the_same_spec() {
     let store = store();
-    let created = store.create(spec("t-1")).await.expect("create must succeed");
+    let created = store
+        .create(spec("t-1"))
+        .await
+        .expect("create must succeed");
     assert_eq!(created.id, "t-1");
 
     let loaded = store.get("t-1").await.expect("get must succeed");
-    assert_eq!(loaded, Some(spec("t-1")), "спецификация обязана пережить roundtrip");
+    assert_eq!(
+        loaded,
+        Some(spec("t-1")),
+        "спецификация обязана пережить roundtrip"
+    );
 }
 
 #[tokio::test]
 async fn get_unknown_id_is_none_not_error() {
     let store = store();
-    assert_eq!(store.get("нет-такой").await.expect("get must succeed"), None);
+    assert_eq!(
+        store.get("нет-такой").await.expect("get must succeed"),
+        None
+    );
 }
 
 #[tokio::test]
 async fn update_status_changes_state_and_is_visible_in_listing() {
     let store = store();
-    store.create(spec("t-1")).await.expect("create must succeed");
+    store
+        .create(spec("t-1"))
+        .await
+        .expect("create must succeed");
 
     let updated = store
         .update_status("t-1", TaskStatus::Running)
@@ -68,7 +81,11 @@ async fn update_status_changes_state_and_is_visible_in_listing() {
         .list_by_status(TaskStatus::Running)
         .await
         .expect("list must succeed");
-    assert_eq!(running.len(), 1, "задача обязана появиться в выборке по статусу");
+    assert_eq!(
+        running.len(),
+        1,
+        "задача обязана появиться в выборке по статусу"
+    );
     assert_eq!(running[0].id, "t-1");
 
     let drafts = store
@@ -85,7 +102,10 @@ async fn update_status_of_unknown_task_is_not_found() {
         .update_status("нет-такой", TaskStatus::Running)
         .await
         .expect_err("обновление несуществующей задачи обязано быть ошибкой");
-    assert!(matches!(err, stellwerk_store::StoreError::NotFound(_)), "получено: {err:?}");
+    assert!(
+        matches!(err, stellwerk_store::StoreError::NotFound(_)),
+        "получено: {err:?}"
+    );
 }
 
 #[tokio::test]

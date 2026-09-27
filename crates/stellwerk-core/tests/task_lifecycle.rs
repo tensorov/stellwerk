@@ -64,9 +64,19 @@ fn blocked_can_reopen_as_draft() {
 
 #[test]
 fn any_running_task_may_fail_or_block() {
-    for from in [TaskStatus::Running, TaskStatus::Suspended, TaskStatus::Delegated] {
-        assert!(from.can_transition_to(TaskStatus::Failed), "{from:?} → Failed");
-        assert!(from.can_transition_to(TaskStatus::Blocked), "{from:?} → Blocked");
+    for from in [
+        TaskStatus::Running,
+        TaskStatus::Suspended,
+        TaskStatus::Delegated,
+    ] {
+        assert!(
+            from.can_transition_to(TaskStatus::Failed),
+            "{from:?} → Failed"
+        );
+        assert!(
+            from.can_transition_to(TaskStatus::Blocked),
+            "{from:?} → Blocked"
+        );
     }
 }
 
@@ -89,7 +99,10 @@ fn terminal_states_have_no_exits() {
                 "{terminal:?} → {target:?} обязан быть запрещён"
             );
         }
-        assert!(terminal.is_terminal(), "{terminal:?} обязан быть терминальным");
+        assert!(
+            terminal.is_terminal(),
+            "{terminal:?} обязан быть терминальным"
+        );
     }
 }
 
@@ -99,7 +112,10 @@ fn non_terminal_states_are_not_reported_terminal() {
         if status == TaskStatus::Done || status == TaskStatus::Failed {
             continue;
         }
-        assert!(!status.is_terminal(), "{status:?} не должен быть терминальным");
+        assert!(
+            !status.is_terminal(),
+            "{status:?} не должен быть терминальным"
+        );
     }
 }
 
@@ -134,7 +150,6 @@ fn status_serializes_in_pascal_case() {
         serde_json::to_value(TaskStatus::EvidenceSubmitted).unwrap(),
         serde_json::json!("EvidenceSubmitted")
     );
-    let restored: TaskStatus =
-        serde_json::from_str("\"EvidenceSubmitted\"").expect("must parse");
+    let restored: TaskStatus = serde_json::from_str("\"EvidenceSubmitted\"").expect("must parse");
     assert_eq!(restored, TaskStatus::EvidenceSubmitted);
 }

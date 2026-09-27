@@ -80,11 +80,17 @@ impl SqliteStore {
 }
 
 impl TaskStore for SqliteStore {
-    fn create(&self, _spec: TaskSpec) -> impl std::future::Future<Output = Result<TaskSpec, StoreError>> + Send {
+    fn create(
+        &self,
+        _spec: TaskSpec,
+    ) -> impl std::future::Future<Output = Result<TaskSpec, StoreError>> + Send {
         async { todo!("RED: SqliteStore::create — INSERT в tasks, status из spec") }
     }
 
-    fn get(&self, _id: &str) -> impl std::future::Future<Output = Result<Option<TaskSpec>, StoreError>> + Send {
+    fn get(
+        &self,
+        _id: &str,
+    ) -> impl std::future::Future<Output = Result<Option<TaskSpec>, StoreError>> + Send {
         async { todo!("RED: SqliteStore::get — SELECT data по id") }
     }
 
@@ -93,7 +99,9 @@ impl TaskStore for SqliteStore {
         _id: &str,
         _status: TaskStatus,
     ) -> impl std::future::Future<Output = Result<TaskSpec, StoreError>> + Send {
-        async { todo!("RED: SqliteStore::update_status — UPDATE status + data, NotFound при отсутствии") }
+        async {
+            todo!("RED: SqliteStore::update_status — UPDATE status + data, NotFound при отсутствии")
+        }
     }
 
     fn list_by_status(
@@ -112,25 +120,41 @@ impl TaskStore for SqliteStore {
 }
 
 impl EventStore for SqliteStore {
-    fn append(&self, _event: Event) -> impl std::future::Future<Output = Result<(), StoreError>> + Send {
-        async { todo!("RED: SqliteStore::append — INSERT в events, task_id выделен в колонку") }
+    fn append(
+        &self,
+        _event: Event,
+    ) -> impl std::future::Future<Output = Result<(), StoreError>> + Send {
+        async {
+            todo!("RED: SqliteStore::append — INSERT в events, task_id выделен в колонку")
+        }
     }
 
-    fn list_since(&self, _ts: &str) -> impl std::future::Future<Output = Result<Vec<Event>, StoreError>> + Send {
+    fn list_since(
+        &self,
+        _ts: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<Event>, StoreError>> + Send {
         async { todo!("RED: SqliteStore::list_since — SELECT WHERE ts >= ?1 ORDER BY ts") }
     }
 
-    fn list_by_task(&self, _task_id: &str) -> impl std::future::Future<Output = Result<Vec<Event>, StoreError>> + Send {
+    fn list_by_task(
+        &self,
+        _task_id: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<Event>, StoreError>> + Send {
         async { todo!("RED: SqliteStore::list_by_task — SELECT по idx_events_task") }
     }
 }
 
 impl ModuleStore for SqliteStore {
-    fn get(&self, _name: &str) -> impl std::future::Future<Output = Result<Option<ModuleRecord>, StoreError>> + Send {
+    fn get(
+        &self,
+        _name: &str,
+    ) -> impl std::future::Future<Output = Result<Option<ModuleRecord>, StoreError>> + Send {
         async { todo!("RED: SqliteStore::get — SELECT из modules по имени") }
     }
 
-    fn list(&self) -> impl std::future::Future<Output = Result<Vec<ModuleRecord>, StoreError>> + Send {
+    fn list(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Vec<ModuleRecord>, StoreError>> + Send {
         async { todo!("RED: SqliteStore::list — SELECT из modules ORDER BY name") }
     }
 
@@ -138,6 +162,8 @@ impl ModuleStore for SqliteStore {
         &self,
         _record: ModuleRecord,
     ) -> impl std::future::Future<Output = Result<(), StoreError>> + Send {
-        async { todo!("RED: SqliteStore::upsert_lock_entry — INSERT ... ON CONFLICT(name) DO UPDATE") }
+        async {
+            todo!("RED: SqliteStore::upsert_lock_entry — INSERT ... ON CONFLICT(name) DO UPDATE")
+        }
     }
 }

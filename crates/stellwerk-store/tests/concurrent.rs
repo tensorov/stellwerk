@@ -59,7 +59,10 @@ async fn ten_writers_append_all_events_and_count_is_exact() {
             Err(join) => panic!("поток упал: {join}"),
         }
     }
-    assert_eq!(succeeded, THREADS, "все {THREADS} писателей обязаны завершиться");
+    assert_eq!(
+        succeeded, THREADS,
+        "все {THREADS} писателей обязаны завершиться"
+    );
 
     let all = store
         .list_since("2026-09-27T00:00:00Z")
@@ -91,7 +94,10 @@ async fn concurrent_writers_produce_unique_ids() {
         let _ = handle.await.expect("writer must not panic");
     }
 
-    let all = store.list_since("2026-09-27T00:00:00Z").await.expect("list");
+    let all = store
+        .list_since("2026-09-27T00:00:00Z")
+        .await
+        .expect("list");
     let mut ids: Vec<&str> = all.iter().map(|e| e.id.as_str()).collect();
     let before = ids.len();
     ids.sort_unstable();
@@ -120,6 +126,9 @@ async fn concurrent_appends_to_one_task_are_all_listed() {
         let _ = handle.await.expect("writer must not panic");
     }
 
-    let for_task = store.list_by_task("t-1").await.expect("list_by_task must succeed");
+    let for_task = store
+        .list_by_task("t-1")
+        .await
+        .expect("list_by_task must succeed");
     assert_eq!(for_task.len(), THREADS * PER_THREAD);
 }

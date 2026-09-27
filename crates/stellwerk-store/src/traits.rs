@@ -68,10 +68,7 @@ pub struct ModuleRecord {
 /// Хранилище задач.
 pub trait TaskStore: Send + Sync {
     /// Создаёт задачу. Возвращает сохранённую спецификацию.
-    fn create(
-        &self,
-        spec: TaskSpec,
-    ) -> impl Future<Output = Result<TaskSpec, StoreError>> + Send;
+    fn create(&self, spec: TaskSpec) -> impl Future<Output = Result<TaskSpec, StoreError>> + Send;
 
     /// Читает задачу по идентификатору.
     fn get(&self, id: &str) -> impl Future<Output = Result<Option<TaskSpec>, StoreError>> + Send;
@@ -105,13 +102,19 @@ pub trait EventStore: Send + Sync {
     fn list_since(&self, ts: &str) -> impl Future<Output = Result<Vec<Event>, StoreError>> + Send;
 
     /// События конкретной задачи.
-    fn list_by_task(&self, task_id: &str) -> impl Future<Output = Result<Vec<Event>, StoreError>> + Send;
+    fn list_by_task(
+        &self,
+        task_id: &str,
+    ) -> impl Future<Output = Result<Vec<Event>, StoreError>> + Send;
 }
 
 /// Хранилище модулей реестра.
 pub trait ModuleStore: Send + Sync {
     /// Читает модуль по имени.
-    fn get(&self, name: &str) -> impl Future<Output = Result<Option<ModuleRecord>, StoreError>> + Send;
+    fn get(
+        &self,
+        name: &str,
+    ) -> impl Future<Output = Result<Option<ModuleRecord>, StoreError>> + Send;
 
     /// Все модули, по имени.
     fn list(&self) -> impl Future<Output = Result<Vec<ModuleRecord>, StoreError>> + Send;
@@ -122,4 +125,3 @@ pub trait ModuleStore: Send + Sync {
         record: ModuleRecord,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
 }
-

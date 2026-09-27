@@ -42,7 +42,10 @@ fn levels_are_ordered_l0_through_l5() {
 #[test]
 fn reading_is_allowed_for_everyone() {
     for level in LADDER {
-        assert!(level.permits(Action::ReadWorkspace), "{level:?} должен читать");
+        assert!(
+            level.permits(Action::ReadWorkspace),
+            "{level:?} должен читать"
+        );
     }
 }
 

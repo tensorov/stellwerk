@@ -7,8 +7,8 @@
 //!     `evil.example.com` прошёл бы под `example.com`);
 //!   * `Allow` разрешает всё и требует явного решения владельца.
 
-use stellwerk_core::contract::{NetworkPolicy, WorkspaceSpec};
 use std::collections::BTreeMap;
+use stellwerk_core::contract::{NetworkPolicy, WorkspaceSpec};
 
 fn workspace(policy: NetworkPolicy) -> WorkspaceSpec {
     WorkspaceSpec {
