@@ -136,6 +136,19 @@ LEVEL_ORDER = ('L0Local', 'L1SharedRead', 'L2Contributor', 'L3Maintainer',
                'L4Admin', 'L5Owner')
 # Требуемый уровень по риску. R3 поднят до L5Owner ADR-0002; R4 остался L5Owner (В1).
 RISK_REQUIRES = {'0': 0, '1': 2, '2': 3, '3': 5, '4': 5, '5': 5}
+# C7 — документированная таблица risk_class против фактической матрицы в
+# contract.rs. Происхождение: F-2026-09-27-07. Три «источника истины» (M1-05,
+# M1-06, M3/REVIEW) разошлись с кодом: документы говорили R3 = L5Owner, а
+# contract.rs содержал L4Admin. Merge это устранил, но ничто не мешало
+# разойтись снова при первой правке уровня.
+CONTRACT_RE = re.compile(r'RiskClass::(R[0-5])\s*=>\s*PolicyLevel::(\w+)')
+DOC_ROW_RE = re.compile(r'^\|\s*\*?\*?(R[0-5])\*?\*?\s*\|\s*`?([^|`]+?)`?\s*\|')
+# Таблица «источников истины» обязана быть в этих трёх файлах: именно на них
+# ссылается REVIEW.md §1, утверждая их тождественность.
+TABLE_DOCS = ('.sisyphus/plans/M1/packet-05.md',
+              '.sisyphus/plans/M1/packet-06.md',
+              '.sisyphus/plans/M3/REVIEW.md')
+
 QUOTED_RE = re.compile(r'«[^»]*»')
 PAIR_RE = re.compile(r'`?R([0-5])`?\s*\+\s*`?(L[0-5])`?\s*(?:→|->)\s*`?(Ask|Allow|Deny)')
 
@@ -212,6 +225,75 @@ def related(a, b, deps):
     if a == b:
         return True
     return _reachable(a, b, deps) or _reachable(b, a, deps)
+
+
+def _norm_level(v):
+    return v.replace('`', '').replace('**', '').strip()
+
+
+def check_risk_tables(root):
+    """C7: строки risk_class в документах против матрицы в contract.rs.
+
+    Возвращает список нарушений. Сверяются две вещи:
+      * каждая строка в каждом из трёх документов против contract.rs (код —
+        источник истины, документ обязан ему подчиняться);
+      * три документа против друг друга, поскольку REVIEW.md §1 утверждает их
+        тождественность, и это утверждение пока ничем не проверялось.
+    """
+    bad = []
+    cpath = os.path.join(root, 'crates/stellwerk-core/src/contract.rs')
+    if not os.path.exists(cpath):
+        return bad
+    code = {}
+    with open(cpath, encoding='utf-8') as fh:
+        for line in fh:
+            g = CONTRACT_RE.search(line)
+            if g:
+                code[g.group(1)] = g.group(2)
+    if not code:
+        return bad
+    docs = {}
+    for rel in TABLE_DOCS:
+        p = os.path.join(root, rel)
+        rows = {}
+        if not os.path.exists(p):
+            bad.append(('C7', os.path.basename(p), 'файл с таблицей risk_class отсутствует'))
+            continue
+        with open(p, encoding='utf-8') as fh:
+            for line in fh:
+                g = DOC_ROW_RE.match(line)
+                if g:
+                    # Собираем ВСЕ вхождения, а не первое. setdefault молчал бы
+                    # на документе с двумя противоречащими строками R3, и такой
+                    # документ прошёл бы проверку, ничем не отличаясь от
+                    # согласованного.
+                    rows.setdefault(g.group(1), []).append(_norm_level(g.group(2)))
+        docs[rel] = rows
+    for rel, rows in docs.items():
+        name = '%s/%s' % (rel.split('/')[-2], rel.split('/')[-1])
+        for risk, want in code.items():
+            vals = rows.get(risk)
+            if not vals:
+                bad.append(('C7', name, 'строка %s есть в contract.rs, но нет в таблице' % risk))
+                continue
+            if len(set(vals)) > 1:
+                bad.append(('C7', name, 'строка %s повторяется с разными значениями: %s'
+                            % (risk, ', '.join(sorted(set(vals))))))
+            elif vals[0] != want:
+                bad.append(('C7', name, '%s: в документе %s, в contract.rs %s' % (risk, vals[0], want)))
+    # тождественность трёх таблиц между собой
+    ref_rel, ref = TABLE_DOCS[0], docs.get(TABLE_DOCS[0], {})
+    for rel, rows in docs.items():
+        if rel == ref_rel:
+            continue
+        for risk in sorted(set(ref) | set(rows)):
+            a, b = set(ref.get(risk, [])), set(rows.get(risk, []))
+            if a != b:
+                bad.append(('C7', os.path.basename(rel),
+                            'строки %s разошлись с %s: %s против %s'
+                            % (risk, os.path.basename(ref_rel),
+                               ','.join(sorted(a)) or '—', ','.join(sorted(b)) or '—')))
+    return bad
 
 
 def check(plan_name, packets, raw_packets=(), max_files=MAX_FILES_DEFAULT):
@@ -427,6 +509,29 @@ def self_test():
     expect(not any(c == 'C5' for c, _, _ in check('T', *table_ok)),
            'C5 не срабатывает на актуальной таблице R3=L5Owner')
 
+    # 15) C7 сверяет документ с contract.rs
+    import tempfile
+    tdir = tempfile.mkdtemp()
+    os.makedirs(os.path.join(tdir, 'crates/stellwerk-core/src'))
+    with open(os.path.join(tdir, 'crates/stellwerk-core/src/contract.rs'), 'w') as f:
+        f.write('RiskClass::R0 => PolicyLevel::L0Local,\n'
+                'RiskClass::R3 => PolicyLevel::L5Owner,\n')
+    for _rel in TABLE_DOCS:
+        _full = os.path.join(tdir, _rel)
+        os.makedirs(os.path.dirname(_full), exist_ok=True)
+        with open(_full, 'w') as f:
+            f.write('| R0 | `L0Local` | Allow | x |\n| R3 | `L5Owner` | Ask | y |\n')
+    expect(not check_risk_tables(tdir), 'C7 молчит, когда документ совпадает с contract.rs')
+    with open(os.path.join(tdir, TABLE_DOCS[0]), 'a') as f:
+        f.write('| R3 | `L4Admin` | Ask | устарело |\n')
+    expect(any(c == 'C7' for c, _, _ in check_risk_tables(tdir)),
+           'C7 ловит расхождение документа с contract.rs')
+    # 16) C7 ловит расхождение двух документов между собой
+    with open(os.path.join(tdir, TABLE_DOCS[1]), 'a') as f:
+        f.write('| R3 | `L4Admin` | Ask | расходится с первым |\n')
+    expect(any('разошлись' in m for _, _, m in check_risk_tables(tdir)),
+           'C7 ловит расхождение двух таблиц risk_class между собой')
+
     print('  self-test: провалов %d из %d проверок' % (len(fails), len(ran)))
     return 0 if not fails else 1
 
@@ -436,15 +541,18 @@ def main():
     ap.add_argument('plans', nargs='*', help='каталоги .sisyphus/plans/<M>')
     ap.add_argument('--self-test', action='store_true')
     ap.add_argument('--max-files', type=int, default=MAX_FILES_DEFAULT)
+    ap.add_argument('--gating', action='store_true',
+                    help='код возврата определяет только C7 (сверка risk_class '
+                         'с contract.rs); C1-C6 остаются информационными')
     a = ap.parse_args()
 
     if a.self_test:
         return self_test()
 
+    here = os.path.dirname(os.path.abspath(__file__))   # …/stellwerk/scripts
+    root = os.path.dirname(here)                        # …/stellwerk
     targets = a.plans
     if not targets:
-        here = os.path.dirname(os.path.abspath(__file__))   # …/stellwerk/scripts
-        root = os.path.dirname(here)                        # …/stellwerk
         base = os.path.join(root, '.sisyphus', 'plans')
         if not os.path.isdir(base):
             print('plan-lint: нет %s' % base, file=sys.stderr)
@@ -461,12 +569,36 @@ def main():
         bad = check(os.path.basename(d.rstrip('/')), packets, load_raw(d), a.max_files)
         name = os.path.basename(d.rstrip('/'))
         if bad:
-            total += len(bad)
+            # При --gating в код возврата идёт только C7. Иначе гейт упал бы на
+            # 16 исторических нарушениях M0, и проверка сверки таблицы вообще
+            # не дошла бы до исполнения — то есть гейт был бы мёртвым.
+            if not a.gating:
+                total += len(bad)
             print('%s: %d пакетов, НАРУШЕНИЙ %d' % (name, len(packets), len(bad)))
             for code, pkt, msg in bad:
                 print('  [%s] %s: %s' % (code, pkt, msg))
         else:
             print('%s: %d пакетов, нарушений нет' % (name, len(packets)))
+    # C7 — сверка документированной таблицы с contract.rs. Печатается всегда,
+    # даже когда пакеты переданы явными аргументами: это проверка не пакета, а
+    # согласованности источников истины между собой.
+    if a.gating:
+        c7g = check_risk_tables(root)
+        if c7g:
+            print('ГЕЙТ: сверка risk_class с contract.rs — НАРУШЕНИЙ %d' % len(c7g))
+            for code, where, msg in c7g:
+                print('  [%s] %s: %s' % (code, where, msg))
+            return 1
+        print('ГЕЙТ: сверка risk_class с contract.rs — совпадает')
+        return 0
+    c7 = check_risk_tables(root)
+    if c7:
+        total += len(c7)
+        print('ТАБЛИЦА risk_class: НАРУШЕНИЙ %d' % len(c7))
+        for code, where, msg in c7:
+            print('  [%s] %s: %s' % (code, where, msg))
+    else:
+        print('ТАБЛИЦА risk_class: совпадает с contract.rs во всех трёх документах')
     return 1 if total else 0
 
 

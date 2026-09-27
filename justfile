@@ -35,6 +35,21 @@ check-gate: fmt lint test-registry test-core test-store
 # отчёт о крейте, которого здесь нет, занижает остаток работ (F-06).
 # --no-fail-fast обязателен: без него cargo останавливается после первого
 # Счётчики GREEN/RED по крейтам активных milestone. Не падает.
+# Приёмка C7: документированная таблица risk_class обязана совпадать с
+# фактической матрицей в contract.rs.
+#
+# Пункт 3 F-2026-09-27-07: правка кода обязана обновлять таблицы тем же
+# коммитом. Раньше это было написано в FINDINGS, но не проверялось ничем.
+# Теперь расхождение роняет гейт, поэтому забыть обновить таблицу нельзя.
+#
+# В гейт идёт только C7. C1-C6 остаются информационными: у M0 16 исторических
+# нарушений, и если бы они влияли на код возврата, гейт был бы всегда красным,
+# а сверка таблицы — никогда не выполнялась бы.
+check-risk-tables:
+    @python3 scripts/plan-lint.py --gating 2>&1 | grep -E '^(ГЕЙТ|  \[C7\])' || \
+        { echo "план-линтер недоступен"; exit 1; }
+    @python3 scripts/plan-lint.py --gating >/dev/null 2>&1
+
 test-status:
     @for c in stellwerk-task stellwerk-gateway; do \
         out=$(cargo test -p "$c" --no-fail-fast 2>&1 || true); \
@@ -48,7 +63,7 @@ test-status:
 check-status: test-status
 
 # Основная точка входа. Строгий gate + обязательная сводка по спецификации.
-check: check-gate test-status
+check: check-gate check-risk-tables test-status
 
 # Полный прогон всего, включая падающие наборы. Падает — для ручной отладки.
 test-all:
