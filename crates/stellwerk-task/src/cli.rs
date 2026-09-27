@@ -154,9 +154,12 @@ mod tests {
     fn cli_run_returns_1() {
         let cli = Cli::try_parse_from(["stellwerk", "task", "get", "t-1"]).unwrap();
         let rc = run(cli);
+        // `t-1` не создаётся ни одним тестом, так что исход предопределён, и
+        // тест не зависит от остатков в общей временной базе. Нужен 1, а не 0:
+        // иначе опечатка в id неотличима от найденной задачи.
         assert_eq!(
-            rc, 0,
-            "stub run() must return 0 (success) — packet-04 will implement"
+            rc, 1,
+            "get несуществующей задачи обязан вернуть 1 (packet-04, п.3)"
         );
     }
 }
