@@ -1,0 +1,12 @@
+{
+  "events": 824,
+  "turns_parsed": 9,
+  "tool_steps": 9,
+  "stop_reason": "stop",
+  "input_cum_parsed": 36242,
+  "output_cum": 2577,
+  "peak_context_tokens": 13087,
+  "model_window": 46112,
+  "headroom_pct": 71.6,
+  "note": "turns/input_cum здесь посчитаны разбором run.jsonl; validity.json (gate) даёт 20/99048 — расхождение в правилах подсчёта, для вердикта gate источник истины"
+}
