@@ -113,7 +113,10 @@ fi
 # только исходники: target/ содержит десятки артефактов сборки, и их подсчёт
 # давал бы бессмысленное «36 файлов».
 if [ -f "$SANDBOX.run/sandbox.diff" ]; then
-  NF=$(grep -E '^\+\+\+ ' "$SANDBOX.run/sandbox.diff" 2>/dev/null | sed "s|.*$SANDBOX/||" | awk '{print $1}' | sort -u | wc -l | tr -d ' ')
+  # Путь — ВТОРОЕ поле строки '+++ b/<path>'; брать $1 нельзя: это литерал '+++',
+  # и все файлы схлопывались бы в один уникальный элемент.
+  NF=$(grep -E '^\+\+\+ ' "$SANDBOX.run/sandbox.diff" 2>/dev/null \
+        | awk '{print $2}' | sed "s|^$SANDBOX/||" | sort -u | wc -l | tr -d ' ')
 elif [ -f "$SANDBOX/Cargo.toml" ]; then
   NF=$(find "$SANDBOX" -type f -newer "$SANDBOX/Cargo.toml" 2>/dev/null \
         | grep -vE "/target/|/\.git/" | wc -l | tr -d ' ')
