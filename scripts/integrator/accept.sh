@@ -117,9 +117,11 @@ if [ -f "$SANDBOX.run/sandbox.diff" ]; then
   # и все файлы схлопывались бы в один уникальный элемент.
   NF=$(grep -E '^\+\+\+ ' "$SANDBOX.run/sandbox.diff" 2>/dev/null \
         | awk '{print $2}' | sed "s|^$SANDBOX/||" | sort -u | wc -l | tr -d ' ')
-elif [ -f "$SANDBOX/Cargo.toml" ]; then
-  NF=$(find "$SANDBOX" -type f -newer "$SANDBOX/Cargo.toml" 2>/dev/null \
-        | grep -vE "/target/|/\.git/" | wc -l | tr -d ' ')
+elif [ -d "$SANDBOX/.git" ] || [ "$SANDBOX" = "$ROOT" ]; then
+  # Пакет реализован интегратором прямо в репозитории: точная мера — git.
+  # Файловый fallback здесь давал бы мусор (при «песочнице = корень репо» всё
+  # созданное позже Cargo.toml считается изменением).
+  NF=$(git -C "$SANDBOX" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
 else
   NF=0
 fi
