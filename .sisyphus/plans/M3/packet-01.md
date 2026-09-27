@@ -5,12 +5,7 @@ files_allowed: [Cargo.toml, Cargo.lock, crates/stellwerk-gateway/Cargo.toml, cra
 limit_waiver: пакет создаёт крейт: Cargo.lock генерирует cargo, плюс отдельные модули permission/gate. Скелет крейта не укладывается в 3 файла по природе задачи.
 max_diff_lines: 200
 test: cargo test -p stellwerk-gateway --test permission && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings
-acceptance: >
-  RED: `bash -c 'cargo build -p stellwerk-gateway && cargo test -p stellwerk-gateway --test permission --no-run && ! cargo test -p stellwerk-gateway --test permission'`
-  → exit 0: собирается, тест компилируется, падает на заглушке. Ровно 9 тестов в
-  `tests/permission.rs`: 6 по одному на класс риска, 1 на полноту таблицы, 2 на
-  `Unclassified`. Плюс `cargo fmt --all -- --check` и
-  `cargo clippy --workspace --all-targets -- -D warnings` — обе чисто.
+acceptance: RED: `bash -c 'cargo build -p stellwerk-gateway && cargo test -p stellwerk-gateway --test permission --no-run && ! cargo test -p stellwerk-gateway --test permission'` -> exit 0: собирается, тест компилируется, падает на заглушке. Ровно 9 тестов в `tests/permission.rs`: 6 по одному на класс риска, 1 на полноту таблицы, 2 на `Unclassified`; все 9 падают на заглушке. Плюс `cargo fmt --all -- --check` и `cargo clippy --workspace --all-targets -- -D warnings` — обе чисто.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
 depends_on: [—]
 data_class: public
