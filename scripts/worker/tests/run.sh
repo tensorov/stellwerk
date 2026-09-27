@@ -483,6 +483,42 @@ else
   bad "T8b нет корпуса трасс" "каталог $TR пуст"
 fi
 
+# ── T13: артефакты сборки не попадают в патч ────────────────────────────────
+# Регрессия от перестановки postflight → build_patch: postflight запускает
+# cargo В песочнице, target/ наполняется, и find . -type f затягивал
+# target/.rustc_info.json в патч. Экспорт падал, а при удаче ветка получила бы
+# артефакты сборки.
+head2 "T13 target/ и .git/ не попадают в патч"
+T13REPO="$TMP/repo13"; mkdir -p "$T13REPO"
+git -C "$T13REPO" init -q
+printf 'fn main() {}\n' > "$T13REPO/main.rs"
+mkdir -p "$T13REPO/target/debug"
+printf 'binary-blob\n' > "$T13REPO/target/debug/.rustc_info.json"
+printf 'artifact\n' > "$T13REPO/target/debug/app.o"
+git -C "$T13REPO" add -A && git -C "$T13REPO" -c user.email=t@t -c user.name=t commit -qm init
+SB13="$(sandbox_create "$T13REPO" HEAD t13 2>/dev/null)"
+printf 'fn main() { println!("real change"); }\n' > "$SB13/main.rs"
+# Артефакты меняются ПОСЛЕ создания песочницы — как это делает cargo в postflight.
+printf 'CHANGED-ARTIFACT\n' > "$SB13/target/debug/.rustc_info.json"
+printf 'CHANGED-OBJ\n' > "$SB13/target/debug/app.o"
+sandbox_build_patch "$SB13" "$SB13.run/sandbox.patch" >/dev/null 2>&1
+if grep -qE 'target/|\.rustc_info|app\.o' "$SB13.run/sandbox.patch" 2>/dev/null; then
+  bad "T13a артефакты сборки попали в патч" "$(grep -oE 'b/[^ ]*' "$SB13.run/sandbox.patch" | head -4 | tr '\n' ' ')"
+else
+  ok "T13a артефакты сборки исключены из патча"
+fi
+if grep -q 'main.rs' "$SB13.run/sandbox.patch" 2>/dev/null; then
+  ok "T13b реальное изменение исходника в патче осталось"
+else
+  bad "T13b реальное изменение потеряно" "фильтр съел не только артефакты"
+fi
+# Проверка не превращена в «всегда пусто»: патч собирается и пригоден для git.
+if ( cd "$T13REPO" && git apply --check "$SB13.run/sandbox.patch" >/dev/null 2>&1 ); then
+  ok "T13c патч применим к репозиторию (фильтр не сломал формат)"
+else
+  bad "T13c патч неприменим" "git apply --check не прошёл — фильтр испортил патч"
+fi
+
 # ── итог ───────────────────────────────────────────────────────────────────
 printf '\n────────────────────────────────────────\n'
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"

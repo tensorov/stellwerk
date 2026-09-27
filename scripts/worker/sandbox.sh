@@ -82,8 +82,8 @@ sandbox_integrity_check() {
 
 sandbox_diff() {
   local base="$1" sb="$2" out="$3"
-  ( cd "$base" && find . -type f | sort ) > "$out.files.base"
-  ( cd "$sb"   && find . -type f | sort ) > "$out.files.new"
+  ( cd "$base" && find . -type f -not -path '*/target/*' -not -path '*/.git/*' -not -path './.night/runs/*' -not -path '*/node_modules/*' | sort ) > "$out.files.base"
+  ( cd "$sb"   && find . -type f -not -path '*/target/*' -not -path '*/.git/*' -not -path './.night/runs/*' -not -path '*/node_modules/*' | sort ) > "$out.files.new"
   diff -ruN "$base" "$sb" > "$out.diff" 2>/dev/null
   local ins dele
   ins=$(grep -c '^+[^+]' "$out.diff" 2>/dev/null || echo 0)
@@ -111,7 +111,12 @@ sandbox_build_patch() {
   [ -d "$sb.base" ] || { echo "export: нет $sb.base" >&2; return 1; }
   local rel tmp
   tmp="$(mktemp)"
-  ( cd "$sb" && find . -type f | sort ) > "$tmp"
+  # Исключаем артефакты сборки и служебные каталоги. Регрессия от
+  # перестановки postflight -> build_patch: postflight запускает cargo
+  # В песочнице, target/ наполняется ДО сборки патча, и find затягивал
+  # target/.rustc_info.json в патч. Экспорт падал с «уже существует»,
+  # а при удаче ветка получила бы артефакты сборки.
+  ( cd "$sb" && find . -type f -not -path '*/target/*' -not -path '*/.git/*' -not -path './.night/runs/*' -not -path '*/node_modules/*' | sort ) > "$tmp"
   while read -r rel; do
     # find . выдаёт './x'; в label это даёт 'a/./x', а git apply такой путь
     # отвергает («Invalid path»). Ведущий ./ убираем.
