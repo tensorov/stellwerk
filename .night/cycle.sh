@@ -2,7 +2,7 @@
 # Полный цикл одного пакета: dispatch -> приёмка (5 проверок) -> merge --no-ff.
 # Возвращает 0 при полном успехе, иначе ненулевой код.
 set -u
-LANE="$1"; PKT="$2"; BR="m1/$(echo "$LANE" | tr '/' '-')-$PKT"
+PLAN="${PLAN:-M1}"; LANE="$1"; PKT="$2"; BR="m1/$(echo "$LANE" | tr '/' '-')-$PKT"
 ROOT=/home/izyabretatel/gits/stellwerk
 R="$ROOT/.night/runs"; mkdir -p "$R"; cd "$ROOT" || exit 9
 
@@ -11,7 +11,7 @@ if [ "${3:-}" = "--accept-only" ]; then
   echo "### $PKT — приёмка существующей песочницы (dispatch не повторяется)"
 else
 echo "### $PKT (lane $LANE)"
-STELLWERK_PACKET_DIR="$ROOT/.sisyphus/plans/M1" STELLWERK_PACKET_TIMEOUT=1500 \
+STELLWERK_PACKET_DIR="$ROOT/.sisyphus/plans/$PLAN" STELLWERK_PACKET_TIMEOUT=1500 \
   timeout 1700 "$HOME/.local/bin/stellwerk-dispatch" "$LANE" "$PKT" > "$R/$PKT.log" 2>&1
 RC=$?
 grep -E "VALIDITY GATE" "$R/$PKT.log" | sed 's/^/  gate: /'
@@ -21,11 +21,21 @@ fi
 V=$(cat "$SB.run/validity.json" 2>/dev/null)
 echo "$V" | grep -q '"valid": true' || { echo "  FAIL: gate невалиден: $V"; exit 1; }
 # (a) собственный тест пакета из его frontmatter
-TEST=$(grep -m1 '^test: ' ".sisyphus/plans/M1/$PKT.md" | sed 's/^test: //')
+TEST=$(grep -m1 '^test: ' ".sisyphus/plans/$PLAN/$PKT.md" | sed 's/^test: //')
 echo "  (b) тест пакета: $TEST"
 ( cd "$SB" && bash -c "$TEST" 2>&1 | grep -E "^test result" | sed 's/^/      /' ) || true
 RES=$( cd "$SB" && bash -c "$TEST" 2>&1 | grep -E "^test result" | head -1 )
-echo "$RES" | grep -qE "^test result: ok\. [1-9][0-9]* passed; 0 failed" || { echo "  FAIL(b): тест не зелёный: $RES"; exit 2; }
+if grep -q "RED:" <<<"$(head -12 ".sisyphus/plans/$PLAN/$PKT.md" | grep -E '^(goal|acceptance)')"; then
+  # RED-пакет: тест обязан ПАСТЬ, и падать на assert/заглушке, а не на компиляции
+  echo "  (b) RED-пакет: ожидается падение"
+  ( cd "$SB" && bash -c "$TEST" >/tmp/red.$$ 2>&1 ) && { echo "  FAIL(b): RED-пакет не упал"; exit 2; }
+  grep -qE "error\[E[0-9]+\]" /tmp/red.$$ && { echo "  FAIL(b): падение на компиляции, а не на assert"; head -20 /tmp/red.$$ | sed 's/^/    /'; exit 2; }
+  echo "      упал корректно: $(grep -oE 'not (yet )?implemented[^\"]*' /tmp/red.$$ | head -1)"
+  rm -f /tmp/red.$$
+  RES="RED (падение ожидаемо)"
+else
+  echo "$RES" | grep -qE "^test result: ok\. [1-9][0-9]* passed; 0 failed" || { echo "  FAIL(b): тест не зелёный: $RES"; exit 2; }
+fi
 # (c) целостность: тестовые файлы не менялись
 mapfile -t TF < <(cd "$SB" && find crates -path '*/tests/*.rs' -type f | sort)
 WEAK=0
