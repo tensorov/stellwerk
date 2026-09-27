@@ -3,6 +3,10 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+// Типы модулей и источников определены в контракте и переиспользуются здесь:
+// отдельные определения в реестре разошлись бы с ядром (M0 → фаза 3.3).
+pub use stellwerk_core::contract::{ModuleKind, RiskClass, Source};
+
 // ── error ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, thiserror::Error)]
@@ -24,35 +28,6 @@ pub struct Calibration {
     pub measured_at: String,
 }
 
-// ── module kind ────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ModuleKind {
-    Mcp,
-    Skill,
-}
-
-// ── source ─────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Source {
-    Git {
-        git: String,
-        rev: String,
-    },
-    Npm {
-        npm: String,
-        version: Option<String>,
-    },
-    Crate {
-        #[serde(rename = "cargo")]
-        krate: String,
-        version: Option<String>,
-    },
-}
-
 // ── update policy ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,7 +44,7 @@ pub struct Module {
     pub kind: ModuleKind,
     #[serde(default = "default_bool_true")]
     pub autoload: bool,
-    pub risk: Option<String>,
+    pub risk: Option<RiskClass>,
     pub source: Source,
     pub command: Option<String>,
     #[serde(default)]
