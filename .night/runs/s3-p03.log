@@ -1,0 +1,10 @@
+sandbox: /tmp/stellwerk-sandbox/m2/cli-red-packet-03-20260927-081527 (base=main, .git отсутствует)
+pi exit=143 timeout=false
+VALIDITY GATE: INVALID -> packet возвращается (pi_exit=143 stop=toolUse turns=57 steps=31 input_cum=328068 [хвост STATUS/... не найден])
+  причины: budget:tool_steps=31>30, budget:input_cum=328068>300000
+STDOUT: FAILED(budget) — прогон прерван на лету, packet возвращается
+files_changed=0
+0 insertions=155 deletions=1
+files_changed=0
+0 insertions=155 deletions=1
+STDOUT: FAILED — packet возвращается, НЕ мержится. Экспорт только после починки.
