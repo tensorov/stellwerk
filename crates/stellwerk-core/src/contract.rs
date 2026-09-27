@@ -282,12 +282,10 @@ impl NetworkPolicy {
                 // Extract host: substring between "://" and first of "/ ? #".
                 // file:// has empty host.
                 let host = url
-                    .splitn(2, "://")
-                    .nth(1)
-                    .map(|rest| {
-                        rest.find(|c| c == '/' || c == '?' || c == '#')
-                            .map(|end| &rest[..end])
-                            .unwrap_or(rest)
+                    .split_once("://")
+                    .map(|(_, rest)| match rest.find(['/', '?', '#']) {
+                        Some(end) => &rest[..end],
+                        None => rest,
                     })
                     .unwrap_or("");
                 hosts.iter().any(|h| h == host)
