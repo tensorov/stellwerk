@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members  = ["crates/stellwerk-core", "crates/stellwerk-registry"]
+members  = ["crates/stellwerk-core", "crates/stellwerk-registry", "crates/stellwerk-store"]
 
 [workspace.package]
 edition = "2021"
@@ -17,6 +17,9 @@ thiserror  = "2.0.20"
 tokio      = { version = "1.53.1", features = ["rt-multi-thread", "macros", "process", "io-util", "time"] }
 tracing    = "0.1.44"
 sha2       = "0.10.9"
+# ⚠️ contract-change (ночная сессия, фаза 4): единственное добавление зависимости
+# за эту сессию. SQLite — локальное хранилище федерации; later = Postgres.
+rusqlite   = { version = "0.33", features = ["bundled"] }
 rmcp       = { version = "3.4.0", default-features = false, features = ["client", "transport-child-process"] }  # ⚠️verify features
 
 [workspace.lints.rust]
