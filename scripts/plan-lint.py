@@ -19,6 +19,14 @@ C3  RED-пакет с неинвертированной приёмкой.
     для всех пакетов, из-за чего RED-пакет M2 packet-01 нельзя было принять
     корректно, а M1 packet-01 «прошёл бы», проверив чужой крейт.
 
+C4  Поле задано свёрнутым YAML-блоком ('>' или '|').
+    Происхождение: M3 packet-01, сессия #4. `acceptance: >` разворачивается
+    парсером в ОДИН символ, а текст приёмки остаётся в следующих строках,
+    которые парсер не читает. Итог был тихим: accept.sh классифицировал
+    RED-пакет как GREEN и требовал прохождения, а C3 молчал, посчитав пакет
+    не-RED, потому что маркер 'RED:' оказался в отдельной строке. Пакет прошёл
+    не потому, что корректен, а потому, что приёмку никто не прочитал.
+
 Запуск:  scripts/plan-lint.sh              (реальные планы)
           scripts/plan-lint.py --self-test  (фикстуры, включая случай store 09/10)
 Код возврата: 0 — нарушений нет; 1 — нарушения найдены; 2 — ошибка запуска.
@@ -47,12 +55,22 @@ def parse(path):
     if not head or not head[0].startswith('#'):
         return None
     data = {}
+    folded = []
     for line in head[1:]:
         m = KEY_RE.match(line.strip())
         if m:
-            data[m.group(1)] = m.group(2).strip()
+            key, val = m.group(1), m.group(2).strip()
+            # Свёрнутое значение ('>' или '|') этот парсер НЕ разворачивает:
+            # в data[key] попадёт односимвольный маркер, а настоящий текст
+            # останется в следующих строках, которые парсер не читает. Запоминаем
+            # такие ключи, чтобы C4 сообщил об этом ВМЕСТО молчаливого искажения.
+            if val in ('>', '|'):
+                folded.append(key)
+            data[key] = val
         elif line.startswith((' ', '\t')) and 'depends_on' not in data:
             pass  # продолжение значения — не используем
+    if folded:
+        data['_folded'] = folded
     return data or None
 
 
@@ -66,9 +84,19 @@ def split_list(value):
     return [x.strip().strip('`"\'') for x in v.split(',') if x.strip()]
 
 
+# Маркер RED ищем ПО ГРАНИЦЕ СЛОВА, а не как подстроку. Подстрока давала ложное
+# срабатывание на 'required_level': в слове 'required' буквы r-e-d стоят на
+# позициях 5-7, поэтому любой пакет, упоминающий предикат required_level,
+# объявлялся RED-пакетом. Это был ОДИН из двух дефектов на M1 packet-13; второй —
+# самостоятельный токен 'RED-шаг' в начале его acceptance, который граница слова
+# ловит законно. Пакет не RED: его итог — 0 failed, а падающий тест в нём лишь
+# первым шагом дисциплины. Поэтому формулировка исправлена, а не детектор.
+RED_RE = re.compile(r'\bred\b')
+
+
 def is_red(p):
     blob = (p.get('goal', '') + ' ' + p.get('acceptance', '')).lower()
-    return 'red' in blob
+    return bool(RED_RE.search(blob))
 
 
 def norm_dep(value, known):
@@ -156,6 +184,13 @@ def check(plan_name, packets, max_files=MAX_FILES_DEFAULT):
             if not any(m in acc for m in INVERT_MARKERS):
                 bad.append(('C3', name, 'RED-пакет, но acceptance не инвертирован: нет маркера падения'))
 
+    # C4 — поле задано свёрнутым блоком: значение молча усекается до маркера
+    for name, p in packets:
+        for key in p.get('_folded', ()):
+            bad.append(('C4', name,
+                        'поле %s задано свёрнутым блоком: значение усекается до '
+                        'одного символа, приёмка и маркер RED теряются молча' % key))
+
     return bad
 
 
@@ -163,7 +198,10 @@ def check(plan_name, packets, max_files=MAX_FILES_DEFAULT):
 def self_test():
     fails = []
 
+    ran = []
+
     def expect(cond, label):
+        ran.append(label)
         print('  %s %s' % ('ok  ' if cond else 'FAIL', label))
         if not cond:
             fails.append(label)
@@ -223,8 +261,27 @@ def self_test():
     green = [('packet-g', {'goal': 'реализация', 'files_allowed': 'a.rs', 'depends_on': '—',
                            'acceptance': 'cargo test -p x -> 11 passed; 0 failed'})]
     expect(not check('T', green), 'GREEN-пакет с прямой приёмкой не ловится C3')
+    # 6) C4: свёрнутое значение усекается молча — ловим
+    folded_bad = [('packet-f', {'goal': 'GREEN: спецификация', 'files_allowed': 'a.rs',
+                                'acceptance': '>', '_folded': ['acceptance']})]
+    expect(any(c == 'C4' for c, _, _ in check('T', folded_bad)),
+           'C4 ловит поле, заданное свёрнутым блоком')
+    expect(not check('T', [('packet-ok', {'goal': 'GREEN: x', 'files_allowed': 'a.rs',
+                                          'acceptance': 'exit 0'})]),
+           'C4 не срабатывает на обычном однострочном поле')
+    # 7) is_red: 'required_level' содержит буквы r-e-d, но это НЕ маркер RED
+    required_level_pkt = [
+        ('packet-req', {'goal': 'GREEN: правка предиката',
+                        'files_allowed': 'a.rs',
+                        'acceptance': 'добиться risk_level_policy -> 0 failed; '
+                                      'r4_r5_require_owner и required_level_monotonic '
+                                      'проходят без правок'})]
+    expect(not any(c == 'C3' for c, _, _ in check('T', required_level_pkt)),
+           'is_red не срабатывает на required_level (подстрока requi-RED)')
+    expect(is_red({'goal': 'RED: спецификация', 'acceptance': 'падает'}),
+           'is_red по-прежнему ловит настоящий маркер RED')
 
-    print('  self-test: провалов %d из 8 проверок' % len(fails))
+    print('  self-test: провалов %d из %d проверок' % (len(fails), len(ran)))
     return 0 if not fails else 1
 
 

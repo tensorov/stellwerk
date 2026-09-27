@@ -4,12 +4,7 @@ goal: Ужесточить R3 (доступ к секретам) с `L4Admin` д
 files_allowed: [crates/stellwerk-core/src/contract.rs, crates/stellwerk-core/tests/risk_level_policy.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-core --test risk_level_policy
-acceptance: >
-  RED: сначала добавить утверждение `assert_eq!(RiskClass::R3.required_level(), PolicyLevel::L5Owner)`
-  в tests/risk_level_policy.rs и зафиксировать вывод падения (Received L4Admin). Затем одной строкой
-  заменить ветку R3 в contract.rs и добиться `risk_level_policy` → 0 failed. Итог по крейту: 55 passed.
-  Тест `r4_r5_require_owner` и проверка монотонности `required_level_monotonic` обязаны продолжать
-  проходить БЕЗ правок: их падение означает, что задето больше разрешённого.
+acceptance: TDD-дисциплина, ИТОГ — ПРОХОЖДЕНИЕ. Первым шагом добавить в tests/risk_level_policy.rs утверждение assert_eq!(RiskClass::R3.required_level(), PolicyLevel::L5Owner) и зафиксировать вывод падения (Received L4Admin) — этот шаг обязателен, но ИТОГОВОЕ состояние пакета — зелёное: 0 failed. Затем одной строкой заменить ветку R3 в contract.rs. Итог по крейту: 55 passed. Тесты r4_r5_require_owner и required_level_monotonic обязаны продолжать проходить БЕЗ правок: их падение означает, что задето больше разрешённого.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки, изменение R0/R1/R2/R4/R5, переименование уровней, добавление классов риска]
 depends_on: [06]
 parallelism: sequential-only (single file lock — contract.rs)
