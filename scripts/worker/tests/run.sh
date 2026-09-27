@@ -236,6 +236,47 @@ else
   bad "T7 sandbox_postflight не объявлена" "правка sandbox.sh не добавила post-flight функцию"
 fi
 
+# ── T8: replay реальных трасс (калибровка обязана быть воспроизводимой) ─────
+# Четыре настоящих run.jsonl, сжатых gzip, в tests/traces/. Калибровка
+# MAX_INPUT_CUM=400000 стоила двух провалов и одной неверной гипотезы, поэтому
+# проверяется на фактических трассах, а не на синтетике.
+head2 "T8 replay: реальные трассы дают ожидаемые вердикты"
+TR="$WORKER/tests/traces"
+T8OK=0; T8BAD=0
+replay() { # <файл> <ожидаем valid: true|false> <описание>
+  local f="$TR/$1.jsonl.gz" want="$2" desc="$3" gz
+  gz="$TMP/replay.jsonl"
+  gzip -dc "$f" > "$gz" 2>/dev/null || { bad "T8 $desc: не распаковать"; T8BAD=$((T8BAD+1)); return; }
+  python3 "$WORKER/validity_gate.py" --jsonl "$gz" --out "$TMP/replay.json" \
+    --max-tool-steps 60 --max-input-cum 400000 >/dev/null 2>&1
+  local got
+  got=$(python3 -c "import json;print(str(json.load(open('$TMP/replay.json'))['valid']).lower())" 2>/dev/null || echo err)
+  if [ "$got" = "$want" ]; then
+    T8OK=$((T8OK+1)); ok "T8 $desc → valid=$got (ожидался $want)"
+  else
+    T8BAD=$((T8BAD+1)); bad "T8 $desc → valid=$got, ожидался $want"
+  fi
+}
+if [ -d "$TR" ] && ls "$TR"/*.jsonl.gz >/dev/null 2>&1; then
+  replay skeleton-packet-01-20260927-071915 true  "M2-01  36k  норма"
+  replay cli-red-packet-03-20260927-081527    true  "M2-03 328k ЛЕГИТИМНО (при 300k убивался)"
+  replay taskfile-packet-02-20260927-080839   false "M2-02 530k runaway"
+  replay taskfile-packet-02-20260927-080409   false "M2-02 591k runaway"
+  # Регрессия самого решения: на 300000 легитимная трасса обязана отвергаться.
+  # Это и есть причина, по которой лимит изменили — тест не даст вернуть 300k.
+  gzip -dc "$TR/cli-red-packet-03-20260927-081527.jsonl.gz" > "$TMP/legit.jsonl"
+  python3 "$WORKER/validity_gate.py" --jsonl "$TMP/legit.jsonl" --out "$TMP/old.json" \
+    --max-tool-steps 60 --max-input-cum 300000 >/dev/null 2>&1
+  OLD=$(python3 -c "import json;print(str(json.load(open('$TMP/old.json'))['valid']).lower())" 2>/dev/null || echo err)
+  if [ "$OLD" = "false" ]; then
+    ok "T8 регрессия: при 300000 легитимная трасса отвергается (значит смена лимита была необходима)"
+  else
+    bad "T8 регрессия не воспроизводится" "при 300000 трасса прошла — основание для смены лимита не подтверждается"
+  fi
+else
+  bad "T8 нет корпуса трасс" "каталог $TR пуст — калибровка непроверяема"
+fi
+
 # ── итог ───────────────────────────────────────────────────────────────────
 printf '\n────────────────────────────────────────\n'
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"

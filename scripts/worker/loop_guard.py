@@ -142,10 +142,13 @@ def main():
                                  int(u.get('cacheRead', 0) or 0) + \
                                  int(u.get('cacheWrite', 0) or 0)
             hit = None
-            if a.max_tool_steps > 0 and seen_steps > a.max_tool_steps:
-                hit = 'budget:tool_steps=%d>%d' % (seen_steps, a.max_tool_steps)
-            elif a.max_input_cum > 0 and input_cum > a.max_input_cum:
+            # ПОРЯДОК ВАЖЕН: input_cum проверяется ПЕРВЫМ, потому что он
+            # разделяет добросовестную работу и повтор, а число шагов — нет
+            # (31 шаг встречается и там, и там; см. tests/traces/MANIFEST.md).
+            if a.max_input_cum > 0 and input_cum > a.max_input_cum:
                 hit = 'budget:input_cum=%d>%d' % (input_cum, a.max_input_cum)
+            elif a.max_tool_steps > 0 and seen_steps > a.max_tool_steps:
+                hit = 'budget:tool_steps=%d>%d' % (seen_steps, a.max_tool_steps)
             if consec > a.consec_limit:
                 hit = 'consecutive=%d' % consec
             elif a.total_limit > 0 and totals[s] > a.total_limit:
