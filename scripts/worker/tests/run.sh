@@ -275,7 +275,12 @@ if [ -d "$TR" ] && ls "$TR"/*.jsonl.gz >/dev/null 2>&1; then
   replay skeleton-packet-01-20260927-071915 true  "M2-01  36k  норма"
   replay cli-red-packet-03-20260927-081527    true  "M2-03 328k ЛЕГИТИМНО (при 300k убивался)"
   replay taskfile-packet-02-20260927-080839   false "M2-02 530k runaway"
-  replay taskfile-packet-02-20260927-080409   false "M2-02 591k runaway"
+  replay taskfile-packet-02-20260927-080409   false "M2-02 591k (нечитаемая фикстура)"
+  # ИЗВЕСТНЫЙ ДЕФЕКТ, ЖДЁТ РЕШЕНИЯ ВЛАДЕЛЬЦА: эта работа ЛЕГИТИМНА
+  # (accept.sh: ПРИНЯТО, 7 тестов), но при 400000 отвергается. Строка
+  # зафиксирована намеренно, чтобы противоречие было видно в тестах, а не
+  # только в прозе: удалить неудобную трассу «починить» рассуждение не даст.
+  replay canary-packet-03-20260927-090729     false "M2-03 656k ЛЕГИТИМЕН, но режется 400k (KNOWN)"
   # Регрессия самого решения: на 300000 легитимная трасса обязана отвергаться.
   # Это и есть причина, по которой лимит изменили — тест не даст вернуть 300k.
   gzip -dc "$TR/cli-red-packet-03-20260927-081527.jsonl.gz" > "$TMP/legit.jsonl"
@@ -433,6 +438,49 @@ if [ $? -eq 0 ] && git -C "$T12REPO" rev-parse --verify --quiet t12b-branch >/de
   ok "T12c чистая песочница экспортируется (проверка не превращена в «всегда отказ»)"
 else
   bad "T12c чистая песочница отвергнута" "лог: $(tail -2 "$TMP/t12b.log" | tr '\n' ' ')"
+fi
+
+# ── T8b: метрики корпуса воспроизводимы из самих трасс ─────────────────────
+# Корпус бесполезен, если его таблица разъезжается с данными. Считаем по
+# формуле validity_gate (input + cacheRead + cacheWrite по turn_end).
+head2 "T8b метрики трасс воспроизводятся из самих трасс"
+if [ -d "$TR" ] && ls "$TR"/*.jsonl.gz >/dev/null 2>&1; then
+  T8B=$(python3 - "$TR" <<'PYEOF'
+import json,os,sys,gzip
+tr=sys.argv[1]
+exp={'skeleton-packet-01-20260927-071915':36459,
+     'cli-red-packet-03-20260927-081527':328068,
+     'taskfile-packet-02-20260927-080839':530124,
+     'taskfile-packet-02-20260927-080409':591569,
+     'canary-packet-03-20260927-090729':655622}
+bad=[]
+for name,want in sorted(exp.items()):
+    p=os.path.join(tr,name+'.jsonl.gz')
+    if not os.path.exists(p): bad.append(name+': НЕТ ФАЙЛА'); continue
+    i=c=w=0
+    with gzip.open(p,'rt',encoding='utf-8') as f:
+        for line in f:
+            line=line.strip()
+            if not line: continue
+            try: o=json.loads(line)
+            except Exception: continue
+            if o.get('type')=='turn_end':
+                u=(o.get('message') or {}).get('usage') or {}
+                if isinstance(u,dict):
+                    i+=int(u.get('input',0) or 0)
+                    c+=int(u.get('cacheRead',0) or 0)
+                    w+=int(u.get('cacheWrite',0) or 0)
+    got=i+c+w
+    if got!=want: bad.append('%s: %d != %d' % (name,got,want))
+print('РАСХОЖДЕНИЙ: '+'; '.join(bad) if bad else 'ВСЕ СОВПАДАЮТ')
+PYEOF
+)
+  case "$T8B" in
+    "ВСЕ СОВПАДАЮТ") ok "T8b все 5 метрик воспроизводятся из трасс (корпус цел)";;
+    *) bad "T8b метрики трасс разъехались с манифестом" "$T8B";;
+  esac
+else
+  bad "T8b нет корпуса трасс" "каталог $TR пуст"
 fi
 
 # ── итог ───────────────────────────────────────────────────────────────────
