@@ -169,6 +169,21 @@ else
   ok "T5 consec-guard корректно молчит на разношаговом прогоне (ловец — budget)"
 fi
 
+# ── T5d: калибровка бюджета зафиксирована тестом ───────────────────────────
+# Порог шагов обязан быть выше легитимной работы (31 шаг у M2 packet-03) и
+# порог контекста — ниже всех наблюдавшихся runaway (480k). Если эти числа
+# изменятся молча, тест упадёт.
+head2 "T5d калибровка: шаги выше легитимной работы, контекст ниже всех runaway"
+# Числа берём из строки присваивания, а не любым вхождением имени: в dispatch.conf
+# есть и комментарий с этими именами, и grep по нему давал пустое.
+MAXS=$(grep -E '^MAX_TOOL_STEPS=\$\{MAX_TOOL_STEPS:-[0-9]+\}' "$WORKER/dispatch.conf" | grep -oE '[0-9]+' | tail -1)
+MAXI=$(grep -E '^MAX_INPUT_CUM=\$\{MAX_INPUT_CUM:-[0-9]+\}'  "$WORKER/dispatch.conf" | grep -oE '[0-9]+' | tail -1)
+if [ -n "$MAXS" ] && [ -n "$MAXI" ] && [ "$MAXS" -ge 40 ] && [ "$MAXI" -le 400000 ]; then
+  ok "калибровка: MAX_TOOL_STEPS=$MAXS (>=40), MAX_INPUT_CUM=$MAXI (<=400k)"
+else
+  bad "калибровка нарушена" "MAX_TOOL_STEPS=${MAXS:-пусто} (нужно >=40), MAX_INPUT_CUM=${MAXI:-пусто} (нужно <=400000)"
+fi
+
 # ── T6: post-flight форматирования ─────────────────────────────────────────
 head2 "T6 fmt: неотформатированный .rs приводится к rustfmt ДО экспорта"
 if declare -f sandbox_postflight >/dev/null 2>&1; then
