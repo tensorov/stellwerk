@@ -104,6 +104,10 @@ sandbox_build_patch() {
   local sb="$1" out="$2"
   mkdir -p "$(dirname "$out")"
   : > "$out"
+  # Manifest: sha256 каждого затронутого файла НА МОМЕНТ сборки патча.
+  # К моменту экспорта .base уже удалён и пересобрать патч уже нельзя, поэтому
+  # без manifest остаётся надежда на порядок операций вместо доказательства.
+  : > "$out.manifest"
   [ -d "$sb.base" ] || { echo "export: нет $sb.base" >&2; return 1; }
   local rel tmp
   tmp="$(mktemp)"
@@ -120,8 +124,10 @@ sandbox_build_patch() {
       # обозначается /dev/null слева — без этого пакет, создающий файл,
       # экспортировался бы неполно. (Поймано тестом T9b.)
       diff -u --label "/dev/null" --label "b/$rel" /dev/null "$sb/$rel" >> "$out" 2>/dev/null || true
+      sha256sum "$sb/$rel" 2>/dev/null | awk -v r="$rel" '{print $1"  "r}' >> "$out.manifest" || true
     elif ! cmp -s "$sb.base/$rel" "$sb/$rel"; then
       diff -u --label "a/$rel" --label "b/$rel" "$sb.base/$rel" "$sb/$rel" >> "$out" 2>/dev/null || true
+      sha256sum "$sb/$rel" 2>/dev/null | awk -v r="$rel" '{print $1"  "r}' >> "$out.manifest" || true
     fi
   done < "$tmp"
   rm -f "$tmp"
@@ -184,6 +190,22 @@ sandbox_export() {
   # то есть патч снимается уже после успешной проверки.
   if [ -d "$sb.base" ]; then
     sandbox_build_patch "$sb" "$patch" >/dev/null 2>&1
+  fi
+
+  # Патч обязан соответствовать песочнице ПОСЛЕ всех проверок: сверяем sha256
+  # каждого затронутого файла с manifest, снятым при сборке патча. Расхождение
+  # означает, что песочницу трогали уже после проверки, и отправлять такой
+  # патч нельзя — именно так в канарий уехал код, который гейт не видел.
+  if [ -s "$patch.manifest" ]; then
+    local sum rel now
+    while read -r sum rel; do
+      [ -n "${rel:-}" ] || continue
+      now="$(sha256sum "$sb/$rel" 2>/dev/null | cut -d' ' -f1)"
+      if [ "${now:-none}" != "${sum:-none}" ]; then
+        echo "export: ПЕСОЧНИЦА ИЗМЕНИЛАСЬ после сборки патча ($rel), экспорт запрещён" >&2
+        return 10
+      fi
+    done < "$patch.manifest"
   fi
 
   # Рабочее дерево должно быть ЧИСТЫМ. Иначе коммит смешает правки пакета с

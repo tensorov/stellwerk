@@ -395,6 +395,46 @@ else
   bad "T11 уехал устаревший патч" "в ветке=$T11GOT rc=$T11RC (ожидалось STATE_B_checked)"
 fi
 
+# ── T12: export отказывает, если песочницу трогали ПОСЛЕ сборки патча ────────
+# Остаточная дыра после T11: к моменту экспорта .base уже удалён, патч
+# пересобрать нельзя, и единственный способ доказать, что уезжает проверенное
+# состояние, — сверить manifest (sha256 каждого файла на момент сборки патча).
+head2 "T12 export отказывает при песочнице, изменённой после сборки патча"
+T12REPO="$TMP/repo12"; mkdir -p "$T12REPO"
+git -C "$T12REPO" init -q
+printf 'fn main() {}\n' > "$T12REPO/main.rs"
+git -C "$T12REPO" add -A && git -C "$T12REPO" -c user.email=t@t -c user.name=t commit -qm init
+SB12="$(sandbox_create "$T12REPO" HEAD t12 2>/dev/null)"
+printf 'fn main() { println!("checked"); }\n' > "$SB12/main.rs"
+sandbox_build_patch "$SB12" "$SB12.run/sandbox.patch" >/dev/null 2>&1
+# Имитируем конец прогона: .base удалён, патч сохранился.
+mv "$SB12.base" "$TMP/base12-gone"
+# После сборки патча кто-то тронул песочницу — проверять уже нечего.
+printf 'fn main() { println!("tampered"); }\n' > "$SB12/main.rs"
+( sandbox_export "$SB12" t12-branch "$T12REPO" ) > "$TMP/t12.log" 2>&1
+T12RC=$?
+if [ "$T12RC" -ne 0 ] && grep -qi 'ИЗМЕНИЛАСЬ' "$TMP/t12.log"; then
+  ok "T12a подмена песочницы после патча отвергнута (rc=$T12RC)"
+else
+  bad "T12a подмена песочницы НЕ отвергнута" "rc=$T12RC лог: $(tail -2 "$TMP/t12.log" | tr '\n' ' ')"
+fi
+if git -C "$T12REPO" rev-parse --verify --quiet t12-branch >/dev/null; then
+  bad "T12b ветка создана несмотря на подмену" "ветка не должна была появиться"
+else
+  ok "T12b ветка не создана (ничего не утекло)"
+fi
+# Контроль: без подмены тот же путь проходит (проверка не «всегда отказ»).
+SB12B="$(sandbox_create "$T12REPO" HEAD t12b 2>/dev/null)"
+printf 'fn main() { println!("fine"); }\n' > "$SB12B/main.rs"
+sandbox_build_patch "$SB12B" "$SB12B.run/sandbox.patch" >/dev/null 2>&1
+mv "$SB12B.base" "$TMP/base12b-gone"
+( sandbox_export "$SB12B" t12b-branch "$T12REPO" ) > "$TMP/t12b.log" 2>&1
+if [ $? -eq 0 ] && git -C "$T12REPO" rev-parse --verify --quiet t12b-branch >/dev/null; then
+  ok "T12c чистая песочница экспортируется (проверка не превращена в «всегда отказ»)"
+else
+  bad "T12c чистая песочница отвергнута" "лог: $(tail -2 "$TMP/t12b.log" | tr '\n' ' ')"
+fi
+
 # ── итог ───────────────────────────────────────────────────────────────────
 printf '\n────────────────────────────────────────\n'
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"
