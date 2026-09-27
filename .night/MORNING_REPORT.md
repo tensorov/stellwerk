@@ -28,7 +28,7 @@
 
 ## 2. ФАЗЫ 1–5: КОММИТЫ И РЕШЕНИЯ
 
-Всего **40 коммитов**. Ключевые по фазам:
+Всего **41 коммитов**. Ключевые по фазам:
 
 | Фаза | Коммиты |
 |---|---|
@@ -188,6 +188,6 @@ permission-политики (`RiskClass → allow|ask|deny`, `decide`, чек н
 
 PHASE: 6 (раздача M1 завершена полностью; M2 начат — 1/12; остановка по исчерпанию контекста)
 STATUS: DONE
-COMMITS: 40 (полный список — `git log --oneline 9dacb9f..HEAD`; ключевые: caca21d, 708f43f, 6c16a5b, 57ef15b, 7d916e3, 71a9903, d8e44be, 1f6c718, 2a174ea, 8eea33f, 73131ea, 0ba10f4, f758126, ede7b14, 05ef195, d07ff31, 241eb24)
+COMMITS: 41 (полный список — `git log --oneline 9dacb9f..HEAD`; ключевые: caca21d, 708f43f, 6c16a5b, 57ef15b, 7d916e3, 71a9903, d8e44be, 1f6c718, 2a174ea, 8eea33f, 73131ea, 0ba10f4, f758126, ede7b14, 05ef195, d07ff31, 241eb24)
 M1_PROGRESS: 13/36 packets closed (M1 12/12, M2 1/12, M3 0/12 — не трогалась)
 NEXT: 1) M2 packet-02 (GREEN, закрывает 2 RED в taskfile) — продолжить с чтения .night/STATE.md; 2) выставить LOOP_TOTAL_LIMIT != 0 в scripts/worker/dispatch.conf до раздачи; 3) решить по `manual_async_fn = allow` (близко к запрету AGENTS.md); 4) решить лимит файлов для skeleton-пакетов (FINDING-05); 5) починить или признать нерабочим `stellwerk-dispatch --export` (FINDING-02); 6) M3 — только после human review permission-политик
