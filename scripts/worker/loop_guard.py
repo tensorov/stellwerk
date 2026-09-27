@@ -128,6 +128,18 @@ def main():
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            # Учёт usage ВЫНЕСЕН ПЕРЕД ранним continue. turn_end не является
+            # вызовом инструмента, поэтому signature() для него даёт None и
+            # весь блок ниже был МЁРТВЫМ: live input_cum всегда оставался 0.
+            # Как метрика это не проявлялось (её считает postflight), но
+            # опция включения обратно была бы ловушкой: включил — молча не
+            # срабатывало.
+            if obj.get('type') == 'turn_end':
+                u = ((obj.get('message') or {}).get('usage') or {})
+                if isinstance(u, dict):
+                    input_cum += int(u.get('input', 0) or 0) + \
+                                 int(u.get('cacheRead', 0) or 0) + \
+                                 int(u.get('cacheWrite', 0) or 0)
             s = signature(obj)
             if s is None:
                 continue
@@ -135,20 +147,20 @@ def main():
             consec = consec + 1 if s == last else 1
             last = s
             totals[s] = totals.get(s, 0) + 1
-            if obj.get('type') == 'turn_end':
-                u = ((obj.get('message') or {}).get('usage') or {})
-                if isinstance(u, dict):
-                    input_cum += int(u.get('input', 0) or 0) + \
-                                 int(u.get('cacheRead', 0) or 0) + \
-                                 int(u.get('cacheWrite', 0) or 0)
             hit = None
-            # ПОРЯДОК ВАЖЕН: input_cum проверяется ПЕРВЫМ, потому что он
-            # разделяет добросовестную работу и повтор, а число шагов — нет
-            # (31 шаг встречается и там, и там; см. tests/traces/MANIFEST.md).
-            if a.max_input_cum > 0 and input_cum > a.max_input_cum:
-                hit = 'budget:input_cum=%d>%d' % (input_cum, a.max_input_cum)
-            elif a.max_tool_steps > 0 and seen_steps > a.max_tool_steps:
+            # РЕШЕНИЕ ВЛАДЕЛЬЦА: input_cum ВЫВЕДЕН ИЗ УСЛОВИЙ УБИЙСТВА.
+            # Данные (tests/traces/MANIFEST.md) показали, что счётчик классы
+            # не разделяет: cacheRead — ~80% метрики, у «зависших» трасс
+            # 521904/454832 против легитимной 519808 (разница <1%), разброс
+            # одной и той же работы 2x, а порог 400000 резал легитимный прогон
+            # canary (655622, accept.sh: ПРИНЯТО). От застревания защищают
+            # шаги, guard на одинаковые вызовы, wall-clock таймаут и гейты
+            # качества. Ветка input_cum сохранена как ЯВНАЯ ОПЦИЯ: работает
+            # только при MAX_INPUT_CUM > 0, по умолчанию мертва.
+            if a.max_tool_steps > 0 and seen_steps > a.max_tool_steps:
                 hit = 'budget:tool_steps=%d>%d' % (seen_steps, a.max_tool_steps)
+            elif a.max_input_cum > 0 and input_cum > a.max_input_cum:
+                hit = 'budget:input_cum=%d>%d' % (input_cum, a.max_input_cum)
             if consec > a.consec_limit:
                 hit = 'consecutive=%d' % consec
             elif a.total_limit > 0 and totals[s] > a.total_limit:

@@ -262,7 +262,7 @@ replay() { # <файл> <ожидаем valid: true|false> <описание>
   gz="$TMP/replay.jsonl"
   gzip -dc "$f" > "$gz" 2>/dev/null || { bad "T8 $desc: не распаковать"; T8BAD=$((T8BAD+1)); return; }
   python3 "$WORKER/validity_gate.py" --jsonl "$gz" --out "$TMP/replay.json" \
-    --max-tool-steps 60 --max-input-cum 400000 >/dev/null 2>&1
+    --max-tool-steps 60 --max-input-cum 0 >/dev/null 2>&1
   local got
   got=$(python3 -c "import json;print(str(json.load(open('$TMP/replay.json'))['valid']).lower())" 2>/dev/null || echo err)
   if [ "$got" = "$want" ]; then
@@ -274,23 +274,28 @@ replay() { # <файл> <ожидаем valid: true|false> <описание>
 if [ -d "$TR" ] && ls "$TR"/*.jsonl.gz >/dev/null 2>&1; then
   replay skeleton-packet-01-20260927-071915 true  "M2-01  36k  норма"
   replay cli-red-packet-03-20260927-081527    true  "M2-03 328k ЛЕГИТИМНО (при 300k убивался)"
-  replay taskfile-packet-02-20260927-080839   false "M2-02 530k runaway"
-  replay taskfile-packet-02-20260927-080409   false "M2-02 591k (нечитаемая фикстура)"
-  # ИЗВЕСТНЫЙ ДЕФЕКТ, ЖДЁТ РЕШЕНИЯ ВЛАДЕЛЬЦА: эта работа ЛЕГИТИМНА
-  # (accept.sh: ПРИНЯТО, 7 тестов), но при 400000 отвергается. Строка
-  # зафиксирована намеренно, чтобы противоречие было видно в тестах, а не
-  # только в прозе: удалить неудобную трассу «починить» рассуждение не даст.
-  replay canary-packet-03-20260927-090729     false "M2-03 656k ЛЕГИТИМЕН, но режется 400k (KNOWN)"
+  replay taskfile-packet-02-20260927-080839   true  "M2-02 530k ИЗВЕСТНАЯ ЦЕНА: счётчик выключен"
+  replay taskfile-packet-02-20260927-080409   true  "M2-02 591k ИЗВЕСТНАЯ ЦЕНА: счётчик выключен"
+  # Ради этой строки решение и принималось: работа ЛЕГИТИМНА (accept.sh:
+  # ПРИНЯТО, 7 тестов), а бюджет по токенам её резал. Теперь проходит.
+  replay canary-packet-03-20260927-090729     true  "M2-03 656k ЛЕГИТИМЕН — ради неё бюджет и выключен"
   # Регрессия самого решения: на 300000 легитимная трасса обязана отвергаться.
   # Это и есть причина, по которой лимит изменили — тест не даст вернуть 300k.
-  gzip -dc "$TR/cli-red-packet-03-20260927-081527.jsonl.gz" > "$TMP/legit.jsonl"
+  gzip -dc "$TR/canary-packet-03-20260927-090729.jsonl.gz" > "$TMP/legit.jsonl"
   python3 "$WORKER/validity_gate.py" --jsonl "$TMP/legit.jsonl" --out "$TMP/old.json" \
     --max-tool-steps 60 --max-input-cum 300000 >/dev/null 2>&1
   OLD=$(python3 -c "import json;print(str(json.load(open('$TMP/old.json'))['valid']).lower())" 2>/dev/null || echo err)
   if [ "$OLD" = "false" ]; then
-    ok "T8 регрессия: при 300000 легитимная трасса отвергается (значит смена лимита была необходима)"
+    ok "T8c опция сохранена: явный --max-input-cum 300000 отвергает легитимный canary (счётчик не мёртв)"
   else
-    bad "T8 регрессия не воспроизводится" "при 300000 трасса прошла — основание для смены лимита не подтверждается"
+    bad "T8c опция не работает" "при явном 300000 трасса прошла — ветка счётчика мертва, вернуть порог нельзя"
+  fi
+  # Метрика обязана остаться в отчёте, даже когда не убивает.
+  MCUM=$(python3 -c "import json;print(json.load(open('$TMP/old.json'))['total_input_cum'])" 2>/dev/null || echo 0)
+  if [ "${MCUM:-0}" -gt 600000 ] 2>/dev/null; then
+    ok "T8d счётчик остаётся метрикой в отчёте (total_input_cum=$MCUM) и не влияет на вердикт"
+  else
+    bad "T8d метрика потеряна" "total_input_cum=$MCUM (ожидалось >600000)"
   fi
 else
   bad "T8 нет корпуса трасс" "каталог $TR пуст — калибровка непроверяема"
@@ -517,6 +522,30 @@ if ( cd "$T13REPO" && git apply --check "$SB13.run/sandbox.patch" >/dev/null 2>&
   ok "T13c патч применим к репозиторию (фильтр не сломал формат)"
 else
   bad "T13c патч неприменим" "git apply --check не прошёл — фильтр испортил патч"
+fi
+
+# ── T14: live input_cum реально накапливается (регресс на мёртвый код) ──────
+# Блок учёта usage стоял ПОСЛЕ раннего `continue` для событий без сигнатуры
+# инструмента. turn_end — именно такое событие, поэтому input_cum в live-режиме
+# всегда оставался 0: счётчик не убивал (и потому не мешал), но и не считал.
+# Как метрика это маскировалось postflight-гейтом, а вот опция включения порога
+# была бы ловушкой — включил и молча не сработало.
+head2 "T14 live input_cum накапливается (счётчик не мёртв)"
+T14="$TMP/t14.jsonl"
+cat > "$T14" <<'JSONL'
+{"type":"turn_start"}
+{"type":"tool_execution_start","toolName":"bash"}
+{"type":"turn_end","message":{"stopReason":"stop","usage":{"input":1000,"cacheRead":9000,"cacheWrite":0}}}
+{"type":"turn_start"}
+{"type":"turn_end","message":{"stopReason":"stop","usage":{"input":2000,"cacheRead":8000,"cacheWrite":0}}}
+JSONL
+OUT=$(python3 "$WORKER/loop_guard.py" --jsonl "$T14" --trigger "$TMP/t14.trigger" \
+        --max-tool-steps 0 --max-input-cum 1 --dry-run 2>&1)
+T14SUM=$(printf '%s' "$OUT" | grep -oE 'бюджет контекста: [0-9]+' | grep -oE '[0-9]+' || true)
+if [ "${T14SUM:-0}" -eq 20000 ] 2>/dev/null; then
+  ok "T14 live-счётчик учёл обе сессии: 2000+9000+2000+8000 = 20000"
+else
+  bad "T14 live-счётчик не считает" "получено '${T14SUM:-нет}' (ожидалось 20000) — блок учёта usage снова мёртв"
 fi
 
 # ── итог ───────────────────────────────────────────────────────────────────
