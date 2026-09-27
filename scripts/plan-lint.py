@@ -109,6 +109,11 @@ def split_list(value):
 # ловит законно. Пакет не RED: его итог — 0 failed, а падающий тест в нём лишь
 # первым шагом дисциплины. Поэтому формулировка исправлена, а не детектор.
 RED_RE = re.compile(r'\bred\b')
+# Объявление RED-пакета — маркер в НАЧАЛЕ поля, а не любое упоминание в тексте.
+# Раньше сюда подмешивался весь acceptance, и GREEN-пакет, ссылающийся в приёмке
+# на «оба RED-пакета», объявлялся RED: C3 срабатывал ложно (M3/packet-04).
+# Все RED-пакеты объявляют маркер либо в goal, либо в начале acceptance.
+RED_LEAD_RE = re.compile(r'^\s*RED\b', re.IGNORECASE)
 
 # C5 — отозванные решения, всё ещё прописанные в пакете. Каждый шаблон означает
 # «решение, которое владелец уже отменил», и появлялся в тексте пакета как
@@ -159,8 +164,11 @@ EXEMPT = re.compile(r'раньше стояло|было |было$|запрещ
 
 
 def is_red(p):
-    blob = (p.get('goal', '') + ' ' + p.get('acceptance', '')).lower()
-    return bool(RED_RE.search(blob))
+    if RED_LEAD_RE.match(p.get('acceptance', '')):
+        return True
+    # RED_RE регистрозависим, а goal пишут как «RED: …» — приводим регистр,
+    # иначе объявление перестаёт узнаваться.
+    return bool(RED_RE.search(p.get('goal', '').lower()))
 
 
 def norm_dep(value, known):
@@ -455,7 +463,25 @@ def self_test():
            'is_red не срабатывает на required_level (подстрока requi-RED)')
     expect(is_red({'goal': 'RED: спецификация', 'acceptance': 'падает'}),
            'is_red по-прежнему ловит настоящий маркер RED')
-    # 8) C5: отозванное решение, прописанное как живое указание, — ловим
+    # 7) C3 не ловит GREEN-пакет, ссылающийся на RED-пакеты в приёмке
+    green_backref = [('packet-g', {'goal': 'Реализовать decide',
+                                   'files_allowed': 'a.rs',
+                                   'depends_on': '03a, 03b',
+                                   'acceptance': 'оба теста зелёные, и каждый сценарий '
+                                                 'из обоих RED-пакетов утверждён'})]
+    expect(not any(c == 'C3' for c, _, _ in check('T', green_backref, [])),
+           'C3 не считает RED-пакетом GREEN со ссылкой на RED-пакеты в приёмке')
+    # 8) C3 по-прежнему ловит пакет, объявляющий RED в начале приёмки (packet-01)
+    red_lead = [('packet-r1', {'goal': 'Создать крейт и падающий тест',
+                              'files_allowed': 'a.rs',
+                              'depends_on': '—',
+                              'acceptance': 'RED: `! cargo test` -> exit 0'})]
+    expect(not any(c == 'C3' for c, _, _ in check('T', red_lead, [])),
+           'RED в начале приёмки распознаётся и снимается маркером падения')
+    expect(is_red({'goal': 'Создать крейт и падающий тест',
+                   'acceptance': 'RED: собирается, падает'}),
+           'RED-пакет без слова RED в goal распознаётся по началу приёмки')
+    # 9) C5: отозванное решение, прописанное как живое указание, — ловим
     revoked_bad = ([('packet-v', {'goal': 'GREEN: x', 'files_allowed': 'a.rs',
                                   'acceptance': 'exit 0'})],
                    [('packet-v', [(9, '3. Риск: risk.unwrap_or(R0) + delta')])])

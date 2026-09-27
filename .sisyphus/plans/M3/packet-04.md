@@ -4,9 +4,9 @@ goal: Реализовать `decide`: три независимых прави�
 files_allowed: [crates/stellwerk-gateway/src/gate.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-gateway --test gate
-acceptance: `cargo test -p stellwerk-gateway --test gate` → 0 failed, и каждый из 17 сценариев, перечисленных в M3/packet-03 (п.3), утверждён хотя бы одним `#[test]`. Счётчик тестов фиксировать нельзя: группировка сценариев в одну функцию допустима, и жёсткое «15 passed» ломало бы пакет при любой разнице группировки. Покрытие проверяется по сценариям, а не по числу функций.
+acceptance: `cargo test -p stellwerk-gateway --test gate` → 0 failed, и `cargo test -p stellwerk-gateway --test gate_ask` → 0 failed, причём каждый сценарий из обоих RED-пакетов утверждён хотя бы одним `#[test] fn`: 10 сценариев оси риска и данных из M3/packet-03a плюс 7 сценариев оси В2/В4 из M3/packet-03b. Счётчик тестов фиксировать нельзя: группировка сценариев в одну функцию допустима, и жёсткое «15 passed» ломало бы пакет при любой разнице группировки. Покрытие проверяется по сценариям, а не по числу функций.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
-depends_on: [03]
+depends_on: [03a, 03b]
 data_class: public
 lane: m3/gate
 

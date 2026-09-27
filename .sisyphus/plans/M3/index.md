@@ -15,8 +15,9 @@
 | --- | --- | --- | --- | --- |
 | packet-01 | m3/skeleton | — | `--test permission` | RED + contract-change (workspace) |
 | packet-02 | m3/permission | 01 | `--test permission` | GREEN: RiskClass → Allow/Ask/Deny |
-| packet-03 | m3/gate-red | 02 | `--test gate` | RED: решение по вызову |
-| packet-04 | m3/gate | 03 | `--test gate` | GREEN: decide |
+| packet-03a | m3/gate-red | 02 | `--test gate` | RED: ось риска R0-R5 и данные |
+| packet-03b | m3/gate-ask-red | 03a | `--test gate_ask` | RED: ось В2/В4: Unclassified, Suspended |
+| packet-04 | m3/gate | 03a, 03b | `--test gate` + `--test gate_ask` | GREEN: decide |
 | packet-05 | m3/shaping-red | 04 | `--test shaping` | RED: усечение вывода |
 | packet-06 | m3/shaping | 05 | `--test shaping` | GREEN: артефакт + хеш |
 | packet-07 | m3/mount-red | 06 | `--test mount` | RED: бюджет монтажа |
@@ -30,7 +31,7 @@
 
 ```
 01 → 02        — permission (contract-change в 01)
-03 → 04        — gate: риск × полномочия × данные
+03a → 03b → 04 — gate: риск × полномочия × данные
 05 → 06        — shaping: 2k токенов, артефакт, хеш
 07 → 08        — mount: что вообще подключать
 09 → 10 → 11 → 12 — чек, затем сессия
@@ -58,7 +59,10 @@
 - правила берутся ТОЛЬКО из предикатов ядра, копий нет;
 - `Ask` без подтверждения = `Deny` (провал безопасен);
 - в чеках только хеши, никогда тела вывода и никогда секреты;
-- `R4`/`R5` — всегда `Deny`, даже при `L5Owner`;
+- `R4` — `L5Owner` + `Ask` на ОДНО действие; при нехватке уровня `Deny` (В1);
+- `R5` — безусловный `Deny` при любом уровне, включая `L5Owner` (ADR-0002);
+- `Unclassified` — отдельное состояние, а не `R0`: в неинтерактивном прогоне `Deny`,
+  в интерактивной `L5Owner`-сессии `Ask` (В2); значением по умолчанию не заменяется;
 - суммарная цена смонтированных ≤ бюджета;
 - порядок монтажа детерминирован: `(cost_tokens, name)`.
 
