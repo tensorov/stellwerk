@@ -57,6 +57,24 @@ lane: m2/lifecycle
 `update_status` для переходов не используется — он безусловный и не проверяет
 состояние. Он остаётся в трейте для прямых записей.
 
+**Сигнатура, к которой сводится реализация** (проверено в packet-05, отклонение
+зафиксировано в коде `lifecycle.rs`):
+
+```
+pub fn advance(store: &impl TaskStore, id: &str, next: TaskStatus) -> Result<TaskStatus, LifecycleError>
+```
+
+Параметр — `&impl TaskStore`, а НЕ `&dyn TaskStore`. Трейт возвращает
+`impl Future + Send` (RPITIT) и потому не dyn-совместим: `&dyn TaskStore` не
+компилируется, `error[E0038]`. Починить это можно только правкой трейта в
+закрытом крейте store, что вне `files_allowed` этого пакета. Аргументов по-прежнему
+три, `from` не появился.
+
+`advance` синхронна при async-хранилище: она блокирует поток на собственном
+рантайме. Поэтому её **нельзя вызывать изнутри активного рантайма** — в частности,
+тест не должен быть `#[tokio::test]`; в RED-пакете он и не такой, а его сборка
+идёт собственным рантаймом.
+
 ## Evidence
 
 - `cargo test -p stellwerk-task --test lifecycle` → 7 passed.
