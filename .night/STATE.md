@@ -1222,3 +1222,23 @@ M4-01 означало бы столкновение с тремя пакета�
 
 **Итог:** `main` = `d20d714` + пустой evidence-коммит. `just check` exit 0,
 `stellwerk-task` 19/19, `stellwerk-gateway` 27/27. M2 4/12, M3 5/13, M4 1/8.
+
+### F-08 — issue создан (2026-09-27, сессия #5)
+
+Владелец дал `https://github.com/tensorov/polyforge`. Issue создан:
+**https://github.com/tensorov/polyforge/issues/1** (state OPEN, патч внутри тела).
+
+Точка правки найдена точно: `pub fn allowlist() -> Vec<Tool>` в
+`crates/polyforge-toolrunner/src/runner.rs:123`, запись — тройка
+`{name, bin, args}` с **фиксированным** вектором аргументов. Это объясняет всё
+поведение: `cargo test` принят, `cargo`/`cargo run`/`cargo xtask` отклоняются,
+потому что таких строк в перечислении нет.
+
+Патч подготовлен и проверен: клон, `cargo build -p polyforge-toolrunner`
+собирается, **все 100 тестов toolrunner проходят** (89+1+10). Локальный коммит
+`46ed331` в ветке `feat/allowlist-cargo-xtask`; diff приложен к issue, потому что
+`git push` запрещён правилами.
+
+**Локально F-08 остаётся ОТКРЫТЫМ:** `cargo install` мне тоже запрещён, поэтому
+пересобрать бинарь я не могу. Работающий MCP говорит с 0.4.0 из crates.io.
+Нужны от владельца репозитория: мерж патча и `cargo install --path .`.
