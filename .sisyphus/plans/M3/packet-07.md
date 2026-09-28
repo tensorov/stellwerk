@@ -1,7 +1,7 @@
 # packet-07
 plan_id: M3
 goal: RED: ленивый монтаж модулей — бюджет контекста выбирает, что вообще подключать.
-files_allowed: [crates/stellwerk-gateway/src/mount.rs, crates/stellwerk-gateway/tests/mount.rs]
+files_allowed: [crates/stellwerk-gateway/src/mount.rs, crates/stellwerk-gateway/tests/mount.rs, crates/stellwerk-gateway/src/lib.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-gateway --test mount
 acceptance: RED: пакет собирается, тест компилируется, прогон падает на заглушке.
@@ -59,6 +59,14 @@ lane: m3/mount-red
      осознанное, и опиши его в комментарии);
    - суммарная стоимость смонтированных ≤ бюджета: это главный инвариант.
 3. Тесты в `tests/mount.rs` на детерминированных наборах.
+
+1b. `src/lib.rs`: добавить `pub mod mount;` одной строкой, ПОСЛЕ существующих
+   `pub mod gate;`, `pub mod permission;`, `pub mod shaping;`. **Это обязательно
+   здесь, а не в GREEN-пакете.** Интеграционный тест обращается к типам из `mount`
+   через публичный API крейта, и без объявления модуля он не компилируется. Ровно
+   эта ошибка уже стоила двух пакетов: в M2 требование `pub mod lifecycle;` висело
+   на GREEN, а в M3 `lib.rs` не входил в `files_allowed` ни одного пакета, и
+   `shaping` остался недостижим при зелёных тестах.
 
 ## Evidence
 
