@@ -5,6 +5,7 @@ files_allowed: [crates/stellwerk-task/Cargo.toml, Cargo.lock]
 max_diff_lines: 200
 test: cargo build -p stellwerk-task
 acceptance: `cargo build -p stellwerk-task` → exit 0, и `cargo tree -p stellwerk-task` показывает `stellwerk-gateway` среди зависимостей. Зависимость объявлена как path, без `cargo add`.
+overlap_waiver: M2-01 — историческое пересечение, оба смержены, порядок соблюдён
 forbidden: [cargo add, cargo install, правка крейтов кроме task/Cargo.toml, новые внешние зависимости, "попутные" правки]
 depends_on: [—]
 data_class: public

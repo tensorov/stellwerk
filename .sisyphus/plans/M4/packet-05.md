@@ -6,7 +6,7 @@ max_diff_lines: 200
 test: cargo test -p stellwerk-task --test vertical
 acceptance: RED: тест компилируется, прогон падает на заглушке. Каждый сценарий отдельным `#[test] fn`.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
-depends_on: [03, M2-12]
+depends_on: [03, M2-09, M2-10, M2-11, M2-12]
 data_class: public
 lane: m4/vertical
 

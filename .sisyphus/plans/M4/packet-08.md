@@ -6,7 +6,7 @@ max_diff_lines: 200
 test: cargo test -p stellwerk-task --test vertical
 acceptance: `cargo test -p stellwerk-task --test vertical` → 0 failed, включая сценарий полного прохода. PolyForge: `evidence_verify` на команде этого пакета → exit 0, `gate_evaluate` passed.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
-depends_on: [04, 06, 07]
+depends_on: [04, 06, 07, M2-05, M2-06]
 data_class: public
 lane: m4/vertical
 

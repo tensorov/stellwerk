@@ -6,7 +6,7 @@ max_diff_lines: 200
 test: cargo test -p stellwerk-task --test cli_watch
 acceptance: `cargo test -p stellwerk-task --test cli_watch` → 0 failed. `apply` и `get` не сломаны: `cargo test -p stellwerk-task --lib cli` → 0 failed.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
-depends_on: [M2-12]
+depends_on: [M2-01, M2-03, M2-04, M2-12]
 data_class: public
 lane: m4/cli
 

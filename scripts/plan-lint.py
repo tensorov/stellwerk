@@ -304,6 +304,103 @@ def check_risk_tables(root):
     return bad
 
 
+PACKET_RE = re.compile(r'^packet-[0-9a-z]+\.md$')
+FILES_RE = re.compile(r'^files_allowed:\s*\[(.*?)\]', re.M)
+DEPENDS_RE = re.compile(r'^depends_on:\s*\[(.*?)\]', re.M)
+WAIVER_RE = re.compile(r'^overlap_waiver:', re.M)
+
+
+def _collect_packets(root):
+    """Все пакеты всех milestone: (milestone, имя, текст)."""
+    base = os.path.join(root, CANON_PLANS)
+    out = []
+    if not os.path.isdir(base):
+        return out
+    for ms in sorted(os.listdir(base)):
+        d = os.path.join(base, ms)
+        if not os.path.isdir(d) or not ms.startswith('M'):
+            continue
+        for fn in sorted(os.listdir(d)):
+            if PACKET_RE.match(fn):
+                # Номер без префикса `packet-`: дальше имя собирается как
+                # '<ms>/packet-<n>'. Сохранение префикса давало
+                # `M2/packet-packet-01`, и тогда `M2-09` в depends_on никогда не
+                # совпадал с владельцем файла — то есть упорядоченные пары
+                # ловились как нарушения, а пустые проходили.
+                with open(os.path.join(d, fn), encoding='utf-8') as fh:
+                    out.append((ms, fn[len('packet-'):-3], fh.read()))
+    return out
+
+
+def _deps_of(ms, text):
+    """depends_on -> полные имена пакетов.
+
+    Запись `01` внутри M4 означает M4/packet-01, а `M2-12` означает M2/packet-12.
+    Смешивать их нельзя: иначе `M2-09` внутри M4 не совпадёт с `M2/09`, и
+    проверка C9 решит, что порядок не объявлен, хотя он объявлен.
+    """
+    m = DEPENDS_RE.search(text)
+    if not m:
+        return set()
+    out = set()
+    for raw in m.group(1).split(','):
+        raw = raw.strip()
+        if not raw or raw == '\u2014':
+            continue
+        if '-' in raw and raw.split('-')[0].startswith('M'):
+            out.add('%s/packet-%s' % (raw.split('-')[0], raw.split('-', 1)[1]))
+        else:
+            out.add('%s/packet-%s' % (ms, raw))
+    return out
+
+
+def check_cross_milestone_overlap(root):
+    """C9 — файл заявлен пакетами РАЗНЫХ milestone без объявленного порядка.
+
+    Тот же класс, что C8 и F-12: проверка смотрит только туда, куда её
+    направили. C1 сравнивает пакеты ВНУТРИ одного milestone, поэтому пересечение
+    `runner.rs` между M2-09/10/11 и M4-02/03/05 было невидимо, при том что оба
+    milestone проходили линт чисто. Шесть пакетов претендовали на один файл, и
+    `depends_on` у M4-02 был `[01]` — без единой ссылки на M2-09, создающий этот
+    файл. Воркер получил бы M4-02 первым, а M2-09 потом переписал бы его молча.
+
+    Требуется, чтобы ХОТЯ БЫ ОДИН из претендентов объявлял другого в depends_on.
+    Пересечение без взаимного упорядочивания — нарушение.
+    """
+    packets = _collect_packets(root)
+    claims = {}
+    for ms, name, text in packets:
+        m = FILES_RE.search(text)
+        if not m:
+            continue
+        for path in m.group(1).split(','):
+            path = path.strip()
+            if path.startswith('crates/'):
+                claims.setdefault(path, []).append((ms, name, text))
+    bad = []
+    for path, holders in sorted(claims.items()):
+        # Только неупорядоченные пары, и по одному отчёту на пару: иначе
+        # направление «A объявляет B» успевает сработать раньше, чем проверится
+        # «B объявляет A», и упорядоченная пара была бы зачтена как нарушение.
+        for i in range(len(holders)):
+            for j in range(i + 1, len(holders)):
+                a_ms, a_name, a_text = holders[i]
+                b_ms, b_name, b_text = holders[j]
+                if a_ms == b_ms:
+                    continue  # это уже ловит C1 внутри milestone
+                a_id = '%s/packet-%s' % (a_ms, a_name)
+                b_id = '%s/packet-%s' % (b_ms, b_name)
+                # Пара упорядочена, если ЛИБО ОДИН из участников объявляет другого.
+                if b_id in _deps_of(a_ms, a_text) or a_id in _deps_of(b_ms, b_text):
+                    continue
+                if WAIVER_RE.search(a_text) or WAIVER_RE.search(b_text):
+                    continue  # пересечение признано и обосновано
+                bad.append(('C9', path,
+                            '%s и %s заявлены на один файл, но порядок не '
+                            'объявлен ни в одном depends_on' % (a_id, b_id)))
+    return bad
+
+
 CANON_PLANS = '.sisyphus/plans'
 MIRROR_PLANS = '.omo/plans'
 
@@ -571,6 +668,37 @@ def self_test():
         f.write('goal: зомби\n')
     expect(any('зомби' in m for _, _, m in check_mirror_drift(_r)),
            'C8 ловит пакет, которого нет в каноне')
+    # 8) C9: пересечение файла между milestone без объявленного порядка.
+    # Положительный случай обязателен: проверка, для которой нет теста «вот тут
+    # она срабатывает», неотличима от проверки, которая не работает.
+    _r9 = _tf.mkdtemp()
+    for _ms in ('M2', 'M4'):
+        os.makedirs(os.path.join(_r9, CANON_PLANS, _ms))
+    _fa = 'files_allowed: [crates/x/src/runner.rs]'
+    with open(os.path.join(_r9, CANON_PLANS, 'M2/packet-09.md'), 'w') as f:
+        f.write('%s\ndepends_on: [08]\n' % _fa)
+    with open(os.path.join(_r9, CANON_PLANS, 'M4/packet-02.md'), 'w') as f:
+        f.write('%s\ndepends_on: [01]\n' % _fa)
+    expect(any(c == 'C9' for c, _, _ in check_cross_milestone_overlap(_r9)),
+           'C9 ловит пересечение между milestone без объявленного порядка')
+    with open(os.path.join(_r9, CANON_PLANS, 'M4/packet-02.md'), 'w') as f:
+        f.write('%s\ndepends_on: [01, M2-09]\n' % _fa)
+    expect(not check_cross_milestone_overlap(_r9),
+           'C9 молчит, когда порядок объявлен через M2-09')
+    # Пересечение ВНУТРИ одного milestone — не дело C9 (это C1). Файл берётся
+    # отдельный: если заявить его ещё и M2-пакету, не объявив его в M4-02, то
+    # получится настоящая неупорядоченная ПАРА МЕЖДУ milestone, и проверка
+    # была бы права, а тест — нет.
+    _fb = 'files_allowed: [crates/x/src/lifecycle.rs]'
+    for _n, _d in (('07', '[06]'), ('08', '[07]')):
+        with open(os.path.join(_r9, CANON_PLANS, 'M2/packet-%s.md' % _n), 'w') as f:
+            f.write('%s\ndepends_on: %s\n' % (_fb, _d))
+    expect(not any(c == 'C9' for c, _, _ in check_cross_milestone_overlap(_r9)),
+           'C9 не ловит пересечение ВНУТРИ milestone — это дело C1')
+    with open(os.path.join(_r9, CANON_PLANS, 'M4/packet-02.md'), 'w') as f:
+        f.write('%s\ndepends_on: [01]\noverlap_waiver: осознанное пересечение\n' % _fa)
+    expect(not check_cross_milestone_overlap(_r9),
+           'overlap_waiver снимает C9')
     # 9) C5: отозванное решение, прописанное как живое указание, — ловим
     revoked_bad = ([('packet-v', {'goal': 'GREEN: x', 'files_allowed': 'a.rs',
                                   'acceptance': 'exit 0'})],
@@ -725,6 +853,17 @@ def main():
             print('  ... ещё %d' % (len(c8) - 12))
     else:
         print('ЗЕРКАЛО ПАКЕТОВ: совпадает с каноном')
+
+    c9 = check_cross_milestone_overlap(root)
+    if c9:
+        total += len(c9)
+        print('ПЕРЕСЕЧЕНИЯ МЕЖДУ MILESTONE: %d — порядок не объявлен' % len(c9))
+        for code, where, msg in c9[:10]:
+            print('  [%s] %s: %s' % (code, where, msg))
+        if len(c9) > 10:
+            print('  ... ещё %d' % (len(c9) - 10))
+    else:
+        print('ПЕРЕСЕЧЕНИЯ МЕЖДУ MILESTONE: порядок объявлен везде')
 
     c7 = check_risk_tables(root)
     if c7:

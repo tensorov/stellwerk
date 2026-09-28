@@ -6,7 +6,7 @@ max_diff_lines: 200
 test: cargo test -p stellwerk-task --test vertical
 acceptance: `cargo test -p stellwerk-task --test vertical` → 0 failed.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
-depends_on: [05]
+depends_on: [05, M2-12]
 data_class: public
 lane: m4/vertical
 
