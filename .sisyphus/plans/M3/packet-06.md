@@ -1,7 +1,7 @@
 # packet-06
 plan_id: M3
 goal: Реализовать shaping вывода: усечение, запись артефакта, хеш по полному телу.
-files_allowed: [crates/stellwerk-gateway/src/shaping.rs]
+files_allowed: [crates/stellwerk-gateway/src/shaping.rs, crates/stellwerk-gateway/src/lib.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-gateway --test shaping
 acceptance: `cargo test -p stellwerk-gateway --test shaping` → 6 passed; 0 failed.
@@ -38,6 +38,13 @@ lane: m3/shaping
    и добавь маркер обреза. Не режь посреди многобайтного UTF-8 — символ должен быть
    валидным, иначе битый вывод уходит в контекст модели.
 6. Создай `dir`, если нет (`create_dir_all`). Никаких `rm` в крейте.
+7. `src/lib.rs`: добавить `pub mod shaping;` одной строкой, ПОСЛЕ существующих
+   `pub mod gate;` и `pub mod permission;`. **Без этого модуль недостижим из
+   библиотеки:** RED-тест packet-05 подключает `shaping.rs` через
+   `#[path = "../src/shaping.rs"]`, потому что объявить модуль в `lib.rs` тогда
+   было нечем — `lib.rs` не входил в `files_allowed` ни одного пакета M3. Пока
+   `pub mod shaping;` не появится, ни один внешний потребитель до модуля не
+   дотянется, хотя тесты зелёные.
 
 ## Evidence
 
