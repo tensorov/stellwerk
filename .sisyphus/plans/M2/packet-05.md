@@ -1,12 +1,12 @@
 # packet-05
 plan_id: M2
 goal: RED: продвижение статусов задачи через предикаты ядра — запрещённый переход обязан быть отвергнут.
-files_allowed: [crates/stellwerk-task/src/lifecycle.rs, crates/stellwerk-task/tests/lifecycle.rs]
+files_allowed: [crates/stellwerk-task/src/lifecycle.rs, crates/stellwerk-task/tests/lifecycle.rs, crates/stellwerk-task/src/lib.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-task --test lifecycle
 acceptance: RED: `bash -c 'cargo build -p stellwerk-task && cargo test -p stellwerk-task --test lifecycle --no-run && ! cargo test -p stellwerk-task --test lifecycle'` → exit 0.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
-depends_on: [04]
+depends_on: [05b]
 data_class: public
 lane: m2/lifecycle-red
 
@@ -21,17 +21,26 @@ lane: m2/lifecycle-red
 - Задача описывается TOML-файлом (`toml` уже в workspace) — YAML-крейт не нужен.
 - Статусы ведутся ЧЕРЕЗ предикаты ядра (`TaskStatus::can_transition_to`). Не заводи
   собственный свод переходов: единственный источник истины — контракт.
+- **Источник текущего состояния — хранилище, а не вызывающий код.** Читать статус
+  обязан `status_of`, записывать — `compare_and_set_status` (пакеты 05a/05b, оба
+  закрыты и считаются готовыми). Параметра `from` у `advance` не будет: принять его
+  от вызывающего значило бы проверять вымышленное состояние вместо фактического.
 - Уже закрытые пакеты M1 (packet-02…12) — их предикаты и трейты считай готовыми.
 
 ## Что сделать
 
-1. `src/lifecycle.rs`: функция
+1. `src/lib.rs`: добавить `pub mod lifecycle;` одной строкой, ПОСЛЕ существующих
+   `pub mod`. **Это делается здесь, а не в GREEN-пакете:** интеграционный тест
+   обращается к типам из `lifecycle` через публичный API крейта, и без объявления
+   модуля он не компилируется. Раньше это требование висело на GREEN-пакете, то
+   есть RED не мог существовать.
+2. `src/lifecycle.rs`: функция
    `pub fn advance(store: &dyn TaskStore, id: &str, next: TaskStatus) -> Result<TaskStatus, LifecycleError>`.
    Проверка перехода — ТОЛЬКО через `TaskStatus::can_transition_to` из контракта.
    Свой свод переходов заводить запрещено.
-2. `LifecycleError` (thiserror): `Store(#[from] StoreError)`, `IllegalTransition { from, to }`,
-   `Blocked(String)`.
-3. Тесты в `tests/lifecycle.rs`:
+3. `LifecycleError` (thiserror): `Store(#[from] StoreError)`, `IllegalTransition { from, to }`,
+   `StateConflict { expected, next }`, `Blocked(String)`.
+4. Тесты в `tests/lifecycle.rs`:
    - `Draft → Planned` разрешён;
    - `Draft → Verified` запрещён (прыжок без прогона);
    - `Running → Suspended` разрешён, `Suspended → Running` разрешён;
@@ -41,7 +50,7 @@ lane: m2/lifecycle-red
    - запрещённый переход НЕ меняет статус в хранилище.
    Первые тесты зелёные сразу (нужны только предикаты M1), последние падают —
    `advance` ещё заглушка.
-4. Не реализуй `advance` — это packet-06.
+5. Не реализуй `advance` — это packet-06.
 
 ## Evidence
 

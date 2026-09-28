@@ -17,8 +17,10 @@
 | packet-02 | m2/taskfile | 01 | `--test taskfile` | GREEN: загрузка TOML |
 | packet-03 | m2/cli-red | 02 | `--lib cli` | RED: clap-скелет |
 | packet-04 | m2/cli-green | 03 | `--lib cli` | GREEN: dispatch apply/get |
-| packet-05 | m2/lifecycle-red | 04 | `--test lifecycle` | RED: статусы |
-| packet-06 | m2/lifecycle | 05 | `--test lifecycle` | GREEN: advance |
+| packet-05a | m2/store-contract-red | 04, M1-08…12 | `--test status_transition` | RED: contract-change `status_of` + CAS |
+| packet-05b | m2/store-contract | 05a, M1-08…12 | `--test status_transition` | GREEN: чтение статуса и условная запись |
+| packet-05 | m2/lifecycle-red | 05b | `--test lifecycle` | RED: статусы |
+| packet-06 | m2/lifecycle | 05 | `--test lifecycle` | GREEN: advance (3 аргумента) |
 | packet-07 | m2/sandbox-red | 06 | `--test sandbox` | RED: песочница |
 | packet-08 | m2/sandbox | 07 | `--test sandbox` | GREEN: scripts/worker/sandbox.sh |
 | packet-09 | m2/runner-red | 08 | `--test runner` | RED: разбор потока Pi |
@@ -30,7 +32,8 @@
 
 ```
 01 → 02 → 03 → 04        — скелет, формат файла, CLI, dispatch
-05 → 06                   — жизненный цикл статусов
+05a → 05b                 — contract-change трейта: читать статус, писать условно
+05  → 06                  — жизненный цикл статусов
 07 → 08                   — песочница
 09 → 10                   — runner
 11 → 12                   — события и evidence (сердце закона)
