@@ -10,3 +10,4 @@
 
 pub mod gate;
 pub mod permission;
+pub mod shaping;
