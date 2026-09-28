@@ -304,6 +304,68 @@ def check_risk_tables(root):
     return bad
 
 
+CANON_PLANS = '.sisyphus/plans'
+MIRROR_PLANS = '.omo/plans'
+
+
+def _short(value, limit=70):
+    """Значение поля в отчёте обрезано: acceptance бывает на полстраницы, и
+    разбор становится нечитаемым ровно там, где нужен."""
+    if value is None:
+        return '—'
+    return value if len(value) <= limit else value[:limit] + '…'
+
+
+def check_mirror_drift(root):
+    """C8 — зеркало пакетов разошлось с каноном.
+
+    F-2026-09-27-12: `.omo/plans` — не источник, а зеркало, и оно **аддитивно по
+    созданию и слепо по правкам**. Доказанный случай: новые `packet-03a/03b`
+    в зеркало попали, а правка `packet-04.md` (`depends_on: [03]` ->
+    `[03a, 03b]`) — нет. На одинаковом наборе пакетов канон даёт 0 нарушений, а
+    зеркало 10. Если такое зеркало хоть раз попадёт в раздачу, воркер получит
+    пакет с несуществующей зависимостью.
+
+    Проверяются оба направления расхождения:
+      * пакет есть в обоих деревьях, но содержимое разошлось -> молчаливый дрейф;
+      * пакет есть только в зеркале -> зомби, который выглядит как обычный.
+    """
+    bad = []
+    canon_root = os.path.join(root, CANON_PLANS)
+    mirror_root = os.path.join(root, MIRROR_PLANS)
+    if not (os.path.isdir(canon_root) and os.path.isdir(mirror_root)):
+        return bad
+    for dirpath, _dirs, files in os.walk(mirror_root):
+        # Архив — осознанное хранение снятых версий, а не зомби.
+        if os.path.basename(dirpath) == '_archive':
+            continue
+        rel = os.path.relpath(dirpath, mirror_root)
+        for name in sorted(files):
+            if not name.startswith('packet-') or not name.endswith('.md'):
+                continue
+            mirror_file = os.path.join(dirpath, name)
+            canon_file = os.path.join(canon_root, rel, name)
+            if not os.path.exists(canon_file):
+                bad.append(('C8', '%s/%s' % (rel, name),
+                            'есть в зеркале, но нет в каноне: зомби-пакет в раздачу не годится'))
+                continue
+            with open(mirror_file, encoding='utf-8') as fh:
+                mirrored = fh.read()
+            with open(canon_file, encoding='utf-8') as fh:
+                canonical = fh.read()
+            if mirrored != canonical:
+                for field in ('depends_on', 'files_allowed', 'goal', 'acceptance'):
+                    a = next((l for l in canonical.split('\n') if l.startswith(field + ':')), None)
+                    b = next((l for l in mirrored.split('\n') if l.startswith(field + ':')), None)
+                    if a != b:
+                        bad.append(('C8', '%s/%s' % (rel, name),
+                                    'зеркало разошлось с каноном: %s — канон `%s` против зеркала `%s`'
+                                    % (field, _short(a), _short(b))))
+
+
+    return bad
+
+
 def check(plan_name, packets, raw_packets=(), max_files=MAX_FILES_DEFAULT):
     """Вернуть список нарушений: (код, пакет, сообщение)."""
     known = {n for n, _ in packets}
@@ -491,6 +553,24 @@ def self_test():
         # self_test звал бы main — рекурсия до переполнения.
     finally:
         _sys.argv = _saved
+    # 8) C8: расхождение зеркала с каноном — и никакой «проверки вхолостую»
+    import tempfile as _tf
+    _r = _tf.mkdtemp()
+    for _tree in (CANON_PLANS, MIRROR_PLANS):
+        os.makedirs(os.path.join(_r, _tree, 'M3'))
+    with open(os.path.join(_r, CANON_PLANS, 'M3/packet-04.md'), 'w') as f:
+        f.write('depends_on: [03a, 03b]\n')
+    with open(os.path.join(_r, MIRROR_PLANS, 'M3/packet-04.md'), 'w') as f:
+        f.write('depends_on: [03]\n')
+    expect(any(c == 'C8' for c, _, _ in check_mirror_drift(_r)),
+           'C8 ловит зеркало с устаревшим depends_on')
+    with open(os.path.join(_r, MIRROR_PLANS, 'M3/packet-04.md'), 'w') as f:
+        f.write('depends_on: [03a, 03b]\n')
+    expect(not check_mirror_drift(_r), 'C8 молчит, когда зеркало совпадает с каноном')
+    with open(os.path.join(_r, MIRROR_PLANS, 'M3/packet-99.md'), 'w') as f:
+        f.write('goal: зомби\n')
+    expect(any('зомби' in m for _, _, m in check_mirror_drift(_r)),
+           'C8 ловит пакет, которого нет в каноне')
     # 9) C5: отозванное решение, прописанное как живое указание, — ловим
     revoked_bad = ([('packet-v', {'goal': 'GREEN: x', 'files_allowed': 'a.rs',
                                   'acceptance': 'exit 0'})],
@@ -633,6 +713,19 @@ def main():
             return 1
         print('ГЕЙТ: сверка risk_class с contract.rs — совпадает')
         return 0
+    # C8 — зеркало пакетов. Печатается рядом с C7, потому что обе проверки
+    # отвечают на один вопрос: соответствует ли видимая воркеру картина плана
+    # канону.
+    c8 = check_mirror_drift(root)
+    if c8:
+        print('ЗЕРКАЛО ПАКЕТОВ: расхождений %d — .omo/plans НЕ является источником' % len(c8))
+        for code, where, msg in c8[:12]:
+            print('  [%s] %s: %s' % (code, where, msg))
+        if len(c8) > 12:
+            print('  ... ещё %d' % (len(c8) - 12))
+    else:
+        print('ЗЕРКАЛО ПАКЕТОВ: совпадает с каноном')
+
     c7 = check_risk_tables(root)
     if c7:
         total += len(c7)
