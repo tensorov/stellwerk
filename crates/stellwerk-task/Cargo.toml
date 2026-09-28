@@ -8,6 +8,9 @@ rust-version.workspace = true
 [dependencies]
 stellwerk-core  = { path = "../stellwerk-core" }
 stellwerk-store = { path = "../stellwerk-store" }
+# F-10: без этой строки decide() из gateway недостижим из раннера — крейт
+# task не видел слой разрешений вовсе.
+stellwerk-gateway = { path = "../stellwerk-gateway" }
 serde           = { workspace = true }
 serde_json      = { workspace = true }
 toml            = { workspace = true }
