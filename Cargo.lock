@@ -503,6 +503,7 @@ dependencies = [
  "serde",
  "serde_json",
  "stellwerk-core",
+ "stellwerk-gateway",
  "stellwerk-store",
  "thiserror",
  "tokio",
