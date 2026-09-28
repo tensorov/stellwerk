@@ -1,7 +1,7 @@
 # packet-07
 plan_id: M2
 goal: RED: адаптер песочницы — сборка окружения прогона из WorkspaceSpec и вызов `scripts/worker/sandbox.sh`.
-files_allowed: [crates/stellwerk-task/src/sandbox.rs, crates/stellwerk-task/tests/sandbox.rs]
+files_allowed: [crates/stellwerk-task/src/sandbox.rs, crates/stellwerk-task/tests/sandbox.rs, crates/stellwerk-task/src/lib.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-task --test sandbox
 acceptance: RED: пакет собирается, тест компилируется, прогон падает (заглушка). Доказательство — вывод RED-wrapper.
@@ -47,6 +47,17 @@ lane: m2/sandbox-red
    - `prepare` с несуществующим скриптом → Err.
    Команды в тестах — `sh -c` со скриптом, который сам создаёт/не создаёт каталог.
 4. Никакого запуска Pi здесь — это packet-09+.
+
+## Правило объявления модуля
+
+`src/lib.rs` в `files_allowed`, и `pub mod sandbox;` объявляется **в этом пакете**,
+рядом с созданием `sandbox.rs`, а не в следующем GREEN. Интеграционный тест берёт
+типы через публичный API крейта; без объявления модуля он не компилируется, а с
+`#[path]` скомпилировал бы вторую копию и оставил экспорт непроверенным (F-14).
+
+Четвёртый случай подряд: в M2 требование `pub mod lifecycle;` висело на пакете
+после RED; в M3-06, M3-07 и M3-09 `lib.rs` не входил в `files_allowed` вовсе. Все
+закрыты предраздачным контролем, а не по факту блокировки.
 
 ## Evidence
 
