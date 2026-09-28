@@ -86,6 +86,29 @@ pub trait TaskStore: Send + Sync {
         status: TaskStatus,
     ) -> impl Future<Output = Result<TaskSpec, StoreError>> + Send;
 
+    /// Читает фактический статус одной задачи — без перебора 12 вариантов.
+    ///
+    /// Отсутствие задачи — `Ok(None)`. Нечитаемое значение статуса в базе —
+    /// ошибка, а НЕ `None` и НЕ `Draft`: неизвестное не должно выглядеть как
+    /// значение по умолчанию.
+    fn status_of(
+        &self,
+        id: &str,
+    ) -> impl Future<Output = Result<Option<TaskStatus>, StoreError>> + Send;
+
+    /// Записывает статус УСЛОВНО: только если задача сейчас в `expected`.
+    ///
+    /// `true` — обновлена ровно одна задача; `false` — ожидаемое состояние не
+    /// совпало либо задачи нет. Отдельные вызовы не образуют одну транзакцию,
+    /// поэтому проверка обязана жить внутри самого `UPDATE`, а вызывающий обязан
+    /// смотреть на счётчик строк: в SQLite ноль обновлённых строк не ошибка.
+    fn compare_and_set_status(
+        &self,
+        id: &str,
+        expected: TaskStatus,
+        next: TaskStatus,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
     /// Все задачи в статусе.
     fn list_by_status(
         &self,

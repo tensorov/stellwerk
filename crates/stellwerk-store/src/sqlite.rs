@@ -38,6 +38,14 @@ fn status_to_str(s: TaskStatus) -> &'static str {
     }
 }
 
+/// Обратная сторона `status_to_str`: разбирает PascalCase-строку базы в статус.
+/// Неизвестная строка — ошибка, а не `Draft`: значение по умолчанию неотличимо от
+/// сознательного решения, а решения здесь не было.
+fn str_to_status(s: &str) -> Result<TaskStatus, StoreError> {
+    let _ = s;
+    unimplemented!("str_to_status: реализация в M2/packet-05b")
+}
+
 /// Хранилище на SQLite.
 ///
 /// `Mutex<Connection>`, а не пул: rusqlite-соединение не является `Sync`, а трейты
@@ -184,6 +192,29 @@ impl TaskStore for SqliteStore {
                 }
                 Err(e) => Err(StoreError::Sqlite(e.to_string())),
             }
+        }
+    }
+
+    fn status_of(
+        &self,
+        id: &str,
+    ) -> impl std::future::Future<Output = Result<Option<TaskStatus>, StoreError>> + Send {
+        // `str_to_status` уже собран: он нужен тому SELECT, что напишет packet-05b.
+        async move {
+            let _ = (id, str_to_status);
+            unimplemented!("status_of: реализация в M2/packet-05b")
+        }
+    }
+
+    fn compare_and_set_status(
+        &self,
+        id: &str,
+        expected: TaskStatus,
+        next: TaskStatus,
+    ) -> impl std::future::Future<Output = Result<bool, StoreError>> + Send {
+        async move {
+            let _ = (id, expected, next);
+            unimplemented!("compare_and_set_status: реализация в M2/packet-05b")
         }
     }
 
@@ -411,5 +442,19 @@ impl ModuleStore for SqliteStore {
                 Err(e) => Err(StoreError::Sqlite(e.to_string())),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Битая строка обязана дать ошибку, а не `Ok(Draft)`. Проверка здесь, а не в
+    /// интеграционном тесте: мусор в колонку пишется только прямым SQL.
+    #[test]
+    fn str_to_status_rejects_unknown_string_instead_of_defaulting() {
+        let parsed = super::str_to_status("НеСтатус");
+        assert!(
+            parsed.is_err(),
+            "неизвестная строка обязана дать Err, а не Ok(Draft): получено {parsed:?}"
+        );
     }
 }
