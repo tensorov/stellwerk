@@ -37,7 +37,10 @@ fn request(risk: ToolRisk, caller: PolicyLevel) -> CallRequest {
 
 #[test]
 fn gateway_decide_is_callable_from_task_crate() {
-    let verdict = decide(&request(ToolRisk::Classified(RiskClass::R2), PolicyLevel::L3Maintainer));
+    let verdict = decide(&request(
+        ToolRisk::Classified(RiskClass::R2),
+        PolicyLevel::L3Maintainer,
+    ));
     assert_eq!(verdict, Verdict::Ask);
 }
 
@@ -45,7 +48,10 @@ fn gateway_decide_is_callable_from_task_crate() {
 fn gateway_denies_irreversible_risk_from_task_crate() {
     // R5 безусловен при любом уровне, включая L5Owner: если бы раннер мог до него
     // дотянуться, необратимое разрушение делегировалось бы агенту.
-    let verdict = decide(&request(ToolRisk::Classified(RiskClass::R5), PolicyLevel::L5Owner));
+    let verdict = decide(&request(
+        ToolRisk::Classified(RiskClass::R5),
+        PolicyLevel::L5Owner,
+    ));
     assert!(
         matches!(verdict, Verdict::Deny { .. }),
         "R5 должен быть Deny, получено {verdict:?}"
