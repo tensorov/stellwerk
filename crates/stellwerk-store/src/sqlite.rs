@@ -14,7 +14,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use stellwerk_core::contract::{Event, TaskSpec, TaskStatus};
 
 use crate::migrations::MIGRATIONS;
@@ -42,8 +42,25 @@ fn status_to_str(s: TaskStatus) -> &'static str {
 /// Неизвестная строка — ошибка, а не `Draft`: значение по умолчанию неотличимо от
 /// сознательного решения, а решения здесь не было.
 fn str_to_status(s: &str) -> Result<TaskStatus, StoreError> {
-    let _ = s;
-    unimplemented!("str_to_status: реализация в M2/packet-05b")
+    match s {
+        "Draft" => Ok(TaskStatus::Draft),
+        "Planned" => Ok(TaskStatus::Planned),
+        "Reviewed" => Ok(TaskStatus::Reviewed),
+        "Delegated" => Ok(TaskStatus::Delegated),
+        "Running" => Ok(TaskStatus::Running),
+        "Suspended" => Ok(TaskStatus::Suspended),
+        "EvidenceSubmitted" => Ok(TaskStatus::EvidenceSubmitted),
+        "Verified" => Ok(TaskStatus::Verified),
+        "Validated" => Ok(TaskStatus::Validated),
+        "Done" => Ok(TaskStatus::Done),
+        "Failed" => Ok(TaskStatus::Failed),
+        "Blocked" => Ok(TaskStatus::Blocked),
+        // `Serialization` не годится: он принимает `serde_json::Error`, а не текст.
+        // `NotFound`/`Conflict` врут про задачу, которая как раз существует.
+        _ => Err(StoreError::Sqlite(format!(
+            "unknown task status in db: {s}"
+        ))),
+    }
 }
 
 /// Хранилище на SQLite.
@@ -199,10 +216,23 @@ impl TaskStore for SqliteStore {
         &self,
         id: &str,
     ) -> impl std::future::Future<Output = Result<Option<TaskStatus>, StoreError>> + Send {
-        // `str_to_status` уже собран: он нужен тому SELECT, что напишет packet-05b.
         async move {
-            let _ = (id, str_to_status);
-            unimplemented!("status_of: реализация в M2/packet-05b")
+            let conn = self.conn.lock().expect("store mutex poisoned");
+            let row = conn
+                .query_row(
+                    "SELECT status FROM tasks WHERE id = ?1",
+                    rusqlite::params![id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional();
+
+            match row {
+                // Строка есть, но значение нечитаемо — ошибка разбора, а не `None`:
+                // «нет статуса» и «статус неизвестен» разные вещи.
+                Ok(Some(raw)) => Ok(Some(str_to_status(&raw)?)),
+                Ok(None) => Ok(None),
+                Err(e) => Err(StoreError::Sqlite(e.to_string())),
+            }
         }
     }
 
@@ -213,8 +243,26 @@ impl TaskStore for SqliteStore {
         next: TaskStatus,
     ) -> impl std::future::Future<Output = Result<bool, StoreError>> + Send {
         async move {
-            let _ = (id, expected, next);
-            unimplemented!("compare_and_set_status: реализация в M2/packet-05b")
+            let conn = self.conn.lock().expect("store mutex poisoned");
+            // Предикат живёт ВНУТРИ UPDATE: «прочитал, потом записал» — это два
+            // разных вызова, между которыми статус успевает сменить другой
+            // исполнитель, и его запись стёрлась бы.
+            let changes = conn.execute(
+                "UPDATE tasks SET status = ?3, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?1 AND status = ?2",
+                rusqlite::params![id, status_to_str(expected), status_to_str(next)],
+            );
+
+            // В SQLite ноль обновлённых строк — не ошибка, поэтому счётчик
+            // проверяется здесь. `Ok(false)` означает и «статус не совпал», и
+            // «задачи нет»; вызывающий обязан считать оба отказом.
+            match changes {
+                Ok(0) => Ok(false),
+                Ok(1) => Ok(true),
+                Ok(n) => Err(StoreError::Sqlite(format!(
+                    "compare_and_set_status touched {n} rows for a single id: {id}"
+                ))),
+                Err(e) => Err(StoreError::Sqlite(e.to_string())),
+            }
         }
     }
 
