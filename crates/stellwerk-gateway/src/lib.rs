@@ -9,5 +9,6 @@
 //! `DataClass::permits_model` (все реализованы в M1).
 
 pub mod gate;
+pub mod mount;
 pub mod permission;
 pub mod shaping;
