@@ -1,7 +1,7 @@
 # packet-09
 plan_id: M3
 goal: RED: чек на каждый вызов — вызов без чека считается несостоявшимся.
-files_allowed: [crates/stellwerk-gateway/src/receipt.rs, crates/stellwerk-gateway/tests/receipt.rs]
+files_allowed: [crates/stellwerk-gateway/src/receipt.rs, crates/stellwerk-gateway/tests/receipt.rs, crates/stellwerk-gateway/src/lib.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-gateway --test receipt
 acceptance: RED: пакет собирается, тест компилируется, прогон падает на заглушке.
@@ -44,6 +44,17 @@ lane: m3/receipt-red
 3. Тесты в `tests/receipt.rs`: хеши совпадают с sha256 тел; `to_event` даёт
    `gateway.call` и заполненный payload; verdict Deny тоже даёт событие;
    пустой вывод хешится без паники.
+
+## Правило объявления модуля
+
+`src/lib.rs` в `files_allowed`, и `pub mod receipt;` объявляется **в этом пакете**,
+рядом с созданием `receipt.rs`, а не в следующем GREEN. Интеграционный тест берёт
+типы через публичный API крейта; без объявления модуля он не компилируется, а с
+`#[path]` скомпилировал бы вторую копию и оставил экспорт непроверенным (F-14).
+
+Это уже третий случай подряд: в M2 требование `pub mod lifecycle;` висело на пакете
+после RED; в M3-06 и M3-07 `lib.rs` не входил в `files_allowed` вовсе. Закрыто
+предраздачным контролем, а не по факту блокировки.
 
 ## Evidence
 
