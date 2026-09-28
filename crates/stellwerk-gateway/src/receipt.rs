@@ -12,9 +12,21 @@
 //!
 //! RED-заглушка M3/packet-09: поверхность объявлена, поведение — packet-10.
 
+use std::collections::BTreeMap;
+
 use thiserror::Error;
 
-use stellwerk_core::contract::{Event, RiskClass};
+use stellwerk_core::contract::{Event, EventSource, RiskClass};
+
+/// Рабочее место, подставляемое в чек.
+///
+/// У чека нет своего `workspace`, а `to_event` получает только `task_id`, поэтому
+/// РЕАЛЬНОЕ рабочее место вызвавшей стороны недоступно и подставляется константой.
+/// Это подстановка вместо отсутствующих данных, а не вычисленное значение: для
+/// федерации с несколькими рабочими местами чек окажется не там, где был вызов.
+/// Отдельный пакет должен принести `workspace` в чек настоящим значением; до
+/// него подстановка помечена явно, чтобы её не приняли за вычисленное.
+const GATEWAY_WORKSPACE: &str = "ws-stellwerk";
 
 /// Решение по вызову. Реэкспорт из `gate`, а не второе объявление: вердикт в чеке
 /// и вердикт `decide` обязаны быть одним типом, иначе чек мог бы оказаться про
@@ -70,7 +82,28 @@ impl Receipt {
     /// `workspace` заполняется: федеративным (`None`) чек вызова не бывает.
     /// RED: поведение — M3/packet-10.
     pub fn to_event(&self, task_id: &str) -> Event {
-        let _ = task_id;
-        unimplemented!("Receipt::to_event: реализация в M3/packet-10")
+        let mut payload = BTreeMap::new();
+        payload.insert("task_id".to_owned(), task_id.to_owned());
+        payload.insert("call_id".to_owned(), self.call_id.clone());
+        payload.insert("tool".to_owned(), self.tool.clone());
+        // `Debug` выбран не по красоте, а потому что он БЕЗ ПОТЕРЬ: `Deny`
+        // уносит причину, а причина обязана дойти до потока. Схема без потерь,
+        // иначе расследование не отличит «запрещено политикой» от «не спросили».
+        payload.insert("verdict".to_owned(), format!("{:?}", self.verdict));
+        payload.insert("truncated".to_owned(), self.truncated.to_string());
+        payload.insert("input_hash".to_owned(), self.input_hash.clone());
+        payload.insert("output_hash".to_owned(), self.output_hash.clone());
+        payload.insert("duration_ms".to_owned(), self.duration_ms.to_string());
+
+        Event {
+            id: self.call_id.clone(),
+            source: EventSource::System,
+            event_type: "gateway.call".to_owned(),
+            actor: self.module.clone(),
+            workspace: Some(GATEWAY_WORKSPACE.to_owned()),
+            risk: self.risk,
+            payload,
+            ts: self.ts.clone(),
+        }
     }
 }
