@@ -1,8 +1,9 @@
 //! Сессия: точка, где permission, gate, shaping и receipt встречаются в одном проходе.
 //!
 //! Gateway инструменты не выполняет: `handle` спрашивает шов `ToolBackend`. Линейный проход
-//! (монтаж, решение, вызов, чек) — M3/packet-12a; вопрос и сбой — 12b, усечение — 12c
-//! (F-24: калибровки `tokens_per_byte` у слоя нет, а усечение без неё — выдуманный byte price).
+//! (монтаж, решение, вызов, усечение, чек) — M3/packet-12a; вопрос и сбой — 12b, усечение по
+//! калибровке `Session.token_calibration` — 12d: без пригодного замера слой отказывается, а
+//! не режет по выдуманной цене байта (F-24).
 //!
 //! Шов `ToolBackend` и опрос `drive` объявлены здесь намеренно: у крейта нет `tokio`, а
 //! `Cargo.toml` вне `files_allowed`, поэтому 11b и 11c берут их отсюда, а не пишут свои.
@@ -30,6 +31,7 @@ pub use crate::receipt::Receipt;
 pub use crate::shaping::Shaped;
 
 use crate::gate::decide;
+use crate::shaping::shape;
 
 /// Измеренная цена байта вывода: данных у слоя нет, они приходят параметром от загрузчика,
 /// который читает `modules.toml` снаружи. Хардкод здесь был бы вторым источником истины.
@@ -92,7 +94,7 @@ impl Session {
             Ok(Some(verdict)) => {
                 // Отказ — тоже чек: вызов без следа неотличим от небывшего (REVIEW §3.1).
                 // Тела у него нет, поэтому хеш пустого вывода, а не «не посчитали».
-                let receipt = self.receipt(req, &verdict, &sha256_hex(&[]), 0);
+                let receipt = self.receipt(req, &verdict, &sha256_hex(&[]), 0, false);
                 return Box::pin(ready(Ok(CallOutcome {
                     verdict,
                     shaped: None,
@@ -124,7 +126,7 @@ impl Session {
                 Err(source) => {
                     let duration_ms =
                         u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-                    let receipt = self.receipt(req, &verdict, &sha256_hex(&[]), duration_ms);
+                    let receipt = self.receipt(req, &verdict, &sha256_hex(&[]), duration_ms, false);
                     // `receipt` — `None` РОВНО при `Unclassified`, а `decide` при
                     // `Unclassified` `Allow` не выдаёт (`gate.rs`: без интерактива —
                     // `Deny`, с интерактивом — `Ask`). Подставить вместо чека `R0`
@@ -143,16 +145,36 @@ impl Session {
             // Счётчик — после успеха: невидимый вызов не работа.
             self.calls += 1;
             let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-            // Хеш полного тела считаем сами, а не берём из `shape`: калибровки у слоя нет
-            // (`modules.toml` недостижим, а поле `Session` добавить нельзя), и 12a не решает,
-            // влезает ли вывод в порог. Хеш — факт о теле, а не оценка его цены.
-            let receipt = self.receipt(req, &verdict, &sha256_hex(output.as_bytes()), duration_ms);
-            // `shaped` — `None`, а не «усечённый вывод»: этот слой не усекает и не решает,
-            // что усекать, потому что калибровки у него нет. Поле описано как «усечение
-            // вывода», и `None` здесь — честное «не усекал», а не «не посчитали».
+            // Усечение решается ДО чека: чек обязан сказать, усечён ли вывод, а угадывать
+            // это по хешу нельзя. `shaped` заполняется всегда, когда решение принято:
+            // `None` после реальной попытки усечения сказало бы «усечение не понадобилось»,
+            // что ложно, и вызывающая сторона не отличила бы его от вызова, до шейпинга не
+            // дошедшего.
+            let shaped = match self.shaped(req, &output) {
+                Ok(shaped) => shaped,
+                Err(cause) => {
+                    // Инструмент ОТВЕТИЛ и тело у нас есть: чек едет внутри ошибки, иначе
+                    // вызов без следа неотличим от вызова, которого не было (REVIEW §3.1).
+                    // Усечения не было — об этом и говорит чек, а ошибка называет причину.
+                    let hash = sha256_hex(output.as_bytes());
+                    let Some(receipt) = self.receipt(req, &verdict, &hash, duration_ms, false)
+                    else {
+                        unreachable!("`decide` не разрешает вызов при неизвестном риске");
+                    };
+                    return Err(SessionError::Calibration {
+                        cause,
+                        receipt: Box::new(receipt),
+                    });
+                }
+            };
+            // Хеш полного тела берём ИЗ `Shaped`, а не считаем второй раз: он посчитан по
+            // телу ДО усечения, и артефакт назван им же. Второй счёт дал бы два хеша, и
+            // сверка артефакта с чеком прошла бы на любом выводе (REVIEW §3.3).
+            let receipt =
+                self.receipt(req, &verdict, &shaped.sha256, duration_ms, shaped.truncated);
             Ok(CallOutcome {
                 verdict,
-                shaped: None,
+                shaped: Some(shaped),
                 receipt,
             })
         })
@@ -242,12 +264,15 @@ impl Session {
     /// Чек вызова. `None` — ТОЛЬКО `Unclassified`: в `Receipt.risk` лежит `RiskClass`,
     /// «риск неизвестен» туда не вписывается, а `R0` означал бы нулевой риск (закон 6).
     /// Отсутствие — состояние, и имя ему даёт причина в `Deny`, а не молчаливый `None`.
+    /// `full_output_hash` — хеш ПОЛНОГО тела, `truncated` — что с ним сделали: без
+    /// усечения чек врал бы так же, как и с усечением, но молча.
     fn receipt(
         &self,
         req: &CallRequest,
         verdict: &Verdict,
         full_output_hash: &str,
         duration_ms: u64,
+        truncated: bool,
     ) -> Option<Receipt> {
         let ToolRisk::Classified(risk) = req.risk else {
             return None;
@@ -260,12 +285,54 @@ impl Session {
             risk,
             empty_input_digest: sha256_hex(&[]),
             full_output_hash: full_output_hash.to_owned(),
-            // Всегда ложь: этот слой не усекает и не решает, влезает ли вывод в порог,
-            // потому что калибровки у него нет. Правду про усечение ставит 12c.
-            truncated: false,
+            truncated,
             duration_ms,
             ts: rfc3339_utc(unix_secs()),
         })
+    }
+
+    /// Усечь вывод по калибровке СВОЕЙ модели, иначе отказ с ИМЕНЕМ причины.
+    ///
+    /// Каталог артефактов — рядом с inbox, тем же `.stellwerk`: у вывода, который ушёл
+    /// в файл, должно быть место, о котором сессия знает, а не угадывает вызывающая.
+    fn shaped(&self, req: &CallRequest, output: &str) -> Result<Shaped, String> {
+        let tokens_per_byte = self.tokens_per_byte(req)?;
+        let dir = self.root.join(".stellwerk/artifacts");
+        // Сбой `shape` — не «калибровка непригодна» и не «инструмент упал»: тело уже
+        // получено, и растворить его в `shaped: None` значило бы сказать «усечение не
+        // понадобилось». Причина едет в том же варианте ошибки, с её именем.
+        shape(output, tokens_per_byte, &dir).map_err(|err| format!("shape: {err}"))
+    }
+
+    /// Пригодная величина `tokens_per_byte` для модели этого вызова — либо отказ.
+    ///
+    /// Порядок обязателен: сначала «никто не мерил», потом непригодное число, потом
+    /// чужой замер. Непригодная величина не превращается в «вывод влезает» — это было бы
+    /// тем же решением, принятым по умолчанию, только без чьего-либо участия (закон 6).
+    fn tokens_per_byte(&self, req: &CallRequest) -> Result<f64, String> {
+        // `None` — «замера нет», а не ноль: нулём считать вывод — значило бы объявить
+        // его бесплатным, и усекать тогда было бы не по чему.
+        let Some(calibration) = &self.token_calibration else {
+            return Err("tokens_per_byte: замера нет, цена байта вывода неизвестна".into());
+        };
+        let value = calibration.tokens_per_byte;
+        // `is_finite` ДО сравнений: `NaN <= 0.0` ложно, и охран `> 0.0` пропустил бы
+        // непригодную величину, которая в `shape` выглядела бы как «вывод влезает».
+        if !value.is_finite() || value <= 0.0 {
+            return Err(format!(
+                "tokens_per_byte: {value:?} непригоден, нужен конечный и положительный"
+            ));
+        }
+        // Замер другой пары «провайдер/модель» режет по чужому токенизатору, и отличить
+        // такой результат от своего по виду нечем.
+        if calibration.provider != req.model.provider || calibration.model_id != req.model.model_id
+        {
+            return Err(format!(
+                "tokens_per_byte: замер {}/{}, а вызов идёт к {}/{}",
+                calibration.provider, calibration.model_id, req.model.provider, req.model.model_id
+            ));
+        }
+        Ok(value)
     }
 }
 
@@ -425,7 +492,9 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 pub struct CallOutcome {
     /// Решение. `Deny` и `Suspended` — успешный проход, а не сбой сессии.
     pub verdict: Verdict,
-    /// Усечение вывода, если вызов состоялся и вывод не поместился в порог.
+    /// Усечение вывода по калибровке. Заполнено ВСЕГДА, когда вызов состоялся с
+    /// пригодной калибровкой, и не заполнено там, где инструмент не звали: `None`
+    /// после попытки усечения сказало бы «усечение не понадобилось», чего никто не знает.
     pub shaped: Option<Shaped>,
     /// Чек вызова. `Deny` — тоже чек: «тихая» попытка не видна в расследовании, а вызов
     /// без следа неотличим от небывшего. `None` — риск вызова неизвестен, и класс в чек
@@ -523,6 +592,17 @@ pub enum SessionError {
     /// никто не отказывал, и в расследовании это разные вещи.
     #[error("approval_timeout: окно ответа истекло")]
     ApprovalTimeout,
+    /// Мерить нечем: калибровки нет, её величина непригодна или снята у другой модели.
+    /// Третий исход, а не `Tool` («инструмент ответил») и не `ApprovalTimeout` («окно
+    /// ответа тут ни при чём»), и молчаливый отказ неотличим от успеха (В4, закон 6).
+    #[error("calibration: {cause}")]
+    Calibration {
+        /// Что именно с замером: его нет, величина непригодна или чужой модели.
+        cause: String,
+        /// Чек состоявшегося вызова: тело получено, оно не усечено. В коробке — чек на
+        /// 208 байт, и без индирекции clippy справедливо требует его упаковать.
+        receipt: Box<Receipt>,
+    },
 }
 
 /// Довести future до `Ready` без чужого исполнителя: крейт от `tokio` не зависит, а

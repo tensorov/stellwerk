@@ -13,7 +13,7 @@ use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, RetentionCl
 use stellwerk_gateway::gate::{CallRequest, Verdict};
 use stellwerk_gateway::mount::MountPlan;
 use stellwerk_gateway::permission::ToolRisk;
-use stellwerk_gateway::session::{drive, Session, ToolBackend, ToolError};
+use stellwerk_gateway::session::{drive, Session, TokenCalibration, ToolBackend, ToolError};
 
 /// Единственный инструмент в плане: всё, чего в нём нет, вне монтажа.
 const MOUNTED: &str = "read_file";
@@ -66,7 +66,13 @@ fn session() -> Session {
         },
         caller: PolicyLevel::L5Owner,
         budget_tokens: 43_000,
-        token_calibration: None,
+        token_calibration: Some(TokenCalibration {
+            provider: "neuraldeep".into(),
+            model_id: "m".into(),
+            tokens_per_byte: 1.0,
+            measured_at: "2026-09-29T00:00:00Z".into(),
+            source: "test".into(),
+        }),
         calls: 0,
         subagent_depth: 0,
         root: std::env::temp_dir().join("m3-11b"),
