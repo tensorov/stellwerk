@@ -8,6 +8,7 @@
 //! строка не-JSON обязана стать `MalformedLine`. Импорт — публичный API, не `#[path]`:
 //! тот собрал бы вторую копию модуля и оставил реэкспорт непроверенным (F-14).
 
+use stellwerk_task::runner::{stop_reason_from, StopFacts};
 use stellwerk_task::runner::{verdict_for, Progress, StopReason, Verdict};
 use stellwerk_task::runner::{EventSource, RunnerError};
 
@@ -39,6 +40,122 @@ fn zero_tool_steps_is_its_own_reason() {
 fn one_turn_is_its_own_reason() {
     let v = verdict_for(StopReason::Stop, 1, 1);
     assert_eq!(v, Verdict::InvalidTooFewTurns);
+}
+
+// --- F-18a: причина остановки выводится из фактов процесса, а не выдумывается ---
+
+#[test]
+fn our_timeout_with_zero_code_and_no_name_is_timeout() {
+    let f = StopFacts {
+        timed_out: true,
+        exit_code: 0,
+        named: None,
+    };
+    assert_eq!(stop_reason_from(f), StopReason::Timeout);
+}
+
+#[test]
+fn nonzero_code_outranks_named_stop() {
+    let f = StopFacts {
+        timed_out: false,
+        exit_code: 1,
+        named: Some(StopReason::Stop),
+    };
+    let reason = stop_reason_from(f);
+    assert_eq!(
+        reason,
+        StopReason::Error,
+        "провайдер сказал stop, процесс упал"
+    );
+    assert_ne!(
+        reason,
+        StopReason::Stop,
+        "слово потока не перебивает код возврата"
+    );
+}
+
+#[test]
+fn named_reason_at_exit_zero_survives_verbatim() {
+    for named in [StopReason::Stop, StopReason::Error, StopReason::Aborted] {
+        let f = StopFacts {
+            timed_out: false,
+            exit_code: 0,
+            named: Some(named),
+        };
+        assert_eq!(
+            stop_reason_from(f),
+            named,
+            "провайдер назвал — храним ровно это"
+        );
+    }
+}
+
+#[test]
+fn our_timeout_outranks_nonzero_code() {
+    let f = StopFacts {
+        timed_out: true,
+        exit_code: 3,
+        named: Some(StopReason::Stop),
+    };
+    let reason = stop_reason_from(f);
+    assert_eq!(
+        reason,
+        StopReason::Timeout,
+        "прогон, который мы убили, не бывает успешным"
+    );
+    assert_ne!(
+        reason,
+        StopReason::Error,
+        "код возврата не отменяет наш таймаут"
+    );
+}
+
+#[test]
+fn silent_exit_zero_is_unreported_and_never_stop() {
+    let f = StopFacts {
+        timed_out: false,
+        exit_code: 0,
+        named: None,
+    };
+    let reason = stop_reason_from(f);
+    assert_eq!(reason, StopReason::Unreported, "поток молчал при коде 0");
+    assert_ne!(
+        reason,
+        StopReason::Stop,
+        "код 0 — не доказательство, что модель дошла"
+    );
+}
+
+#[test]
+fn unreported_is_distinguishable_by_variant_not_only_by_verdict() {
+    for other in [
+        StopReason::Stop,
+        StopReason::Error,
+        StopReason::Timeout,
+        StopReason::Aborted,
+    ] {
+        assert_ne!(
+            StopReason::Unreported,
+            other,
+            "причина видна в evidence по варианту"
+        );
+    }
+    assert_eq!(
+        verdict_for(StopReason::Unreported, 1, 2),
+        verdict_for(StopReason::Error, 1, 2),
+        "вердикт совпадает — различает именно вариант"
+    );
+}
+
+#[test]
+fn unreported_run_is_never_valid() {
+    let v = verdict_for(StopReason::Unreported, 1, 2);
+    assert_eq!(
+        v,
+        Verdict::InvalidLoop,
+        "молчание — аномалия, гейт обязан её валить"
+    );
+    assert_ne!(v, Verdict::Valid, "Unreported прошёл как успех");
 }
 
 #[test]
