@@ -1,7 +1,7 @@
 # packet-11
 plan_id: M3
 goal: RED: виртуальная MCP-сессия — маршрутизация вызова по цепочке permission → gate → shaping → receipt.
-files_allowed: [crates/stellwerk-gateway/src/session.rs, crates/stellwerk-gateway/tests/session.rs]
+files_allowed: [crates/stellwerk-gateway/src/session.rs, crates/stellwerk-gateway/tests/session.rs, crates/stellwerk-gateway/src/lib.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-gateway --test session
 acceptance: RED: пакет собирается, тест компилируется, прогон падает на заглушке.
@@ -73,6 +73,21 @@ lane: m3/session-red
   что позволит понять, что именно чинить.
 - Полноценная изоляция (podman/bubblewrap, namespace) остаётся в `DEFERRED`
   вместе с namespace-песочницей.
+
+## Правило объявления модуля
+
+`src/lib.rs` добавлен в `files_allowed`, и `pub mod session;` объявляется **в этом
+пакете**, рядом с созданием `session.rs`, а не в следующем GREEN.
+
+Интеграционный тест берёт типы через публичный API крейта: без объявления модуля
+он не компилируется, а с `#[path]` скомпилировал бы вторую копию и оставил экспорт
+непроверенным (F-14). Требование, висящее на пакете ПОСЛЕ зависимого от него RED,
+делает RED несуществующим.
+
+M3-11 уже лежит в цепочке milestone (11 ← 10 ← 09 ← 08 ← 07 ← 06 ← 05 ← …), поэтому
+добавление `lib.rs` не рвёт порядок и не плодит C1/C9. Пакеты M4 так чинить нельзя:
+они в другом milestone, и C9 потребовал бы от них зависимостей от закрытых
+пакетов M2 — это решение владельца (F-16), здесь не делается.
 
 ## Evidence
 
