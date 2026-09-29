@@ -1,18 +1,20 @@
 //! Сессия: точка, где permission, gate, shaping и receipt встречаются в одном проходе.
 //!
-//! Gateway инструменты не выполняет. `handle` — RED-заглушка M3/packet-11a: маршрутизацию
-//! закрепляет 11b, вопрос и сбой — 11c, реализация — packet-12.
+//! Gateway инструменты не выполняет: `handle` спрашивает шов `ToolBackend`. Линейный проход
+//! (монтаж, решение, вызов, чек) — M3/packet-12a; вопрос, сбой и усечение — 12b.
 //!
 //! Шов `ToolBackend` и опрос `drive` объявлены здесь намеренно: у крейта нет `tokio`, а
 //! `Cargo.toml` вне `files_allowed`, поэтому 11b и 11c берут их отсюда, а не пишут свои.
 
-use std::future::Future;
+use std::future::{ready, Future};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use stellwerk_core::contract::PolicyLevel;
@@ -24,6 +26,8 @@ pub use crate::mount::MountPlan;
 pub use crate::permission::ToolRisk;
 pub use crate::receipt::Receipt;
 pub use crate::shaping::Shaped;
+
+use crate::gate::decide;
 
 /// Сессия: смонтированный набор, полномочия и бюджет одного прогона.
 #[derive(Debug, Clone)]
@@ -48,18 +52,181 @@ pub struct Session {
 }
 
 impl Session {
-    /// Провести один вызов: permission → gate → shaping → receipt.
+    /// Провести один вызов: монтаж → `decide` → вызов → чек.
     ///
     /// Отдаёт future, а не `Result`: исполнителя в крейте нет, и `drive` ниже доводит
-    /// его сам. RED M3/packet-11a: поведение — M3/packet-12.
+    /// его сам. Вопрос оператору, сбой инструмента и усечение вывода — M3/packet-12b.
     pub fn handle<'a>(
         &'a mut self,
         req: &'a CallRequest,
         backend: &'a dyn ToolBackend,
     ) -> Pin<Box<dyn Future<Output = Result<CallOutcome, SessionError>> + Send + 'a>> {
-        let _ = (self, req, backend);
-        unimplemented!("M3/packet-12: session::handle (маршрутизация 11b, вопрос 11c)")
+        if let Some(verdict) = self.refusal(req) {
+            // Отказ — тоже чек: вызов без следа неотличим от небывшего (REVIEW §3.1). Тела
+            // у него нет, поэтому хеш пустого вывода, а не «не посчитали».
+            let receipt = self.receipt(req, &verdict, &sha256_hex(&[]), 0);
+            return Box::pin(ready(Ok(CallOutcome {
+                verdict,
+                shaped: None,
+                receipt,
+            })));
+        }
+        // Отказа нет — остаётся единственная оставшаяся ветка `decide`.
+        let verdict = Verdict::Allow;
+        // Аргументов у `CallRequest` нет, и вход вызова — пустое тело: подставить
+        // отсебятину значило бы передать инструменту не то, о чём потом скажет чек.
+        let input = String::new();
+        let started = Instant::now();
+        // `invoke` вызван здесь, а не внутри future: `Send`-future не удерживает
+        // `&dyn ToolBackend` без `Sync`, а побочные эффекты живут в самом future.
+        let called = backend.invoke(&req.tool, &input);
+        Box::pin(async move {
+            let output = match called.await {
+                Ok(output) => output,
+                // Чек упавшего вызова едет внутри `SessionError::Tool` — 12b.
+                Err(_) => unimplemented!("M3/packet-12b: сбой инструмента не теряет чек"),
+            };
+            // Счётчик — после успеха: невидимый вызов не работа.
+            self.calls += 1;
+            let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            // Хеш полного тела считаем сами, а не берём из `shape`: калибровки у слоя нет
+            // (`modules.toml` недостижим, а поле `Session` добавить нельзя), и 12a не решает,
+            // влезает ли вывод в порог. Хеш — факт о теле, а не оценка его цены.
+            let receipt = self.receipt(req, &verdict, &sha256_hex(output.as_bytes()), duration_ms);
+            // `shaped` — `None`, а не «усечённый вывод»: 12a не усекает и не решает, что
+            // усекать, а поле описано как «усечение вывода». Тело в контекст 12a не
+            // отдаёт — это работа 12b вместе с калибровкой.
+            Ok(CallOutcome {
+                verdict,
+                shaped: None,
+                receipt,
+            })
+        })
     }
+
+    /// Решение, останавливающее вызов: монтаж, а затем `decide`. `None` — вызов
+    /// разрешён и уходит в инструмент.
+    fn refusal(&self, req: &CallRequest) -> Option<Verdict> {
+        // Монтаж ДО `decide`: «смонтирован ли инструмент» к риску отношения не имеет, а
+        // вопрос про инструмент, которого нет, задавать некому.
+        if let Some(reason) = mount_refusal(&self.plan, &req.tool) {
+            return Some(Verdict::Deny { reason });
+        }
+        let verdict = decide(req);
+        match verdict {
+            // Решение — только `decide`, своей таблицы рисков у сессии нет. `R5` отсекает
+            // он сам (`Permission::Deny` до `Ask`-ветки `RISK_PERMISSION`): второй отсек
+            // риска здесь был бы копией таблицы, а отсек шире R5 убил бы `Ask` у R3/R4.
+            Verdict::Deny { .. } => Some(verdict),
+            // Вопрос без подтверждения не разрешение (REVIEW §4.4), а `Suspended` обязан
+            // отличаться от `Deny` (В4): уходят в 12b вместе с inbox и окном ответа.
+            Verdict::Ask | Verdict::Suspended => {
+                unimplemented!("M3/packet-12b: Ask в неинтерактивном Run")
+            }
+            Verdict::Allow => None,
+        }
+    }
+
+    /// Чек вызова. `None` — ТОЛЬКО `Unclassified`: в `Receipt.risk` лежит `RiskClass`,
+    /// «риск неизвестен» туда не вписывается, а `R0` означал бы нулевой риск (закон 6).
+    /// Отсутствие — состояние, и имя ему даёт причина в `Deny`, а не молчаливый `None`.
+    fn receipt(
+        &self,
+        req: &CallRequest,
+        verdict: &Verdict,
+        output_hash: &str,
+        duration_ms: u64,
+    ) -> Option<Receipt> {
+        let ToolRisk::Classified(risk) = req.risk else {
+            return None;
+        };
+        Some(Receipt {
+            call_id: call_id(&self.id, &req.tool),
+            tool: req.tool.clone(),
+            module: req.module.clone(),
+            verdict: verdict.clone(),
+            risk,
+            input_hash: sha256_hex(&[]),
+            output_hash: output_hash.to_owned(),
+            // Всегда ложь: 12a не усекает и не решает, влезает ли вывод в порог, потому что
+            // калибровки у слоя нет. Правду про усечение ставит 12b.
+            truncated: false,
+            duration_ms,
+            ts: rfc3339_utc(unix_secs()),
+        })
+    }
+}
+
+/// Отказ по монтажу, до `decide`. Причина различает «отсеян монтажом» и «инструмента
+/// нет»: второе не должно читаться как «политика запретила».
+fn mount_refusal(plan: &MountPlan, tool: &str) -> Option<String> {
+    if plan.mounted.iter().any(|name| name == tool) {
+        return None;
+    }
+    let why = match plan.skipped.iter().find(|(name, _)| name == tool) {
+        Some((_, reason)) => format!(" — отсеян монтажом: {reason:?}"),
+        None => String::new(),
+    };
+    Some(format!(
+        "not_mounted: инструмент {tool} не смонтирован{why}"
+    ))
+}
+
+/// SHA-256 в hex: хешируется и пустое тело, потому что «вывода не было» и «хеш не
+/// посчитали» — разные вещи, и пустой строкой они слились бы.
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+/// Идентификатор вызова: `Event.id` в потоке уникален, а `append` отдаёт `Conflict` на
+/// повторе, поэтому два одинаковых отказа в одном прогоне не должны делить `id`. Счётчика
+/// отказов у сессии нет — `calls` растёт только на состоявшихся вызовах.
+fn call_id(run: &str, tool: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    format!("{run}-{nanos}-{tool}")
+}
+
+/// Секунды Unix для `Receipt.ts`. `unwrap_or_default`, а не паника: часы раньше эпохи —
+/// дефект машины, и в чеке это видно как 1970 год, а не как «время неизвестно».
+fn unix_secs() -> i64 {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    i64::try_from(secs).unwrap_or(i64::MAX)
+}
+
+/// Время чека в RFC 3339 UTC: `Event` сравнивает времена строками, а пустое или
+/// выдуманное время неотличимо от времени вызова. Форматтер свой, потому что
+/// `Cargo.toml` вне `files_allowed`, а крейт с датой к гейту не подключён.
+fn rfc3339_utc(secs: i64) -> String {
+    let (days, rest) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    let (year, month, day) = civil_from_days(days);
+    let (hour, minute, second) = (rest / 3_600, (rest % 3_600) / 60, rest % 60);
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+/// Год, месяц и день по дню от эпохи: переносы и века считаются, а не берутся из таблицы,
+/// которую обязан проверять глаз.
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
 /// Итог вызова, дошедший до вызывающей стороны.
@@ -69,7 +236,9 @@ pub struct CallOutcome {
     pub verdict: Verdict,
     /// Усечение вывода, если вызов состоялся и вывод не поместился в порог.
     pub shaped: Option<Shaped>,
-    /// Чек вызова. `None` — «вызова не было»; у состоявшегося он обязателен.
+    /// Чек вызова. `Deny` — тоже чек: «тихая» попытка не видна в расследовании, а вызов
+    /// без следа неотличим от небывшего. `None` — риск вызова неизвестен, и класс в чек
+    /// не вписывается; имя состоянию даёт причина отказа.
     pub receipt: Option<Receipt>,
 }
 
