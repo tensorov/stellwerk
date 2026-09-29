@@ -33,19 +33,40 @@ lane: m4/approval
    отвечают за разное: раннер решает «можно ли», approval — «кого спросить и куда
    положить вопрос». Общий файл означал бы, что пакет 05 и этот пакет не могут
    идти параллельно, а они могут.
-2. `pub struct ApprovalRequest { run_id, task_id, tool, arguments, risk, answerable_by, window_hours, expires_at }`
+2. `pub struct ApprovalRequest { run_id, task_id, tool, empty_args_digest, risk, answerable_by, window_hours, expires_at }`
+   (`empty_args_digest`, а не `arguments`: полей с телом у `CallRequest` ноль — проверено
+   поиском `args|arguments|input|body|payload` по `gate.rs`. Слитый M3-12b уже назвал это
+   `empty_args_digest`; пустая строка означала бы «не посчитали», а это закон 6)
    и `pub fn park(request: &ApprovalRequest, inbox: &Path) -> Result<(), ApprovalError>`.
-3. `pub fn next_status(verdict: &Verdict, risk: RiskClass) -> TaskStatus` — маппинг
+3. `pub fn next_status(verdict: &CallVerdict, risk: ToolRisk) -> TaskStatus` — маппинг
    вердикта в статус:
    - `Ask` в неинтерактивном прогоне → `TaskStatus::Suspended`, **через предикат
      `TaskStatus::can_transition_to`**, без собственного свода переходов;
    - `Deny` → `TaskStatus::Failed`;
    - `Suspended` → `TaskStatus::Suspended`;
    - `Allow` → без смены статуса.
+
+   > **Правка 2026-09-29 (F-34).** Здесь стояло `next_status(verdict: &Verdict, risk: RiskClass)`.
+   > Сигнатура не выражала собственных требований пакета, и обе причины — независимые от
+   > развилки по контракту inbox, то есть чинятся здесь, а не после решения владельца.
+   >
+   > **`RiskClass` не может выразить `Unclassified`.** В нём только `R0`–`R5`
+   > (`contract.rs`), а пакет ниже требует «`Unclassified` в неинтерактивном прогоне →
+   > `Deny`, а не `Suspended`». Нужен `ToolRisk` — у него `Classified(RiskClass)` и
+   > `Unclassified` (`permission.rs:33`), и `gate.rs:66,79` различает их именно так. Он же
+   > уже импортирован в крейт: `runner.rs:23`.
+   >
+   > **Безымянный `&Verdict` разрешился бы НЕ в тот тип.** В `stellwerk-task` их два:
+   > `runner::Verdict` (`runner.rs:108`) — вердикт **прогона** (`Valid`, `InvalidLoop`,
+   > `InvalidNoToolSteps`, `InvalidTooFewTurns`), и `gate::Verdict` — вердикт **вызова**
+   > (`Allow`, `Ask`, `Suspended`, `Deny { reason }`). Гейтовский переименован в
+   > `CallVerdict` (`runner.rs:29`) ровно затем, чтобы имена не разошлись по смыслу, и
+   > `events.rs:22-24` фиксирует это как правило. В `approval.rs` безымянный `&Verdict`
+   > подхватил бы **прогонный**, а у него вариантов `Ask`/`Deny`/`Allow` нет вовсе.
 4. `park` пишет `.stellwerk/inbox/<run_id>.json`: `run_id`, `task_id`, инструмент,
-   аргументы, риск, кто может ответить (`L5Owner` из контракта), окно ответа и
+   дайджест пустого тела, риск, кто может ответить (`L5Owner` из контракта), окно ответа и
    срок (`R4` — 4ч, иначе 24ч).
-2. Тесты обязаны утверждать **статус в БД**, а не только код возврата:
+5. Тесты обязаны утверждать **статус в БД**, а не только код возврата:
    - `Ask` неинтерактивно → `TaskStatus::Suspended` в БД, inbox-файл существует;
    - в JSON есть `run_id`, `tool`, `risk`, `expires_at`;
    - **`R5` при `L5Owner` → `Deny`, а НЕ `Suspended`, и inbox-файла нет.**
@@ -54,7 +75,7 @@ lane: m4/approval
    - `Unclassified` в неинтерактивном прогоне → `Deny`, а не `Suspended`:
      вопрос задать некому, а `Suspended` ждал бы ответа, которого не будет.
      `Suspended` допустим **только** когда вопрос действительно кому-то задаётся.
-3. Путь inbox — из `STELLWERK_INBOX` с умолчанием `.stellwerk/inbox`, чтобы тесты
+6. Путь inbox — из `STELLWERK_INBOX` с умолчанием `.stellwerk/inbox`, чтобы тесты
    не писали в рабочий каталог. Отсутствие переменной и её пустое значение —
    разные случаи: пустое значение должно давать ошибку, а не молчаливый
    умолчательный путь.
