@@ -6,7 +6,7 @@ max_diff_lines: 200
 test: cargo test -p stellwerk-task --test permission_wire
 acceptance: `cargo test -p stellwerk-task --test permission_wire` → 0 failed. `cargo test -p stellwerk-gateway` остаётся 27/27 — регрессии нет.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
-depends_on: [02, M2-09, M2-10, M2-11]
+depends_on: [02, M2-09, M2-10, M2-11, M2-13, M2-14]
 data_class: public
 lane: m4/authorize
 
