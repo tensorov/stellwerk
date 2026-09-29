@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 stellwerk-core = { path = "../stellwerk-core" }
+rmcp       = { workspace = true }
 clap       = { workspace = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }
