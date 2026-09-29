@@ -1,7 +1,7 @@
 # packet-11
 plan_id: M2
 goal: RED: запись событий прогона в хранилище — каждый шаг Pi обязан стать событием федерации.
-files_allowed: [crates/stellwerk-task/src/runner.rs, crates/stellwerk-task/src/events.rs, crates/stellwerk-task/tests/events.rs]
+files_allowed: [crates/stellwerk-task/src/events.rs, crates/stellwerk-task/tests/events.rs, crates/stellwerk-task/src/lib.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-task --test events
 acceptance: RED: пакет собирается, тест компилируется, прогон падает на заглушке.
@@ -43,6 +43,21 @@ lane: m2/events-red
    - `run.invalid` появляется при `Verdict::InvalidLoop` и несёт причину в payload;
    - у всех событий `payload["task_id"] == spec.id`;
    - события пишутся в `SqliteStore` и читаются `list_by_task` в том же порядке.
+
+## Правило объявления модуля
+
+`src/lib.rs` добавлен в `files_allowed`, и ``pub mod events;`` объявляется **в этом пакете**,
+рядом с созданием ``events.rs``, а не в следующем GREEN.
+
+Интеграционный тест берёт типы через публичный API крейта: без объявления модуля
+он не компилируется, а с `#[path]` скомпилировал бы вторую копию и оставил экспорт
+непроверенным (F-14). Требование, висящее на пакете ПОСЛЕ зависимого от него RED,
+делает RED несуществующим — так был заблокирован M2-05.
+
+`lib.rs` — общий ресурс, а не частный файл пакета: на `stellwerk-task/src/lib.rs`
+претендуют пакеты M2-01, 05, 07, 09, 11, 12, и порядок держится транзитивной
+цепочкой. Пакеты M4 объявляют тех владельцев из M2, чей файл трогают, — это уже
+существующий паттерн, а не новая связь между milestone (F-16).
 
 ## Evidence
 

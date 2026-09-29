@@ -1,12 +1,12 @@
 # packet-05
 plan_id: M4
 goal: RED — чек пишется на КАЖДЫЙ вызов, включая запрещённый, и worker не запускается при отказе.
-files_allowed: [crates/stellwerk-task/src/runner.rs, crates/stellwerk-task/tests/vertical.rs]
+files_allowed: [crates/stellwerk-task/src/runner.rs, crates/stellwerk-task/tests/vertical.rs, crates/stellwerk-task/src/lib.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-task --test vertical
 acceptance: RED: тест компилируется, прогон падает на заглушке. Каждый сценарий отдельным `#[test] fn`.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
-depends_on: [03, M2-09, M2-10, M2-11, M2-12]
+depends_on: [03, M2-09, M2-10, M2-11, M2-12, M2-01, M2-05, M2-07]
 data_class: public
 lane: m4/vertical
 
@@ -48,6 +48,21 @@ lane: m4/vertical
 отсутствие события неотличимо от «событие записать забыли». Счётчик отделяет
 факт запуска от факта записи — иначе тест на отказ проходит и при молчащем
 раннере, то есть не проверяет ничего.
+
+## Правило объявления модуля
+
+`src/lib.rs` добавлен в `files_allowed`, и ``pub mod runner;`` объявляется **в этом пакете**,
+рядом с созданием ``runner.rs``, а не в следующем GREEN.
+
+Интеграционный тест берёт типы через публичный API крейта: без объявления модуля
+он не компилируется, а с `#[path]` скомпилировал бы вторую копию и оставил экспорт
+непроверенным (F-14). Требование, висящее на пакете ПОСЛЕ зависимого от него RED,
+делает RED несуществующим — так был заблокирован M2-05.
+
+`lib.rs` — общий ресурс, а не частный файл пакета: на `stellwerk-task/src/lib.rs`
+претендуют пакеты M2-01, 05, 07, 09, 11, 12, и порядок держится транзитивной
+цепочкой. Пакеты M4 объявляют тех владельцев из M2, чей файл трогают, — это уже
+существующий паттерн, а не новая связь между milestone (F-16).
 
 ## Evidence
 

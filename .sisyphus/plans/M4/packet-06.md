@@ -1,12 +1,12 @@
 # packet-06
 plan_id: M4
 goal: GREEN — цепочка evidence `ModelClaim → ToolAttestation → Validation → GateResult` для каждого вызова.
-files_allowed: [crates/stellwerk-task/src/evidence.rs, crates/stellwerk-task/tests/vertical.rs]
+files_allowed: [crates/stellwerk-task/src/evidence.rs, crates/stellwerk-task/tests/vertical.rs, crates/stellwerk-task/src/lib.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-task --test vertical
 acceptance: `cargo test -p stellwerk-task --test vertical` → 0 failed.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
-depends_on: [05, M2-12]
+depends_on: [05, M2-12, M2-01, M2-05, M2-07, M2-09, M2-10, M2-11]
 data_class: public
 lane: m4/vertical
 
@@ -39,6 +39,21 @@ lane: m4/vertical
 3. `tests/vertical.rs` **не трогать** — пакет реализует, чтобы уже написанные
    RED-тесты прошли. Единственное допустимое дополнение — новый сценарий, если
    без него тест невыразим; и тогда он пишется **сюда**, а не правкой чужого.
+
+## Правило объявления модуля
+
+`src/lib.rs` добавлен в `files_allowed`, и ``pub mod evidence;`` объявляется **в этом пакете**,
+рядом с созданием ``evidence.rs``, а не в следующем GREEN.
+
+Интеграционный тест берёт типы через публичный API крейта: без объявления модуля
+он не компилируется, а с `#[path]` скомпилировал бы вторую копию и оставил экспорт
+непроверенным (F-14). Требование, висящее на пакете ПОСЛЕ зависимого от него RED,
+делает RED несуществующим — так был заблокирован M2-05.
+
+`lib.rs` — общий ресурс, а не частный файл пакета: на `stellwerk-task/src/lib.rs`
+претендуют пакеты M2-01, 05, 07, 09, 11, 12, и порядок держится транзитивной
+цепочкой. Пакеты M4 объявляют тех владельцев из M2, чей файл трогают, — это уже
+существующий паттерн, а не новая связь между milestone (F-16).
 
 ## Evidence
 

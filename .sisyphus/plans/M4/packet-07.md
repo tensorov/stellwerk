@@ -1,12 +1,12 @@
 # packet-07
 plan_id: M4
 goal: GREEN — `Ask` в неинтерактивном прогоне даёт `TaskStatus::Suspended` и кладёт `ApprovalRequest` в `.stellwerk/inbox/<run_id>.json`.
-files_allowed: [crates/stellwerk-task/src/approval.rs, crates/stellwerk-task/tests/inbox.rs]
+files_allowed: [crates/stellwerk-task/src/approval.rs, crates/stellwerk-task/tests/inbox.rs, crates/stellwerk-task/src/lib.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-task --test inbox
 acceptance: `cargo test -p stellwerk-task --test inbox` → 0 failed. Задача в БД имеет `TaskStatus::Suspended`, а не `Failed`.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
-depends_on: [03, M2-06]
+depends_on: [03, M2-06, 05, 06, M2-01, M2-05, M2-07, M2-09, M2-10, M2-11, M2-12]
 data_class: public
 lane: m4/approval
 
@@ -53,6 +53,21 @@ lane: m4/approval
    не писали в рабочий каталог. Отсутствие переменной и её пустое значение —
    разные случаи: пустое значение должно давать ошибку, а не молчаливый
    умолчательный путь.
+
+## Правило объявления модуля
+
+`src/lib.rs` добавлен в `files_allowed`, и ``pub mod approval;`` объявляется **в этом пакете**,
+рядом с созданием ``approval.rs``, а не в следующем GREEN.
+
+Интеграционный тест берёт типы через публичный API крейта: без объявления модуля
+он не компилируется, а с `#[path]` скомпилировал бы вторую копию и оставил экспорт
+непроверенным (F-14). Требование, висящее на пакете ПОСЛЕ зависимого от него RED,
+делает RED несуществующим — так был заблокирован M2-05.
+
+`lib.rs` — общий ресурс, а не частный файл пакета: на `stellwerk-task/src/lib.rs`
+претендуют пакеты M2-01, 05, 07, 09, 11, 12, и порядок держится транзитивной
+цепочкой. Пакеты M4 объявляют тех владельцев из M2, чей файл трогают, — это уже
+существующий паттерн, а не новая связь между milestone (F-16).
 
 ## Evidence
 

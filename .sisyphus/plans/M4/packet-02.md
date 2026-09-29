@@ -1,12 +1,12 @@
 # packet-02
 plan_id: M4
 goal: RED — раннер обязан спрашивать разрешение на КАЖДЫЙ вызов инструмента, и `Unclassified` обязан давать `Deny`.
-files_allowed: [crates/stellwerk-task/src/runner.rs, crates/stellwerk-task/tests/permission_wire.rs]
+files_allowed: [crates/stellwerk-task/src/runner.rs, crates/stellwerk-task/tests/permission_wire.rs, crates/stellwerk-task/src/lib.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-task --test permission_wire
 acceptance: RED: тест компилируется, прогон падает на заглушке. Каждый сценарий закреплён отдельным `#[test] fn`.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
-depends_on: [01, M2-09, M2-10, M2-11]
+depends_on: [01, M2-09, M2-10, M2-11, M2-01, M2-05, M2-07, M2-12]
 data_class: public
 lane: m4/authorize
 
@@ -48,6 +48,21 @@ F-10 вырос не из «забыли вызвать», а из того, ч�
 никто его не сделал**. Пока существует хотя бы один путь, возвращающий `Allow`
 мимо `decide`, дыра воспроизводится. Тест на отсутствие пути закрывает класс, а
 не экземпляр.
+
+## Правило объявления модуля
+
+`src/lib.rs` добавлен в `files_allowed`, и ``pub mod runner;`` объявляется **в этом пакете**,
+рядом с созданием ``runner.rs``, а не в следующем GREEN.
+
+Интеграционный тест берёт типы через публичный API крейта: без объявления модуля
+он не компилируется, а с `#[path]` скомпилировал бы вторую копию и оставил экспорт
+непроверенным (F-14). Требование, висящее на пакете ПОСЛЕ зависимого от него RED,
+делает RED несуществующим — так был заблокирован M2-05.
+
+`lib.rs` — общий ресурс, а не частный файл пакета: на `stellwerk-task/src/lib.rs`
+претендуют пакеты M2-01, 05, 07, 09, 11, 12, и порядок держится транзитивной
+цепочкой. Пакеты M4 объявляют тех владельцев из M2, чей файл трогают, — это уже
+существующий паттерн, а не новая связь между milestone (F-16).
 
 ## Evidence
 
