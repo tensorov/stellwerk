@@ -93,8 +93,8 @@ fn a_failed_tool_keeps_its_receipt_inside_the_error() {
             module: "reg".into(),
             verdict: Verdict::Allow,
             risk: RiskClass::R0,
-            input_hash: "a".repeat(64),
-            output_hash: "b".repeat(64),
+            empty_input_digest: "a".repeat(64),
+            full_output_hash: "b".repeat(64),
             truncated: false,
             duration_ms: 3,
             ts: "2026-09-29T00:00:00Z".into(),
@@ -105,7 +105,7 @@ fn a_failed_tool_keeps_its_receipt_inside_the_error() {
             let want = ToolError("сбой чужого клиента".into());
             assert_eq!(source, want, "чужой текст цел");
             assert_eq!(receipt.call_id, "call-1", "чек доехал");
-            assert_eq!(receipt.input_hash.len(), 64, "чек заполнен");
+            assert_eq!(receipt.empty_input_digest.len(), 64, "чек заполнен");
         }
         other => panic!("ожидался SessionError::Tool, получено {other:?}"),
     }
@@ -140,19 +140,22 @@ fn an_expired_question_is_not_a_policy_denial() {
 #[test]
 fn the_question_survives_the_inbox_round_trip() {
     // Дано: вопрос, как он ляжет в inbox. Тогда: читается обратно без искажения, и
-    // `args_hash` остаётся sha256 — подтверждаются те же аргументы, что и виделись.
+    // `empty_args_digest` остаётся sha256 — подтверждаются те же аргументы, что и виделись.
     let asked = ApprovalRequest {
         run_id: "run-11a".into(),
         tool: "read_file".into(),
         risk: ToolRisk::Classified(RiskClass::R2),
-        args_hash: "ab".repeat(32),
+        empty_args_digest: "ab".repeat(32),
         requested_at: "2026-09-29T00:00:00Z".into(),
         expires_at: "2026-09-29T04:00:00Z".into(),
     };
     let wire = serde_json::to_value(&asked).expect("вопрос сериализуем");
     let back: ApprovalRequest = serde_json::from_value(wire.clone()).expect("читается");
     assert_eq!(back, asked, "круг не исказил вопрос");
-    assert_eq!(wire["args_hash"], asked.args_hash, "хеш цел");
+    assert_eq!(
+        wire["empty_args_digest"], asked.empty_args_digest,
+        "хеш цел"
+    );
     assert_eq!(wire["risk"], "R2", "риск на проводе — словом класса");
     // Неизвестный риск переживает круг СВОИМ состоянием, а не вырождается в R0.
     let blind = ApprovalRequest {

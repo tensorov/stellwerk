@@ -223,16 +223,17 @@ impl Session {
     }
 
     /// Вопрос оператору: кто спрашивает, о каком инструменте и до какого ждут ответа.
-    /// `args_hash` — хеш ПУСТОГО тела: аргументов у `CallRequest` нет, а пустая строка
-    /// означала бы «не посчитали». Класс риска едет СВОИМ состоянием: `Unclassified`
-    /// обязан пережить круг через inbox, а не выродиться в `R0` (`risk_wire`).
+    /// `empty_args_digest` — дайджест ПУСТОГО тела: аргументов у `CallRequest` нет, а
+    /// пустая строка означала бы «не посчитали». Класс риска едет СВОИМ состоянием:
+    /// `Unclassified` обязан пережить круг через inbox, а не выродиться в `R0`
+    /// (`risk_wire`).
     fn approval_request(&self, req: &CallRequest) -> ApprovalRequest {
         let now = unix_secs();
         ApprovalRequest {
             run_id: self.id.clone(),
             tool: req.tool.clone(),
             risk: req.risk,
-            args_hash: sha256_hex(&[]),
+            empty_args_digest: sha256_hex(&[]),
             requested_at: rfc3339_utc(now),
             expires_at: rfc3339_utc(now.saturating_add(answer_window_secs(req.risk))),
         }
@@ -245,7 +246,7 @@ impl Session {
         &self,
         req: &CallRequest,
         verdict: &Verdict,
-        output_hash: &str,
+        full_output_hash: &str,
         duration_ms: u64,
     ) -> Option<Receipt> {
         let ToolRisk::Classified(risk) = req.risk else {
@@ -257,8 +258,8 @@ impl Session {
             module: req.module.clone(),
             verdict: verdict.clone(),
             risk,
-            input_hash: sha256_hex(&[]),
-            output_hash: output_hash.to_owned(),
+            empty_input_digest: sha256_hex(&[]),
+            full_output_hash: full_output_hash.to_owned(),
             // Всегда ложь: этот слой не усекает и не решает, влезает ли вывод в порог,
             // потому что калибровки у него нет. Правду про усечение ставит 12c.
             truncated: false,
@@ -443,9 +444,10 @@ pub struct ApprovalRequest {
     /// Риск инструмента. `Unclassified` — состояние, а не нулевой риск.
     #[serde(with = "risk_wire")]
     pub risk: ToolRisk,
-    /// SHA-256 тела аргументов: подтверждаются именно эти аргументы, и хеш обязан
-    /// пережить круг через inbox без искажения.
-    pub args_hash: String,
+    /// Дайджест ПУСТОГО тела аргументов: аргументов у `CallRequest` нет, и подтвердить
+    /// приходится именно то, что ушло, — а ушло пустое тело. «Аргументов нет» здесь
+    /// неотличимо от «аргументы были пусты», и пустыми они и записаны.
+    pub empty_args_digest: String,
     /// Когда спросили, RFC 3339 UTC.
     pub requested_at: String,
     /// До какого ждут ответа, RFC 3339 UTC. Истечение — `ApprovalTimeout`, не `Deny`.
