@@ -24,8 +24,13 @@
 | packet-08 | m3/mount | 07 | `--test mount` | GREEN: жадный проход |
 | packet-09 | m3/receipt-red | 08 | `--test receipt` | RED: чек вызова |
 | packet-10 | m3/receipt | 09 | `--test receipt` | GREEN: чек → событие |
-| packet-11 | m3/session-red | 10 | `--test session` | RED: маршрутизация |
-| packet-12 | m3/session | 11 | `cargo test -p stellwerk-gateway` | GREEN: сессия целиком |
+| packet-11a | m3/session-contract | 10 | `--test session_contract` | RED: контракт состояний |
+| packet-11b | m3/session-red | 11a | `--test session` | RED: маршрутизация |
+| packet-11c | m3/session-failure-red | 11b | `--test session_failure` | RED: вопрос, истечение, сбой |
+| packet-12a | m3/session-routing-green | 11b | `--test session` | GREEN: монтаж, decide, вызов, чек |
+| packet-12b | m3/session-question-green | 12a, 11c | `--test session_failure` + `--test session_contract` | GREEN: вопрос, истечение, сбой, усечение |
+| packet-13 | m3/shaping-public | 12 | `--test shaping` | F-14: модуль shaping публичен |
+| packet-14 | m3/receipt-workspace | 13 | `--test receipt` | F-22: рабочее место чека |
 
 ## Волны
 
@@ -34,7 +39,10 @@
 03a → 03b → 04 — gate: риск × полномочия × данные
 05 → 06        — shaping: 2k токенов, артефакт, хеш
 07 → 08        — mount: что вообще подключать
-09 → 10 → 11 → 12 — чек, затем сессия
+09 → 10        — чек
+11a → 11b → 11c — RED: контракт, маршрутизация, вопрос/сбой
+12a → 12b      — GREEN: маршрутизация, затем вопрос/сбой/усечение
+13 → 14        — F-14 (публичный shaping), F-22 (рабочее место чека)
 ```
 
 Строго последовательно. Крейт новый, каждый пакет опирается на предыдущий.
@@ -44,7 +52,7 @@
 ```
 1. инструмент смонтирован?   нет → Deny{not_mounted}, backend НЕ вызван
 2. decide(req)                Deny → чек пишется, backend НЕ вызван
-3. Ask без подтверждения     → Deny{ask_unresolved}
+3. Ask в неинтерактивном      → Suspended + ApprovalRequest в .stellwerk/inbox/<run_id>.json
 4. backend.invoke()           ошибка → чек всё равно записан
 5. shape(вывод)               >2k токенов → хеш + путь к артефакту
 6. чек в EventStore           для КАЖДОГО вызова, включая запрещённые
@@ -57,7 +65,9 @@
 ## Инварианты
 
 - правила берутся ТОЛЬКО из предикатов ядра, копий нет;
-- `Ask` без подтверждения = `Deny` (провал безопасен);
+- `Ask` в неинтерактивном прогоне = `Suspended` + вопрос в inbox, а НЕ `Deny` (В4);
+  истёкшее окно ответа = `ApprovalTimeout`, а не `Deny` — «никто не ответил» и
+  «запрещено политикой» обязаны различаться и в статусе, и в чеке;
 - в чеках только хеши, никогда тела вывода и никогда секреты;
 - `R4` — `L5Owner` + `Ask` на ОДНО действие; при нехватке уровня `Deny` (В1);
 - `R5` — безусловный `Deny` при любом уровне, включая `L5Owner` (ADR-0002);
