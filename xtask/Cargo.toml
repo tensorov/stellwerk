@@ -10,5 +10,16 @@ rust-version.workspace = true
 # доверенная база (мост к allowlist PolyForge) растёт вместе с ними.
 [dependencies]
 
+# Прибор, а не зависимость. Имя намеренно громкое: признак, который делает
+# общий прогон красным, обязан читаться в каждом `cargo test` xtask.
+[features]
+red-fixture = []
+
+# `required-features`, а не `#[ignore]`: таргет не собирается вовсе, а не
+# собирается и пропускается — «нет провала» не выдаётся за «тест зелёный».
+[[test]]
+name = "red_fixture"
+required-features = ["red-fixture"]
+
 [lints]
 workspace = true

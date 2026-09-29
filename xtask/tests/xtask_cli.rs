@@ -13,12 +13,12 @@ use std::process::{Command, Output};
 
 /// Строка таблицы, на которой держится весь позитивный смысл сьютки.
 ///
-/// Изначально это была `red-gate-session-contract`. M3-12a позеленел её, и
-/// обёртка отвергла её с «тест зелёный» — то есть повела себя ровно как задумано,
-/// а падение сьютки выглядело как баг в обёртке (F-26). Сейчас единственный
-/// красный бинарник — `session_failure` (M3-11c): 4 падения на двух явных
-/// заглушках `unimplemented!("M3/packet-12b: ...")`.
-const POSITIVE_FIXTURE: &str = "red-gate-session-failure";
+/// Раньше здесь жило имя чужой задачи (`red-gate-session-failure`), красной
+/// только пока шла цепочка RED-пакетов, и оно протухало ровно в момент слияния:
+/// F-26 на `session_contract`, затем F-31 на `session_failure`. Сейчас это
+/// собственный прибор гейта: красный всегда, независимо от того, какой пакет
+/// сейчас на середине.
+const POSITIVE_FIXTURE: &str = "red-gate-red-fixture";
 
 /// Маркеры отказов — дословно из `main.rs`, по одному на каждую причину.
 const GREEN_IS_NOT_RED: &str = "тест зелёный";
@@ -80,10 +80,9 @@ fn assert_positive_fixture_is_red() {
     match out.status.code() {
         Some(0) => {}
         Some(_) if stderr.contains(GREEN_IS_NOT_RED) => panic!(
-            "положительная фикстура {POSITIVE_FIXTURE:?} больше не красная — пакет 12b \
-             позеленел её; переприцели эту сьютку на текущий КРАСНЫЙ бинарник. Ослаблять \
-             утверждение нельзя: обёртка обязана отказывать зелёному бинарню, это и есть её \
-             работа. Причина отказа: {stderr}"
+            "прибор {POSITIVE_FIXTURE:?} отрапортовал себя зелёным — он обязан падать всегда. \
+             Ослаблять его assert нельзя: гейт тогда сертифицирует прохождение, а обёртка, \
+             подтверждающая успех, хуже отсутствия обёртки. Причина отказа: {stderr}"
         ),
         Some(_) if stderr.contains(NOT_BUILT) => panic!(
             "бинарник за строкой {POSITIVE_FIXTURE:?} не собирается — RED-фикстуры больше \
@@ -162,7 +161,7 @@ fn lookup_does_not_accept_neighbouring_names() {
 /// тест опрётся на фикстуру, и требовать переприцеливания, а не проходить
 /// вхолостую.
 #[test]
-fn positive_fixture_session_failure_is_still_red() {
+fn red_fixture_instrument_is_red() {
     assert_positive_fixture_is_red();
 }
 
