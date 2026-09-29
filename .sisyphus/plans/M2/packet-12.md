@@ -1,3 +1,10 @@
+> **ПРИНЯТО ЧАСТИЧНО, СОБЫТИЙНАЯ ПОЛОВИНА.** Принято `StepKind::risk()` и
+> `events_for()` (merge `bab1bd3`). **Цепочка доказательств сюда не вошла** и
+> разошлась на `packet-12b.md` (RED-сценарии) и `packet-12c.md` (реализация).
+> Причина: `sha2` не подключён к крейту, `Cargo.toml` был вне `files_allowed`, и
+> оставшихся строк бюджета не хватало на леджер. Подменять `sha2` на
+> `DefaultHasher` или самописную реализацию воркер отказался сознательно.
+
 # packet-12
 plan_id: M2
 goal: Реализовать запись событий и цепочку evidence: ModelClaim → ToolAttestation → Validation → GateResult.

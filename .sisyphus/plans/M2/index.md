@@ -26,7 +26,9 @@
 | packet-09 | m2/runner-red | 08 | `--test runner` | RED: разбор потока Pi |
 | packet-10 | m2/runner | 09 | `--test runner` | GREEN: запуск Pi |
 | packet-11 | m2/events-red | 10 | `--test events` | RED: события прогона |
-| packet-12 | m2/evidence | 11 | `cargo test -p stellwerk-task` | GREEN: события + цепочка evidence |
+| packet-12 | m2/events | 11 | `cargo test -p stellwerk-task` | GREEN: события прогона (принято) |
+| packet-12b | m2/evidence-red | 12 | `--test evidence` | RED: цепочка доказательств |
+| packet-12c | m2/evidence-green | 12b | `cargo test -p stellwerk-task` | GREEN: цепочка + gate |
 
 ## Волны
 
