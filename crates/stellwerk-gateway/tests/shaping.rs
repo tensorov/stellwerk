@@ -1,7 +1,7 @@
-//! Tests for `shape` — the output-shaping surface (M3/packet-05 RED).
-//! RED: `shape` — заглушка, все шесть сценариев падают, прогон компилируется.
-//! Модуль включён через `#[path]`: `files_allowed` не даёт трогать `src/lib.rs`,
-//! а `pub mod shaping;` там объявит отдельный пакет.
+//! Tests for `shape` — the output-shaping surface (M3/packet-05 RED, M3/packet-06 GREEN).
+//! Модуль берётся публичным API крейта, а не через `#[path]`: включение исходника
+//! собрало бы вторую копию модуля и оставило экспорт `pub mod shaping;` непроверяемым —
+//! его можно было бы сломать, и шесть сценариев остались бы зелёными (F-14).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,10 +9,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use sha2::{Digest, Sha256};
 
-#[path = "../src/shaping.rs"]
-mod shaping;
-
-use shaping::{shape, ShapeError, MAX_OUTPUT_TOKENS};
+use stellwerk_gateway::shaping::{shape, ShapeError, MAX_OUTPUT_TOKENS};
 
 /// Порог из окружения — процесс-глобальный: опущенный не должен быть виден
 /// никому, кроме теста, который его опустил.
