@@ -31,6 +31,7 @@
 | packet-12b | m3/session-question-green | 12a, 11c | `--test session_failure` + `--test session_contract` | GREEN: вопрос, истечение, сбой, субагенты |
 | packet-12c | m3/session-budget-red | 12b, 17 | `--test session_failure` | RED: усечение и калибровка (ждёт 17) |
 | packet-17 | m3/session-calibration-surface | 12b, 15, 16, 06 | `cargo test -p stellwerk-gateway` | F-24: `TokenCalibration` в `Session` (4 файла, ждёт решения) |
+| packet-18 | m3/receipt-honesty | 17, 12c, 15, 16 | `cargo test -p stellwerk-gateway` | F-25 (6-7) + F-30 вариант A: поля чеков называются тем, что лежит, `ReceiptError` удалён (5 файлов) |
 | packet-13 | m3/public-api-test | 06 | `--test shaping` | F-14: модуль shaping публичен |
 | packet-14 | m3/receipt-workspace | 10 | `--test receipt` | F-22: рабочее место чека |
 | packet-15 | m3/receipt-locks | 14 | `--test receipt` | F-25: замки на регрессию чека |
