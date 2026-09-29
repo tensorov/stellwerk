@@ -1,7 +1,7 @@
 # packet-08
 plan_id: M4
 goal: GREEN — один Task проходит все стадии до `Done` с верифицированным `ToolAttestation` и закрытым gate.
-files_allowed: [crates/stellwerk-task/tests/vertical.rs, crates/stellwerk-task/src/lifecycle.rs]
+files_allowed: [crates/stellwerk-task/tests/vertical.rs, crates/stellwerk-task/src/lifecycle.rs, crates/stellwerk-task/src/runner.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-task --test vertical
 acceptance: `cargo test -p stellwerk-task --test vertical` → 0 failed, включая сценарий полного прохода. PolyForge: `evidence_verify` на команде этого пакета → exit 0, `gate_evaluate` passed.
