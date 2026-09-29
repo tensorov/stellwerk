@@ -47,7 +47,7 @@
 | packet-01 | m4/wire | — | `cargo build -p stellwerk-task` | contract-change, закрывает F-10 |
 | packet-02 | m4/authorize | 01 | `--test permission_wire` | RED: раннер обязан спрашивать |
 | packet-03 | m4/authorize | 02 | `--test permission_wire` | GREEN: `authorize` = `decide` |
-| packet-04 | m4/cli | M2-01, M2-03, M2-04, M2-12 | `--test cli_watch` | GREEN: `watch` |
+| packet-04 | m4/cli | M2-01, M2-03, M2-04, M2-12 | `--test cli_watch` | GREEN: `watch` печатает события — **ПРИНЯТ** `6255dd8`, аттест 117/118; бюджет +258 при пределе 200 (F-50) |
 | packet-05 | m4/vertical | 03, M2-12 | `--test vertical` | RED: чек на **каждый** вызов |
 | packet-06 | m4/vertical | 05 | `--test vertical` | GREEN: чек на каждый вызов, включая отказ — **ПРИНЯТ** `585b584`, аттест 113/114 |
 | packet-07 | m4/approval | 03 | `--test inbox` | GREEN: Ask → Suspended + inbox |
