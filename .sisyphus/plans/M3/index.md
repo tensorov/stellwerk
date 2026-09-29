@@ -28,7 +28,9 @@
 | packet-11b | m3/session-routing-red | 11a | `--test session` | RED: маршрутизация |
 | packet-11c | m3/session-failure-red | 11b | `--test session_failure` | RED: вопрос, истечение, сбой |
 | packet-12a | m3/session-routing-green | 11b | `--test session` | GREEN: монтаж, decide, вызов, чек |
-| packet-12b | m3/session-question-green | 12a, 11c | `--test session_failure` + `--test session_contract` | GREEN: вопрос, истечение, сбой, усечение |
+| packet-12b | m3/session-question-green | 12a, 11c | `--test session_failure` + `--test session_contract` | GREEN: вопрос, истечение, сбой, субагенты |
+| packet-12c | m3/session-budget-red | 12b, 17 | `--test session_failure` | RED: усечение и калибровка (ждёт 17) |
+| packet-17 | m3/session-calibration-surface | 12b, 15, 16, 06 | `cargo test -p stellwerk-gateway` | F-24: `TokenCalibration` в `Session` (4 файла, ждёт решения) |
 | packet-13 | m3/public-api-test | 06 | `--test shaping` | F-14: модуль shaping публичен |
 | packet-14 | m3/receipt-workspace | 10 | `--test receipt` | F-22: рабочее место чека |
 | packet-15 | m3/receipt-locks | 14 | `--test receipt` | F-25: замки на регрессию чека |
