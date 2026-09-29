@@ -11,8 +11,13 @@
 
 use crate::sandbox::Sandbox;
 use serde_json::Value;
-use stellwerk_core::contract::{ModelBinding, TaskSpec};
+use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, TaskSpec};
+use stellwerk_gateway::permission::ToolRisk;
 use thiserror::Error;
+
+/// Решение по вызову — РЕЭКСПОРТ вердикта гейта, а не второе объявление: перевод
+/// между двумя типами рано или поздно принёс бы `unwrap_or(R0)` (закон 6).
+pub use stellwerk_gateway::gate::Verdict as CallVerdict;
 
 /// Отказ раннера: `Spawn` (нечего запускать) и `MalformedLine` (строка не-JSON) — разные причины.
 #[derive(Debug, Error)]
@@ -240,4 +245,30 @@ fn gate(name: &str) -> u32 {
         .ok()
         .and_then(|raw| raw.trim().parse().ok())
         .unwrap_or(1)
+}
+
+/// Вызов инструмента: всё, о чём раннер обязан спросить разрешение. Умолчаний нет:
+/// «не классифицирован» это `Unclassified`, а не «риск не задан, значит нулевой».
+#[derive(Debug, Clone)]
+pub struct Call {
+    pub tool: String,
+    pub module: String,
+    /// Риск инструмента. `Unclassified` — состояние, а не нулевой риск: иначе
+    /// неизвестный тул проходил бы как `R0`, и дыра была бы неотличима от чтения.
+    pub risk: ToolRisk,
+    pub data: DataClass,
+    pub model: ModelBinding,
+    /// Есть ли кому задать вопрос. `false` — неинтерактивный прогон, и отсутствие
+    /// ответа обязано стать `Suspended`, а не тихим `Allow` (В4).
+    pub interactive: bool,
+}
+
+/// Решение по вызову: единственный вопрос раннера к слою разрешений. Тело — RED-заглушка
+/// (packet-03): пока его нет, ни один вызов не спросил разрешения, а политика R0–R5 живёт
+/// только в тестах гейта — то самое состояние, из которого вырос F-10.
+pub fn authorize(call: &Call, caller: PolicyLevel) -> CallVerdict {
+    unimplemented!(
+        "M4/packet-03: путь раннер → authorize → decide для {:?} при {caller:?} не собран",
+        call.tool
+    )
 }
