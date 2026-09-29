@@ -234,3 +234,17 @@ async fn a_worker_failure_is_not_a_success_and_still_leaves_a_receipt() {
     assert_eq!(carries(&seen, CAUSE), 1, "причина сбоя в потоке");
     assert_eq!(carries(&seen, "Failed"), 1, "статус `Failed` обязателен");
 }
+
+/// Пакет 06: «в чеке только хеш, никогда тело вывода» — восемь сценариев выше не ловят.
+#[tokio::test]
+async fn a_receipt_carries_the_digest_of_the_output_and_never_its_body() {
+    let (store, worker) = bench(false);
+    let ask = attempt("t-body", R0, true, PolicyLevel::L2Contributor);
+    run_once(&ask, &worker, &store).await.expect("разрешён");
+    let seen = trail(&store, "t-body").await;
+    // Дайджест зашит, а не посчитан: это SHA-256 тела `format!("вывод {}", "bash")` — смена алгоритма ломает тест, а не смысл чеков.
+    assert_eq!(carries(&seen, BODY_SHA256), 1, "в потоке только дайджест");
+    assert_eq!(carries(&seen, "вывод"), 0, "тело вывода в поток не уходит");
+}
+
+const BODY_SHA256: &str = "886400b989d41df6ea6ca1de6958a25d77565fe6e1ba994e84d5c9920e9c06b0";
