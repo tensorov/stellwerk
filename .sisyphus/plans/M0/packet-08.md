@@ -1,7 +1,8 @@
 # packet-08
 plan_id: M0
 goal: audit RED — добавить rmcp (единственная правка Cargo.toml в M0), sync-транспорт-независимый trait-шов McpProbe + заглушки, падающие тесты отчёта/валидации.
-files_allowed: [crates/stellwerk-registry/Cargo.toml, crates/stellwerk-registry/src/lib.rs, crates/stellwerk-registry/src/cmd_audit.rs]
+files_allowed: [crates/stellwerk-registry/Cargo.toml, crates/stellwerk-registry/src/lib.rs, crates/stellwerk-registry/src/cmd_audit.rs, Cargo.lock]
+limit_waiver: 4 файла при лимите 3, и разбить нельзя: rmcp не был в Cargo.lock, поэтому единственная правка зависимости тянет за собой пересборку лока силами cargo (45 пакетов в прошлом attempt f461b39). Лок не пишет автор пакета. Прецедент: M4-01 вносит Cargo.lock в files_allowed, M2-01 и M3-01 объявляют waiver на ту же причину.
 max_diff_lines: 200
 test: cargo test -p stellwerk-registry audit
 acceptance: RED: bash -c 'cargo build -p stellwerk-registry && cargo test -p stellwerk-registry audit --no-run && ! cargo test -p stellwerk-registry audit' → exit 0; в Cargo.toml крейта появилась строка `rmcp = { workspace = true }` (workspace уже объявлен в корне); корневой Cargo.toml не изменён.
@@ -23,7 +24,7 @@ DO NOT fix/red-green the test inside a RED packet. Зелёным сделает
 ## Что сделать
 
 1. crates/stellwerk-registry/Cargo.toml: добавить `rmcp = { workspace = true }` в [dependencies].
-2. lib.rs: append `pub mod cmd_audit;` ПОСЛЕ последней существующей `pub mod` (merge-протокол в M0-index — при слиянии lanes оставляй обе строки).
+2. lib.rs: добавить `pub mod cmd_audit;` в АЛФАВИТНУЮ позицию между `cmd_add` и `cmd_measure`. Раньше здесь было «append ПОСЛЕ последней `pub mod`», и это несовместимо с `cargo fmt --check`: rustfmt с `reorder_modules` (дефолт true) переставляет `pub mod` по алфавиту, и пакет в исходном виде заставляет fmt требовать перестановки, то есть исполнитель вынужден выбрать между буквой пакета и зелёным fmt. Алфавитная позиция удовлетворяет обоим.
 3. cmd_audit.rs — шов + заглушки (RED):
    - `pub trait McpProbe { fn list_tools(&mut self) -> Result<Vec<String>, AuditError>; fn call_tool(&mut self, name: &str, args: &str) -> Result<CallOutcome, AuditError>; }`
    - `CallOutcome`: `Result(serde_json::Value)` | `Error(serde_json::Value)` | `Timeout` | `Malformed`.
