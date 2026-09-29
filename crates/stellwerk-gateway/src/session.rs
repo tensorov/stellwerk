@@ -1,11 +1,13 @@
 //! Сессия: точка, где permission, gate, shaping и receipt встречаются в одном проходе.
 //!
 //! Gateway инструменты не выполняет: `handle` спрашивает шов `ToolBackend`. Линейный проход
-//! (монтаж, решение, вызов, чек) — M3/packet-12a; вопрос, сбой и усечение — 12b.
+//! (монтаж, решение, вызов, чек) — M3/packet-12a; вопрос и сбой — 12b, усечение — 12c
+//! (F-24: калибровки `tokens_per_byte` у слоя нет, а усечение без неё — выдуманный byte price).
 //!
 //! Шов `ToolBackend` и опрос `drive` объявлены здесь намеренно: у крейта нет `tokio`, а
 //! `Cargo.toml` вне `files_allowed`, поэтому 11b и 11c берут их отсюда, а не пишут свои.
 
+use std::fs;
 use std::future::{ready, Future};
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -17,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use stellwerk_core::contract::PolicyLevel;
+use stellwerk_core::contract::{PolicyLevel, RiskClass};
 
 /// Реэкспорты, а НЕ вторые объявления: второе сделало бы риск при монтаже и риск в
 /// `decide` разными типами, а перевод между ними рано или поздно принёс бы `unwrap_or(R0)`.
@@ -55,21 +57,28 @@ impl Session {
     /// Провести один вызов: монтаж → `decide` → вызов → чек.
     ///
     /// Отдаёт future, а не `Result`: исполнителя в крейте нет, и `drive` ниже доводит
-    /// его сам. Вопрос оператору, сбой инструмента и усечение вывода — M3/packet-12b.
+    /// его сам. Вопрос оператору и сбой инструмента — M3/packet-12b, усечение вывода,
+    /// которому нужна калибровка `tokens_per_byte`, — 12c.
     pub fn handle<'a>(
         &'a mut self,
         req: &'a CallRequest,
         backend: &'a dyn ToolBackend,
     ) -> Pin<Box<dyn Future<Output = Result<CallOutcome, SessionError>> + Send + 'a>> {
-        if let Some(verdict) = self.refusal(req) {
-            // Отказ — тоже чек: вызов без следа неотличим от небывшего (REVIEW §3.1). Тела
-            // у него нет, поэтому хеш пустого вывода, а не «не посчитали».
-            let receipt = self.receipt(req, &verdict, &sha256_hex(&[]), 0);
-            return Box::pin(ready(Ok(CallOutcome {
-                verdict,
-                shaped: None,
-                receipt,
-            })));
+        match self.refusal(req) {
+            Ok(Some(verdict)) => {
+                // Отказ — тоже чек: вызов без следа неотличим от небывшего (REVIEW §3.1).
+                // Тела у него нет, поэтому хеш пустого вывода, а не «не посчитали».
+                let receipt = self.receipt(req, &verdict, &sha256_hex(&[]), 0);
+                return Box::pin(ready(Ok(CallOutcome {
+                    verdict,
+                    shaped: None,
+                    receipt,
+                })));
+            }
+            // Истёкшее окно — сбой сессии, а не отказ: инструмент не звали, а чек в чеке
+            // приостановки записал бы решение, которого не принимали (В4).
+            Err(err) => return Box::pin(ready(Err(err))),
+            Ok(None) => {}
         }
         // Отказа нет — остаётся единственная оставшаяся ветка `decide`.
         let verdict = Verdict::Allow;
@@ -83,8 +92,29 @@ impl Session {
         Box::pin(async move {
             let output = match called.await {
                 Ok(output) => output,
-                // Чек упавшего вызова едет внутри `SessionError::Tool` — 12b.
-                Err(_) => unimplemented!("M3/packet-12b: сбой инструмента не теряет чек"),
+                // Сбой чужого инструмента. Порядок обязателен: сначала чек из того,
+                // что успело уйти, потом ошибка — при `Result<CallOutcome, _>` след
+                // исчез бы, а вызов без следа неотличим от вызова, которого не было.
+                // `Box<Receipt>` обязателен: чек на 208 байт против пустого
+                // `ApprovalTimeout` — это индирекция, которую справедливо требует clippy.
+                Err(source) => {
+                    let duration_ms =
+                        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    let receipt = self.receipt(req, &verdict, &sha256_hex(&[]), duration_ms);
+                    // `receipt` — `None` РОВНО при `Unclassified`, а `decide` при
+                    // `Unclassified` `Allow` не выдаёт (`gate.rs`: без интерактива —
+                    // `Deny`, с интерактивом — `Ask`). Подставить вместо чека `R0`
+                    // было бы ровно тем нулевым риском, который запрещает закон 6.
+                    let Some(receipt) = receipt else {
+                        unreachable!("`decide` не разрешает вызов при неизвестном риске");
+                    };
+                    // Счётчик не растёт: состоявшийся вызов — тот, чей вывод дошёл; упавший
+                    // учтён чеком внутри ошибки, и второго следа ему не нужно.
+                    return Err(SessionError::Tool {
+                        source,
+                        receipt: Box::new(receipt),
+                    });
+                }
             };
             // Счётчик — после успеха: невидимый вызов не работа.
             self.calls += 1;
@@ -93,9 +123,9 @@ impl Session {
             // (`modules.toml` недостижим, а поле `Session` добавить нельзя), и 12a не решает,
             // влезает ли вывод в порог. Хеш — факт о теле, а не оценка его цены.
             let receipt = self.receipt(req, &verdict, &sha256_hex(output.as_bytes()), duration_ms);
-            // `shaped` — `None`, а не «усечённый вывод»: 12a не усекает и не решает, что
-            // усекать, а поле описано как «усечение вывода». Тело в контекст 12a не
-            // отдаёт — это работа 12b вместе с калибровкой.
+            // `shaped` — `None`, а не «усечённый вывод»: этот слой не усекает и не решает,
+            // что усекать, потому что калибровки у него нет. Поле описано как «усечение
+            // вывода», и `None` здесь — честное «не усекал», а не «не посчитали».
             Ok(CallOutcome {
                 verdict,
                 shaped: None,
@@ -105,25 +135,82 @@ impl Session {
     }
 
     /// Решение, останавливающее вызов: монтаж, а затем `decide`. `None` — вызов
-    /// разрешён и уходит в инструмент.
-    fn refusal(&self, req: &CallRequest) -> Option<Verdict> {
+    /// разрешён и уходит в инструмент. `Err` — окно ответа по уже заданному вопросу
+    /// истекло, и это сбой сессии, а не отказ (В4).
+    fn refusal(&self, req: &CallRequest) -> Result<Option<Verdict>, SessionError> {
         // Монтаж ДО `decide`: «смонтирован ли инструмент» к риску отношения не имеет, а
         // вопрос про инструмент, которого нет, задавать некому.
         if let Some(reason) = mount_refusal(&self.plan, &req.tool) {
-            return Some(Verdict::Deny { reason });
+            return Ok(Some(Verdict::Deny { reason }));
         }
         let verdict = decide(req);
         match verdict {
             // Решение — только `decide`, своей таблицы рисков у сессии нет. `R5` отсекает
             // он сам (`Permission::Deny` до `Ask`-ветки `RISK_PERMISSION`): второй отсек
             // риска здесь был бы копией таблицы, а отсек шире R5 убил бы `Ask` у R3/R4.
-            Verdict::Deny { .. } => Some(verdict),
+            Verdict::Deny { .. } => Ok(Some(verdict)),
             // Вопрос без подтверждения не разрешение (REVIEW §4.4), а `Suspended` обязан
-            // отличаться от `Deny` (В4): уходят в 12b вместе с inbox и окном ответа.
-            Verdict::Ask | Verdict::Suspended => {
-                unimplemented!("M3/packet-12b: Ask в неинтерактивном Run")
-            }
-            Verdict::Allow => None,
+            // отличаться от `Deny` (В4): уходят в `suspend` вместе с inbox и окном ответа.
+            Verdict::Ask | Verdict::Suspended => self.suspend(req),
+            Verdict::Allow => Ok(None),
+        }
+    }
+
+    /// Вопрос оператору: `Suspended` и вопрос на диске, либо `Err`, если окно ответа по
+    /// уже заданному вопросу истекло.
+    ///
+    /// `Ask` (интерактивный прогон) и `Suspended` (неинтерактивный) сходятся в одном
+    /// действии: `handle` не умеет получать ответы, а читает их тело прогона (M2-10).
+    /// Цикл возобновления здесь был бы вторым источником истины о прогоне.
+    ///
+    /// Глубина субагентов на этом пути остаётся 0: при R2+ субагент не создаётся, а
+    /// `subagent_depth` — наблюдаемое состояние этого правила (В3). Текстовый запрет
+    /// модель игнорирует, а правило без поля через полгода не отличить от его отсутствия.
+    fn suspend(&self, req: &CallRequest) -> Result<Option<Verdict>, SessionError> {
+        let dir = self.root.join(".stellwerk/inbox");
+        let path = dir.join(format!("{}.json", self.id));
+        // Уже заданный вопрос — источник истины об окне: срок нельзя выводить из «сейчас»,
+        // иначе истёкший вопрос снова выглядел бы свежим. Нечитаемый файл вопросом не
+        // считается: он неотличим от небывшего, и новый вопрос о нём честнее.
+        let pending = fs::read_to_string(&path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<ApprovalRequest>(&raw).ok());
+        match &pending {
+            // На вопрос не ответили, но никто не отказывал: это истечение окна, а не
+            // запрет политикой, и в расследовании вещи разные (В4, закон 6).
+            Some(asked) if expired(&asked.expires_at) => return Err(SessionError::ApprovalTimeout),
+            // Вопрос ещё ждёт ответа: не переписываем — `requested_at` уехал бы из-под
+            // человека, который на него смотрит, а окно продлевалось бы само собой.
+            Some(_) => return Ok(Some(Verdict::Suspended)),
+            None => {}
+        }
+        // Права на этом пути нет ни в одном исходе, но вопрос обязан ЛЕЖАТЬ на диске:
+        // `Suspended` без файла неотличим от «вопрос задан и потерян», и прогон встал бы
+        // навсегда без следа. Не записался — отказ с ИМЕНЕМ причины, а не тишина.
+        let asked = self.approval_request(req);
+        let wire = match serde_json::to_string(&asked) {
+            Ok(wire) => wire,
+            Err(err) => return Ok(Some(question_not_recorded(err))),
+        };
+        if let Err(err) = fs::create_dir_all(&dir).and_then(|()| fs::write(&path, wire)) {
+            return Ok(Some(question_not_recorded(err)));
+        }
+        Ok(Some(Verdict::Suspended))
+    }
+
+    /// Вопрос оператору: кто спрашивает, о каком инструменте и до какого ждут ответа.
+    /// `args_hash` — хеш ПУСТОГО тела: аргументов у `CallRequest` нет, а пустая строка
+    /// означала бы «не посчитали». Класс риска едет СВОИМ состоянием: `Unclassified`
+    /// обязан пережить круг через inbox, а не выродиться в `R0` (`risk_wire`).
+    fn approval_request(&self, req: &CallRequest) -> ApprovalRequest {
+        let now = unix_secs();
+        ApprovalRequest {
+            run_id: self.id.clone(),
+            tool: req.tool.clone(),
+            risk: req.risk,
+            args_hash: sha256_hex(&[]),
+            requested_at: rfc3339_utc(now),
+            expires_at: rfc3339_utc(now.saturating_add(answer_window_secs(req.risk))),
         }
     }
 
@@ -148,12 +235,40 @@ impl Session {
             risk,
             input_hash: sha256_hex(&[]),
             output_hash: output_hash.to_owned(),
-            // Всегда ложь: 12a не усекает и не решает, влезает ли вывод в порог, потому что
-            // калибровки у слоя нет. Правду про усечение ставит 12b.
+            // Всегда ложь: этот слой не усекает и не решает, влезает ли вывод в порог,
+            // потому что калибровки у него нет. Правду про усечение ставит 12c.
             truncated: false,
             duration_ms,
             ts: rfc3339_utc(unix_secs()),
         })
+    }
+}
+
+/// Вопрос, который не удалось записать: отказ с названной причиной. `Suspended` без
+/// вопроса на диске — это «спросили и потеряли», и прогон об этом не узнает.
+fn question_not_recorded(cause: impl std::fmt::Display) -> Verdict {
+    Verdict::Deny {
+        reason: format!("question_not_recorded: {cause}"),
+    }
+}
+
+/// Окно ответа в секундах: сутки, для R4 — четыре часа (окно объявлено в `gate::decide`).
+/// R4 — внешний наблюдаемый эффект: решение, принятое на следующие сутки, относится уже
+/// к другому поступку. `Unclassified` — сутки, как у любого класса, кроме R4.
+fn answer_window_secs(risk: ToolRisk) -> i64 {
+    match risk {
+        ToolRisk::Classified(RiskClass::R4) => 4 * 3_600,
+        ToolRisk::Classified(_) | ToolRisk::Unclassified => 24 * 3_600,
+    }
+}
+
+/// Истекло ли окно ответа. `None` от разбора — метка не наша, и истечения мы не
+/// наблюдали: назвать его таймаутом значило бы приписать причину, которой не было.
+/// Права такой путь всё равно не даёт — вопрос перезаписывается, инструмент не зовётся.
+fn expired(expires_at: &str) -> bool {
+    match unix_secs_from_rfc3339(expires_at) {
+        Some(deadline) => deadline <= unix_secs(),
+        None => false,
     }
 }
 
@@ -227,6 +342,57 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
         shifted_month - 9
     };
     (if month <= 2 { year + 1 } else { year }, month, day)
+}
+
+/// Секунды Unix из метки времени в формате `rfc3339_utc` (`YYYY-MM-DDTHH:MM:SSZ`).
+/// `None` — строка не в том формате, который печатает эта же сессия: угадывать смысл
+/// чужой метки значило бы решить судьбу прогона по записи, которую никто не писал.
+fn unix_secs_from_rfc3339(stamp: &str) -> Option<i64> {
+    let body = stamp.strip_suffix('Z')?;
+    let bytes = body.as_bytes();
+    // Ровно формат, который печатает `rfc3339_utc`: 19 символов и разделители на своих
+    // местах. `2026-9-29T…` и `…+02:00` — другие времена, и принять их за наши значило бы
+    // сравнить срок с догадкой.
+    if bytes.len() != 19 || bytes[10] != b'T' {
+        return None;
+    }
+    for (at, want) in [(4, b'-'), (7, b'-'), (13, b':'), (16, b':')] {
+        if bytes[at] != want {
+            return None;
+        }
+    }
+    let field = |range: std::ops::Range<usize>| body.get(range)?.parse::<i64>().ok();
+    let (Some(year), Some(month), Some(day), Some(hour), Some(minute), Some(second)) = (
+        field(0..4),
+        field(5..7),
+        field(8..10),
+        field(11..13),
+        field(14..16),
+        field(17..19),
+    ) else {
+        return None;
+    };
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return None;
+    }
+    Some(days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second)
+}
+
+/// Дни от эпохи по календарной дате — обратная к `civil_from_days`, а не таблица: пара
+/// «дни ↔ дата» обязана быть взаимно обратной, иначе окно ответа съезжает, а вопрос с
+/// истёкшим сроком выглядит свежим.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = year - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let year_of_era = year.rem_euclid(400);
+    let day_of_year = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
 }
 
 /// Итог вызова, дошедший до вызывающей стороны.
