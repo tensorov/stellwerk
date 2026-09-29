@@ -6,7 +6,7 @@ max_diff_lines: 200
 test: cargo test -p stellwerk-gateway
 acceptance: `cargo test -p stellwerk-gateway` → все тесты крейта зелёные. `cargo test -p stellwerk-core` и `-p stellwerk-store` не меняются.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
-depends_on: [11]
+depends_on: [11c]
 data_class: public
 lane: m3/session
 
