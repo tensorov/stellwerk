@@ -9,12 +9,16 @@
 //!
 //! RED M2/packet-09: тела — `unimplemented!()` (реализация — M2/packet-10).
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::events::now_rfc3339;
 use crate::sandbox::Sandbox;
 use serde_json::Value;
-use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, TaskSpec};
+use sha2::{Digest, Sha256};
+use stellwerk_core::contract::{DataClass, Event, ModelBinding, PolicyLevel, RiskClass, TaskSpec};
 use stellwerk_gateway::gate::{decide, CallRequest};
 use stellwerk_gateway::permission::ToolRisk;
 use stellwerk_store::EventStore;
@@ -349,15 +353,185 @@ pub trait Worker {
 /// `&impl EventStore`, а НЕ `&dyn EventStore`, как в пакете: трейт возвращает
 /// `impl Future`, а такой метод не помещается в vtable — `&dyn EventStore` не
 /// компилируется вовсе (ADR-0001 выбрал `impl Future` ради явного `Send`).
-/// RED M4/packet-05: тело — `unimplemented!()` (реализация — M4/packet-06).
+/// GREEN M4/packet-06: решение → чек на ЛЮБОЙ вызов → запуск только при `Allow`.
 pub async fn run_once(
     attempt: &CallAttempt,
     worker: &dyn Worker,
     store: &impl EventStore,
 ) -> Result<CallVerdict, RunError> {
-    let _ = (worker, store);
-    unimplemented!(
-        "M4/packet-06: тело прохода для `{}` не написано",
-        attempt.task_id
-    )
+    // Решение принимает `authorize` и никто больше: своя копия правил разошлась бы с
+    // гейтом при первой правке политики (F-10). `interactive` приходит из попытки как
+    // есть — раннер его не подставляет, потому что подстановка была бы вторым решением
+    // о том, есть ли кому спросить.
+    match authorize(&attempt.call, attempt.caller) {
+        CallVerdict::Allow => match worker.exec(&attempt.workspace_ref, &attempt.call).await {
+            Ok(outcome) => {
+                // Тело вывода в чек не идёт никогда: только дайджест, сверить который
+                // можно лишь на момент захвата (REVIEW §3.2).
+                let digest = format!("{:x}", Sha256::digest(outcome.output.as_bytes()));
+                record(store, attempt, CallStatus::Succeeded, None, Some(&digest)).await?;
+                Ok(CallVerdict::Allow)
+            }
+            Err(failure) => {
+                // Сбой — не `Allow` и не отсутствие следа: чек ложится ДО возврата
+                // ошибки, иначе упавший вызов нечем было бы расследовать.
+                let cause = failure.0;
+                match record(store, attempt, CallStatus::Failed, Some(&cause), None).await {
+                    Ok(()) => Err(RunError(cause)),
+                    Err(unwritten) => Err(RunError(format!(
+                        "чек сбоя не записан: {unwritten}; причина сбоя: {cause}"
+                    ))),
+                }
+            }
+        },
+        // Отказ, пауза и заданный вопрос — три РАЗНЫХ состояния (В4), и у каждого своя
+        // причина в потоке. Чек пишется ДО возврата: запрещённый вызов — тоже факт, а
+        // вызов без следа неотличим от небывшего.
+        CallVerdict::Deny { reason } => {
+            record(store, attempt, CallStatus::Denied, Some(&reason), None).await?;
+            Ok(CallVerdict::Deny { reason })
+        }
+        CallVerdict::Suspended => {
+            record(
+                store,
+                attempt,
+                CallStatus::Suspended,
+                Some(NOBODY_TO_ASK),
+                None,
+            )
+            .await?;
+            Ok(CallVerdict::Suspended)
+        }
+        CallVerdict::Ask => {
+            record(
+                store,
+                attempt,
+                CallStatus::Asked,
+                Some(ANSWER_PENDING),
+                None,
+            )
+            .await?;
+            Ok(CallVerdict::Ask)
+        }
+    }
+}
+
+/// Состояние чека вызова. Пять разных фактов, а не «сработало / не сработало»:
+/// «запрещено политикой», «никто не ответил», «вопрос задан», «состоялся» и «упал»
+/// обязаны различаться в потоке, иначе расследование не отличит отказ от молчания
+/// (В4, закон 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallStatus {
+    Denied,
+    Suspended,
+    /// Вопрос задан, ответа нет: `Ask` дошёл до слоя, который ответить не в состоянии.
+    Asked,
+    Succeeded,
+    Failed,
+}
+
+impl CallStatus {
+    /// Имя состояния в payload чека. Своя строка на каждое: слитое «invalid» не
+    /// разбирается, а чек без разбора — просто ещё одна запись в потоке.
+    fn name(self) -> &'static str {
+        match self {
+            CallStatus::Denied => "Denied",
+            CallStatus::Suspended => "Suspended",
+            CallStatus::Asked => "Asked",
+            CallStatus::Succeeded => "Succeeded",
+            CallStatus::Failed => "Failed",
+        }
+    }
+}
+
+/// Причина `Suspended` называется явно: пустая причина читалась бы как «причина не
+/// нашлась», а это другое состояние (закон 6).
+const NOBODY_TO_ASK: &str = "спросить некому: проход неинтерактивен, канала ответа нет";
+
+/// Причина `Ask`: вопрос задан, но разрешить его в этом проходе нечем. Интерактивный
+/// путь заводит M4-07, и до него `Ask` остаётся фактом, а не тихим `Allow`.
+const ANSWER_PENDING: &str = "вопрос задан, ответ не получен: канал ответа появится в M4-07";
+
+/// Порядковый номер чека. Счётчик, а не хеш содержимого: два одинаковых повторных
+/// вызова в одной задаче дали бы одинаковый хеш, а `append` отвергает повторный `id`
+/// (уникальный индекс в `events`) — и второй честный вызов стал бы отказом
+/// хранилища. После перезапуска процесса счётчик идёт с нуля: коллизия пришла бы
+/// ошибкой, а не тихой перезаписью чужого следа.
+static RECEIPT_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Чек одного вызова: единственное место, где раннер пишет событие потока.
+///
+/// Ключи payload названы здесь, а не в тесте: тест, выдумывающий схему, заставил бы
+/// следующий пакет повторить её ещё раз, и две схемы разошлись бы молча.
+///
+/// `reason` и `output_sha256` — `Option`: у состояния, которому нечего туда положить,
+/// полей НЕТ. Пустая строка означала бы «не посчитали», и честный `Succeeded` стал бы
+/// неотличим от недосказанного (закон 6).
+async fn record(
+    store: &impl EventStore,
+    attempt: &CallAttempt,
+    status: CallStatus,
+    reason: Option<&str>,
+    output_sha256: Option<&str>,
+) -> Result<(), RunError> {
+    let mut payload: BTreeMap<String, String> = BTreeMap::new();
+    payload.insert("task_id".to_owned(), attempt.task_id.clone());
+    payload.insert("tool".to_owned(), attempt.call.tool.clone());
+    payload.insert("module".to_owned(), attempt.call.module.clone());
+    payload.insert("caller".to_owned(), format!("{:?}", attempt.caller));
+    payload.insert("status".to_owned(), status.name().to_owned());
+    // Проход неинтерактивен, и это ФАКТ, а не подстановка неизвестного: канала, которому
+    // можно задать вопрос, у раннера нет (F-11; его заведёт TUI-путь). Отсюда и
+    // `Suspended` вместо тихого `Allow` при риске, требующем `Ask`.
+    payload.insert("interactive".to_owned(), "false".to_owned());
+    // Класса риска у неопознанного инструмента нет, и ключа `risk` у такого чека НЕТ:
+    // «риск неизвестен» не должно читаться как «R0» (закон 6).
+    if let ToolRisk::Classified(class) = attempt.call.risk {
+        payload.insert("risk".to_owned(), format!("{class:?}"));
+    }
+    if let Some(reason) = reason {
+        payload.insert("reason".to_owned(), reason.to_owned());
+    }
+    if let Some(digest) = output_sha256 {
+        payload.insert("output_sha256".to_owned(), digest.to_owned());
+    }
+    let event = Event {
+        id: format!(
+            "{}-call-{:08}",
+            attempt.task_id,
+            RECEIPT_SEQ.fetch_add(1, Ordering::Relaxed)
+        ),
+        // Полный путь, а не `use`: в этом модуле `EventSource` — трейт разбора потока
+        // Pi, и одноимённый вид контракта импортом перебил бы его.
+        source: stellwerk_core::contract::EventSource::System,
+        event_type: "run.call".to_owned(),
+        // `actor` — тот, кто ДЕЙСТВОВАЛ. При отказе не действовал никто: решение приняла
+        // политика, и подписать отказ модулем значило бы приписать ему действие,
+        // которого не было.
+        actor: match status {
+            CallStatus::Succeeded | CallStatus::Failed => attempt.call.module.clone(),
+            CallStatus::Denied | CallStatus::Suspended | CallStatus::Asked => "policy".to_owned(),
+        },
+        workspace: Some(attempt.workspace_ref.clone()),
+        risk: column_risk(attempt.call.risk),
+        payload,
+        ts: now_rfc3339(),
+    };
+    store
+        .append(event)
+        .await
+        .map_err(|err| RunError(format!("чек не записан: {err}")))
+}
+
+/// Класс риска для колонки `Event.risk`. У `Unclassified` честного значения нет, и
+/// колонка его не вмещает, поэтому берётся R1 — тот же пол, что и у событий прогона
+/// без шагов (`events.rs`): поднимать неизвестное до верха таблицы значило бы выдумать
+/// выход наружу, которого не было. Настоящее «неизвестно» остаётся в payload — ключа
+/// `risk` у такого чека нет. Закрыть дыру по-настоящему — значит сделать риск события
+/// непустимым, а это пакет с меткой `contract-change`, не этот.
+fn column_risk(risk: ToolRisk) -> RiskClass {
+    match risk {
+        ToolRisk::Classified(class) => class,
+        ToolRisk::Unclassified => RiskClass::R1,
+    }
 }
