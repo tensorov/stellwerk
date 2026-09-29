@@ -26,6 +26,7 @@ fn session() -> Session {
         },
         caller: PolicyLevel::L5Owner,
         budget_tokens: 43_000,
+        token_calibration: None,
         calls: 0,
         subagent_depth: 0,
         root: std::env::temp_dir().join("m3-11a"),
