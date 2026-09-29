@@ -10,6 +10,7 @@
 //! RED M2/packet-09: тела — `unimplemented!()` (реализация — M2/packet-10).
 
 use crate::sandbox::Sandbox;
+use serde_json::Value;
 use stellwerk_core::contract::{ModelBinding, TaskSpec};
 use thiserror::Error;
 
@@ -78,18 +79,94 @@ pub struct Progress {
     pub turns: u32,
     pub total_input_tokens: u64,
     pub stop_reason: Option<StopReason>,
+    /// Строк разобрано, с единицы. Поле закрытое: номер битой строки выдаётся вместе с
+    /// ней, и подделать его руками нельзя — иначе расследование уйдёт не туда.
+    lines_seen: u32,
 }
 
 impl Progress {
+    /// Разобрать одну строку потока. Пустая строка — не событие. Не-JSON — не «не
+    /// событие», а `MalformedLine` с номером и текстом: прогон, потерявший шаг,
+    /// неотличим от прогона без шага (закон 6).
     pub fn absorb(&mut self, line: &str) -> Result<(), RunnerError> {
-        let _ = line;
-        unimplemented!()
+        self.lines_seen += 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        let event: Value =
+            serde_json::from_str(trimmed).map_err(|_| RunnerError::MalformedLine {
+                line_no: self.lines_seen,
+                line: line.to_string(),
+            })?;
+        self.count(&event);
+        Ok(())
     }
 
     /// Прочитать поток до конца. Источник подменяемый: тест не зовёт настоящий Pi.
+    /// Нумерация строк — здесь же, в `absorb`: иначе «строка N» означала бы разные
+    /// вещи при разборе по одной и при разборе потока.
     pub fn drain(&mut self, source: &mut impl EventSource) -> Result<(), RunnerError> {
-        let _ = source;
-        unimplemented!()
+        while let Some(line) = source.next_line() {
+            self.absorb(&line)?;
+        }
+        Ok(())
+    }
+
+    /// Счётчики из одного события.
+    fn count(&mut self, event: &Value) {
+        match event.get("type").and_then(Value::as_str) {
+            // Шаг — это ход: `toolResults` в потоке пуст, а шаг засчитан (packet-09,
+            // тест `each_turn_end_adds_exactly_one_step`).
+            Some("turn_end") => {
+                self.turns += 1;
+                self.tool_steps += 1;
+                self.take_stop(event);
+            }
+            Some("message_update") => self.take_usage(event),
+            // Тип, которого мы не моделируем, — не ошибка: формат потока расширяется,
+            // и лишнее событие не должно ронять прогон.
+            _ => {}
+        }
+    }
+
+    /// `message.stopReason` — единственный источник «почему остановились». Имя, которого
+    /// мы не знаем, — НЕ «нормальная остановка»: такого ответа в модели нет, и подставить
+    /// `Stop` значило бы выдумать решение провайдера. Причины нет — остаётся `None`.
+    fn take_stop(&mut self, event: &Value) {
+        let Some(named) = event.pointer("/message/stopReason").and_then(Value::as_str) else {
+            return;
+        };
+        if let Some(reason) = stop_reason_of(named) {
+            self.stop_reason = Some(reason);
+        }
+    }
+
+    /// `input + cacheRead + cacheWrite` — три счётчика `validity_gate.py:59`.
+    fn take_usage(&mut self, event: &Value) {
+        if let Some(usage) = event.get("usage") {
+            self.total_input_tokens += usage_total(usage);
+        }
+    }
+}
+
+/// Три счётчика `validity_gate.py:59`. Счётчика, которого нет, — ноль: usage приходит
+/// частичным объектом, и недостающий ключ не должен ронять разбор.
+fn usage_total(usage: &Value) -> u64 {
+    ["input", "cacheRead", "cacheWrite"]
+        .iter()
+        .filter_map(|key| usage.get(*key).and_then(Value::as_u64))
+        .sum()
+}
+
+/// Имя причины от Pi. Что не названо — того и нет: `Timeout` раннер узнаёт из своих
+/// часов, а не из потока, и подставлять его сюда нельзя.
+fn stop_reason_of(named: &str) -> Option<StopReason> {
+    match named {
+        "stop" => Some(StopReason::Stop),
+        "error" => Some(StopReason::Error),
+        "aborted" => Some(StopReason::Aborted),
+        _ => None,
     }
 }
 
@@ -100,7 +177,33 @@ pub trait EventSource {
 /// Вердикт по накопленному прогону. Пороги — из `scripts/worker/dispatch.conf:73–75`
 /// (`GATE_REQUIRE_STOP_OK`, `GATE_REQUIRE_TOOL_STEPS`, `GATE_REQUIRE_TURNS`); умолчания
 /// 1/1/1 значат: остановка чистая, шаг есть, ходов больше одного.
+///
+/// Порядок проверок — как в `validity_gate.py`: сначала сам прогон, потом его
+/// содержательность. Каждая причина — своё состояние; свёрнутая в «невалидно» ошибка
+/// неотличима от невалидности по любой другой (закон 6).
 pub fn verdict_for(stop: StopReason, tool_steps: u32, turns: u32) -> Verdict {
-    let _ = (stop, tool_steps, turns);
-    unimplemented!()
+    if gate("GATE_REQUIRE_STOP_OK") > 0 && stop != StopReason::Stop {
+        return Verdict::InvalidLoop;
+    }
+    let min_steps = gate("GATE_REQUIRE_TOOL_STEPS");
+    if min_steps > 0 && tool_steps < min_steps {
+        return Verdict::InvalidNoToolSteps;
+    }
+    // Порог = «ходов должно быть БОЛЬШЕ, чем это», а не «не меньше»: при 1
+    // отбраковывается ход=1, ровно как `turns < 2` в validity_gate.py.
+    let min_turns = gate("GATE_REQUIRE_TURNS");
+    if min_turns > 0 && turns <= min_turns {
+        return Verdict::InvalidTooFewTurns;
+    }
+    Verdict::Valid
+}
+
+/// Порог гейта из окружения — под теми же именами, что в `dispatch.conf`, чтобы порог
+/// не разошёлся с диспетчером. Нечитаемое значение — встроенный порог, а не «проверка
+/// выключена»: сломанная настройка обязана ужесточать гейт, а не выдавать `Valid`.
+fn gate(name: &str) -> u32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| raw.trim().parse().ok())
+        .unwrap_or(1)
 }
