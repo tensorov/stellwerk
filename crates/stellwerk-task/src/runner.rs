@@ -12,6 +12,7 @@
 use crate::sandbox::Sandbox;
 use serde_json::Value;
 use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, TaskSpec};
+use stellwerk_gateway::gate::{decide, CallRequest};
 use stellwerk_gateway::permission::ToolRisk;
 use thiserror::Error;
 
@@ -263,12 +264,19 @@ pub struct Call {
     pub interactive: bool,
 }
 
-/// Решение по вызову: единственный вопрос раннера к слою разрешений. Тело — RED-заглушка
-/// (packet-03): пока его нет, ни один вызов не спросил разрешения, а политика R0–R5 живёт
-/// только в тестах гейта — то самое состояние, из которого вырос F-10.
+/// Решение по вызову: единственный вопрос раннера к слою разрешений. Тело — сборка
+/// запроса и один вызов `decide`, без разбора вердикта: вторая копия правил прошла бы
+/// тесты сегодня и разошлась с гейтом при первой же правке политики — ровно тот класс,
+/// из которого вырос F-10.
 pub fn authorize(call: &Call, caller: PolicyLevel) -> CallVerdict {
-    unimplemented!(
-        "M4/packet-03: путь раннер → authorize → decide для {:?} при {caller:?} не собран",
-        call.tool
-    )
+    let request = CallRequest {
+        tool: call.tool.clone(),
+        module: call.module.clone(),
+        risk: call.risk,
+        caller,
+        data: call.data,
+        model: call.model.clone(),
+        interactive: call.interactive,
+    };
+    decide(&request)
 }
