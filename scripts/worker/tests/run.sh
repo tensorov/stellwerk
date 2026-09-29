@@ -22,14 +22,27 @@ bad()  { FAIL=$((FAIL+1)); FAILED_NAMES="$FAILED_NAMES $1"; printf '  \033[31mFA
 head2(){ printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 # ── фикстуры ────────────────────────────────────────────────────────────────
-# mk_jsonl <file> <tool_steps> <input_cum> <turns> [identical_tool_name]
+# mk_jsonl <file> <tool_steps> <input_cum> <turns> [mode] [stop] [last_role]
+#         [last_usage] [marker] [broken_tail]
 # Детерминированный синтез потока, который читают loop_guard и validity_gate.
+# Необязательные хвосты задают ОТДЕЛЬНЫЕ дефекты финальной формы (F-20), каждый
+# по одному, чтобы причина отказа не маскировалась другой:
+#   stop=none        — провайдер не объявил причину остановки (unreported)
+#   stop=error|aborted|toolUse — объявил неуспешную
+#   last_role=toolResult, last_usage=0 — финального message_end от ассистента нет
+#   marker=none|end|settled — нет завершающего маркера агента / только agent_end
+#   broken_tail=1    — последняя строка не JSON (обрыв записи)
 mk_jsonl() {
   python3 - "$@" <<'PY'
 import json, sys
 path, steps, input_cum, turns = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 # 5-й позиционный аргумент — РЕЖИМ ('ident' | 'varied'), не имя инструмента.
 mode = sys.argv[5] if len(sys.argv) > 5 else 'ident'
+stop = sys.argv[6] if len(sys.argv) > 6 else 'stop'
+last_role = sys.argv[7] if len(sys.argv) > 7 else 'assistant'
+last_usage = (sys.argv[8] if len(sys.argv) > 8 else '1') == '1'
+marker = sys.argv[9] if len(sys.argv) > 9 else 'settled'
+broken = (sys.argv[10] if len(sys.argv) > 10 else '0') == '1'
 name = 'read'
 varied = (mode == 'varied')
 # input_cum — ЦЕЛЕВОЕ значение: делим так, чтобы сумма по turn_end была
@@ -54,12 +67,23 @@ with open(path, 'w') as fh:
             g += 1
             ev({'type': 'message_update', 'usage': {'input': per, 'output': 20,
                                                     'cacheRead': 0, 'cacheWrite': 0}})
-        ev({'type': 'turn_end', 'toolResults': [],
-            'message': {'stopReason': 'stop', 'usage': {'input': per, 'output': 20,
-                                                       'cacheRead': 0, 'cacheWrite': 0}}})
+        m = {'usage': {'input': per, 'output': 20, 'cacheRead': 0, 'cacheWrite': 0}}
+        if stop != 'none':
+            m['stopReason'] = stop
+        ev({'type': 'turn_end', 'toolResults': [], 'message': m})
     ev({'type': 'message_end', 'message': {'role': 'system', 'content': ''}})
-    for _ in range(turns):
-        ev({'type': 'message_end', 'message': {'role': 'assistant', 'content': 'STATUS: DONE'}})
+    # Финальный message_end по форме реальных трасс: ответ ассистента С usage —
+    # без usage хвоста нет, и гейт не должен считать прогон завершённым.
+    for i in range(turns):
+        last = (i == turns - 1)
+        msg = {'role': last_role if last else 'assistant', 'content': 'STATUS: DONE'}
+        if not last or last_usage:
+            msg['usage'] = {'input': per, 'output': 20, 'cacheRead': 0, 'cacheWrite': 0}
+        ev({'type': 'message_end', 'message': msg})
+    if marker in ('end', 'settled'):
+        ev({'type': 'agent_end' if marker == 'end' else 'agent_settled'})
+    if broken:
+        fh.write('{"type": "agent_settled", "trunca')   # оборванная запись
 PY
 }
 
@@ -273,9 +297,16 @@ replay() { # <файл> <ожидаем valid: true|false> <описание>
 }
 if [ -d "$TR" ] && ls "$TR"/*.jsonl.gz >/dev/null 2>&1; then
   replay skeleton-packet-01-20260927-071915 true  "M2-01  36k  норма"
-  replay cli-red-packet-03-20260927-081527    true  "M2-03 328k ЛЕГИТИМНО (при 300k убивался)"
-  replay taskfile-packet-02-20260927-080839   true  "M2-02 530k ИЗВЕСТНАЯ ЦЕНА: счётчик выключен"
-  replay taskfile-packet-02-20260927-080409   true  "M2-02 591k ИЗВЕСТНАЯ ЦЕНА: счётчик выключен"
+  # F-20 ПЕРЕВОРОТ true→false: stop=toolUse, маркера агента нет, финальный
+  # message_end=toolResult без usage → incomplete_tool_use. Строка кодировала старую
+  # семантику «всё, что не error, — успех», из-за которой прогон, оборвавшийся
+  # посреди работы инструмента, приходил как годный.
+  replay cli-red-packet-03-20260927-081527    false "M2-03 328k НЕ завершён (stop=toolUse) — F-20"
+  # F-20 ПЕРЕВОРОТ true→false: та же форма, что и выше → incomplete_tool_use.
+  replay taskfile-packet-02-20260927-080839   false "M2-02 530k НЕ завершён (stop=toolUse) — F-20"
+  # F-20 ПЕРЕВОРОТ true→false: та же форма → incomplete_tool_use. Числа 530k/591k
+  # остаются фактом о трассах, но счётчик по ним выключен — решает объявленная причина.
+  replay taskfile-packet-02-20260927-080409   false "M2-02 591k НЕ завершён (stop=toolUse) — F-20"
   # Ради этой строки решение и принималось: работа ЛЕГИТИМНА (accept.sh:
   # ПРИНЯТО, 7 тестов), а бюджет по токенам её резал. Теперь проходит.
   replay canary-packet-03-20260927-090729     true  "M2-03 656k ЛЕГИТИМЕН — ради неё бюджет и выключен"
@@ -289,6 +320,15 @@ if [ -d "$TR" ] && ls "$TR"/*.jsonl.gz >/dev/null 2>&1; then
     ok "T8c опция сохранена: явный --max-input-cum 300000 отвергает легитимный canary (счётчик не мёртв)"
   else
     bad "T8c опция не работает" "при явном 300000 трасса прошла — ветка счётчика мертва, вернуть порог нельзя"
+  fi
+  # Усиление T8c: valid=false мало — после F-20 у гейта появились свои условия
+  # отказа, и отказ по ним прошёл бы здесь «незаметно», доказывая не счётчик,
+  # а что-нибудь другое. Имя причины обязано быть ровно budget.
+  OLDR=$(python3 -c "import json;print(json.load(open('$TMP/old.json')).get('invalid_reason','НЕТ_ПОЛЯ'))" 2>/dev/null || echo missing)
+  if [ "$OLDR" = "budget" ]; then
+    ok "T8c2 отказ canary при 300000 назван budget (а не новым условием F-20)"
+  else
+    bad "T8c2 отказ не назван счётчиком" "invalid_reason=$OLDR (ожидался budget) — canary неполон по существу или счётчик мёртв"
   fi
   # Метрика обязана остаться в отчёте, даже когда не убивает.
   MCUM=$(python3 -c "import json;print(json.load(open('$TMP/old.json'))['total_input_cum'])" 2>/dev/null || echo 0)
@@ -547,6 +587,64 @@ if [ "${T14SUM:-0}" -eq 20000 ] 2>/dev/null; then
 else
   bad "T14 live-счётчик не считает" "получено '${T14SUM:-нет}' (ожидалось 20000) — блок учёта usage снова мёртв"
 fi
+
+# ── F-20: годен только объявленный успех (INFRA/packet-03) ─────────────────
+# Гейт отвергал только stop=error, раннер — всё кроме Stop: на трёх трассах из
+# пяти гейт называл успешным прогон, который раннер называл невалидным. Правило
+# владельца: Valid только при ВСЕХ шести условиях, иначе invalid_reason.
+# Каждый отказ строится ОДНИМ дефектом поверх полной завершённой формы, иначе
+# причина отказа маскируется более ранним условием и токен ничего не доказывает.
+head2 "F-20: годен только объявленный успех; причина отказа названа"
+# vgate <описание> <файл> <ожидание> [аргументы гейта]
+# ожидание: 'valid' либо ровно один машинный токен invalid_reason.
+vgate() {
+  local desc="$1" f="$2" want="$3"; shift 3
+  python3 "$WORKER/validity_gate.py" --jsonl "$f" --out "$TMP/vg.json" \
+    --max-tool-steps 30 --max-input-cum 0 "$@" >/dev/null 2>&1
+  local rc=$? got want_rc=3
+  got=$(python3 -c "import json;d=json.load(open('$TMP/vg.json'));print('valid' if d['valid'] else d.get('invalid_reason') or 'NO_REASON')" 2>/dev/null || echo missing)
+  [ "$want" = valid ] && want_rc=0
+  if [ "$got" = "$want" ] && [ "$rc" -eq "$want_rc" ]; then
+    ok "F20 $desc → $got"
+  else
+    bad "F20 $desc → $got (ожидался $want), rc=$rc"
+  fi
+}
+# Эталон: stop=stop, маркер агента есть, финальный message_end от ассистента с
+# usage, таймаута нет. --pi-exit 0 передаётся ЯВНО: в 34 прежних проверках он не
+# передавался ни разу, поэтому ветка exit==0 проходила бы тривиально и никем не
+# проверялась (проверка, которая выглядит выполненной, но не проверяет).
+mk_jsonl "$TMP/f20-ok.jsonl" 3 3000 3
+vgate "эталон: объявленный stop, маркер, финальный message_end, pi_exit=0" \
+  "$TMP/f20-ok.jsonl" valid --pi-exit 0
+mk_jsonl "$TMP/f20-endonly.jsonl" 3 3000 3 ident stop assistant 1 end
+vgate "только agent_end, без agent_settled (вторая ветвь ИЛИ) → годен" \
+  "$TMP/f20-endonly.jsonl" valid
+mk_jsonl "$TMP/f20-timeout.jsonl" 3 3000 3
+vgate "таймаут на полной форме → timeout" "$TMP/f20-timeout.jsonl" timeout --timeout true
+mk_jsonl "$TMP/f20-exit.jsonl" 3 3000 3
+vgate "ненулевой код возврата на полной форме → nonzero_exit" \
+  "$TMP/f20-exit.jsonl" nonzero_exit --pi-exit 1
+mk_jsonl "$TMP/f20-error.jsonl" 3 3000 3 ident error
+vgate "провайдер объявил error → error" "$TMP/f20-error.jsonl" error
+mk_jsonl "$TMP/f20-aborted.jsonl" 3 3000 3 ident aborted
+vgate "провайдер объявил aborted → aborted" "$TMP/f20-aborted.jsonl" aborted
+mk_jsonl "$TMP/f20-tooluse.jsonl" 3 3000 3 ident toolUse
+vgate "финал посреди работы инструмента → incomplete_tool_use" \
+  "$TMP/f20-tooluse.jsonl" incomplete_tool_use
+mk_jsonl "$TMP/f20-silent.jsonl" 3 3000 3 ident none
+vgate "причина остановки не объявлена → unreported" "$TMP/f20-silent.jsonl" unreported
+mk_jsonl "$TMP/f20-nofinal.jsonl" 3 3000 3 ident stop toolResult 0
+vgate "финальный message_end не от ассистента и без usage → no_final_message" \
+  "$TMP/f20-nofinal.jsonl" no_final_message
+mk_jsonl "$TMP/f20-nomarker.jsonl" 3 3000 3 ident stop assistant 1 none
+vgate "нет завершающего маркера агента → truncated" "$TMP/f20-nomarker.jsonl" truncated
+mk_jsonl "$TMP/f20-broken.jsonl" 3 3000 3 ident stop assistant 1 settled 1
+vgate "последняя строка не JSON (обрыв записи) → truncated" "$TMP/f20-broken.jsonl" truncated
+mk_jsonl "$TMP/f20-loop.jsonl" 0 3000 3
+vgate "ни одного действия → loop" "$TMP/f20-loop.jsonl" loop
+mk_jsonl "$TMP/f20-budget.jsonl" 31 3000 3
+vgate "шагов больше порога → budget" "$TMP/f20-budget.jsonl" budget
 
 # ── итог ───────────────────────────────────────────────────────────────────
 printf '\n────────────────────────────────────────\n'

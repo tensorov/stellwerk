@@ -1,13 +1,26 @@
 #!/usr/bin/env python3
 """validity_gate.py — exit 0 от pi НЕ означает success.
 
-invalid, если хотя бы одно (пороги в dispatch.conf):
-  stop_reason_last == "error"          (провайдерский/рантайм сбой)
-  tool_steps == 0                      (воркер не сделал ни одного действия)
-  turns < 2                            (меньше двух ходов — не содержательная работа)
-  timeout == true и turns < 2          (умер до первого содержательного хода)
-  tool_steps > MAX_TOOL_STEPS          (бюджет шагов исчерпан)
-  input_cum > MAX_INPUT_CUM             (бюджет контекста исчерпан)
+Правило владельца (F-20): годен ТОЛЬКО объявленный успех. Раньше отвергался
+единственный stop=error, поэтому прогон, завершившийся на toolUse, проходил как
+годный, тогда как раннер тот же прогон отвергал (F-20, три трассы из пяти).
+
+Valid возможно, только если ВСЕ шесть условий:
+  1. stop_reason_last == "stop"    провайдер явно объявил успешную остановку
+  2. pi_exit == 0                   процесс завершился без ошибки
+  3. timeout == false               таймаут не объявляет успеха
+  4. финальный message_end есть: последний — role=assistant И с message.usage
+  5. трасса не оборвана: последняя строка — валидный JSON И есть agent_end
+     либо agent_settled
+  6. loop и budget (пороги в dispatch.conf):
+     tool_steps == 0                  (воркер не сделал ни одного действия)
+     turns < 2                        (меньше двух ходов — не содержательная работа)
+     tool_steps > MAX_TOOL_STEPS      (бюджет шагов исчерпан)
+     input_cum > MAX_INPUT_CUM        (бюджет контекста исчерпан)
+
+Отказ называется МАШИННЫМ ТОКЕНОМ в invalid_reason (без пробелов: значение уходит
+в metrics.json и читается инструментами), первым сработавший в порядке пакета.
+reasons остаётся подробным списком для человека.
 
 Код возврата: 0 — valid, 3 — invalid (packet возвращается, не мержится).
 Дополнительно (информационно) проверяет наличие хвоста STATUS/FILES/TEST/EVIDENCE.
@@ -18,6 +31,7 @@ import re
 import sys
 
 TAIL = re.compile(r'^\s*(STATUS|FILES|TEST|EVIDENCE):', re.M)
+END_MARKERS = ('agent_end', 'agent_settled')
 
 
 def main():
@@ -37,6 +51,10 @@ def main():
     stop = None
     input_cum = 0
     text = []
+    last_role = None
+    last_usage = False
+    end_marker = False
+    tail_json = True   # последняя непустая строка файла — валидный JSON?
     try:
         with open(a.jsonl, errors='replace') as fh:
             for line in fh:
@@ -45,9 +63,13 @@ def main():
                     continue
                 try:
                     ev = json.loads(line)
+                    tail_json = True
                 except json.JSONDecodeError:
+                    tail_json = False
                     continue
                 t = ev.get('type')
+                if t in END_MARKERS:
+                    end_marker = True
                 if t == 'tool_execution_start':
                     tool_steps += 1
                 elif t == 'turn_end':
@@ -66,12 +88,53 @@ def main():
                                 text.append(b.get('text') or '')
                 elif t == 'message_end':
                     turns += 1
+                    m = ev.get('message') or {}
+                    u2 = m.get('usage')
+                    # Решает только ПОСЛЕДНИЙ message_end: ответы ассистента выше
+                    # по потоку прогон не закрывают, закрывает последний.
+                    last_role = m.get('role')
+                    last_usage = isinstance(u2, dict) and bool(u2)
     except OSError as exc:
         print('VALIDITY GATE: jsonl недоступен: %s' % exc, file=sys.stderr)
         print(json.dumps({'valid': False, 'reason': 'jsonl_unreadable'}, indent=1))
         return 3
 
     timeout = str(a.timeout).lower() in ('true', '1', 'yes')
+    over_steps = a.max_tool_steps > 0 and tool_steps > a.max_tool_steps
+    over_input = a.max_input_cum > 0 and input_cum > a.max_input_cum
+    # Первый сработавший, в порядке пакета. Порядок не косметический: у
+    # «негоден» без причины нет формы, а перечисление причин читает инструментарий.
+    reason = None
+    if timeout:
+        # Раньше таймаут отвергал только прогон, умерший ДО первого хода; уход в
+        # таймаут на середине работы считался успехом. Таймаут успеха не объявляет.
+        reason = 'timeout'
+    elif stop == 'error':
+        reason = 'error'
+    elif stop == 'aborted':
+        reason = 'aborted'
+    elif stop == 'toolUse':
+        # Провайдер остановился посреди работы инструмента: ход не закрыт.
+        reason = 'incomplete_tool_use'
+    elif stop != 'stop':
+        # Причину не объявили (None, maxTokens, …). Тишина — не объявленный успех:
+        # молчание провайдера и его согласие неразличимы, если второе не названо.
+        reason = 'unreported'
+    elif last_role != 'assistant' or not last_usage:
+        # Финального ответа ассистента с usage нет — предъявлять нечего, все
+        # предыдущие ходы могли оборваться на середине.
+        reason = 'no_final_message'
+    elif not tail_json or not end_marker:
+        # Трасса могла быть отрезана: либо последняя строка не JSON, либо
+        # закрывающего маркера агента в потоке нет вовсе.
+        reason = 'truncated'
+    elif tool_steps == 0 or turns < 2:
+        reason = 'loop'
+    elif over_steps or over_input:
+        reason = 'budget'
+    elif a.pi_exit != 0:
+        reason = 'nonzero_exit'
+
     reasons = []
     if stop == 'error':
         reasons.append('stop_reason=error')
@@ -81,14 +144,17 @@ def main():
         reasons.append('turns<2')
     if timeout and turns < 2:
         reasons.append('timeout_before_content')
-    if a.max_tool_steps > 0 and tool_steps > a.max_tool_steps:
+    if over_steps:
         reasons.append('budget:tool_steps=%d>%d' % (tool_steps, a.max_tool_steps))
-    if a.max_input_cum > 0 and input_cum > a.max_input_cum:
+    if over_input:
         reasons.append('budget:input_cum=%d>%d' % (input_cum, a.max_input_cum))
+    if reason and not reasons:
+        reasons.append(reason)
 
     res = {
-        'valid': not reasons,
+        'valid': not reasons and reason is None,
         'reasons': reasons,
+        'invalid_reason': reason,
         'pi_exit': a.pi_exit,
         'stop_reason_last': stop,
         'turns': turns,
@@ -102,9 +168,10 @@ def main():
     if a.out:
         with open(a.out, 'w') as fh:
             json.dump(res, fh, indent=1, ensure_ascii=False)
-    print('VALIDITY GATE: %s (pi_exit=%s stop=%s turns=%d steps=%d input_cum=%d%s)'
+    print('VALIDITY GATE: %s (pi_exit=%s stop=%s turns=%d steps=%d input_cum=%d%s%s)'
           % ('VALID' if res['valid'] else 'INVALID -> packet возвращается',
              a.pi_exit, stop, turns, tool_steps, input_cum,
+             '' if reason is None else ' reason=%s' % reason,
              '' if res['tail_ok'] else ' [хвост STATUS/... не найден]'))
     if reasons:
         print('  причины: %s' % ', '.join(reasons))
