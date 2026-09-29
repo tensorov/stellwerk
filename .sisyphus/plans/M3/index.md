@@ -31,6 +31,7 @@
 | packet-12b | m3/session-question-green | 12a, 11c | `--test session_failure` + `--test session_contract` | GREEN: вопрос, истечение, сбой, усечение |
 | packet-13 | m3/public-api-test | 06 | `--test shaping` | F-14: модуль shaping публичен |
 | packet-14 | m3/receipt-workspace | 10 | `--test receipt` | F-22: рабочее место чека |
+| packet-15 | m3/receipt-locks | 14 | `--test receipt` | F-25: замки на регрессию чека |
 
 ## Волны
 
