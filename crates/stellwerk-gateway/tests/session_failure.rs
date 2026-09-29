@@ -133,7 +133,12 @@ fn an_unanswered_ask_suspends_and_writes_the_question_to_the_inbox() {
     let raw = fs::read_to_string(ws.question(&s.id)).expect("вопрос лёг в inbox");
     let back: ApprovalRequest = serde_json::from_str(&raw).expect("вопрос разобран");
     assert_eq!(back.run_id, s.id, "прогон в вопросе");
-    assert_eq!(back.args_hash.len(), 64, "sha256: {:?}", back.args_hash);
+    assert_eq!(
+        back.empty_args_digest.len(),
+        64,
+        "sha256: {:?}",
+        back.empty_args_digest
+    );
     assert!(!back.expires_at.is_empty(), "срок ответа задан");
 }
 
@@ -149,7 +154,7 @@ fn an_expired_question_is_not_a_policy_denial() {
         run_id: s.id.clone(),
         tool: MOUNTED.into(),
         risk: ToolRisk::Classified(RiskClass::R2),
-        args_hash: "a".repeat(64),
+        empty_args_digest: "a".repeat(64),
         requested_at: "2020-01-01T00:00:00Z".into(),
         expires_at: "2020-01-01T04:00:00Z".into(),
     };
@@ -194,7 +199,11 @@ fn a_failed_tool_carries_its_receipt_inside_the_error() {
             assert_eq!(source, ToolError("упал".into()), "чужой текст цел");
             assert_eq!(receipt.tool, MOUNTED, "чек об этом вызове");
             assert!(!receipt.call_id.is_empty(), "чек без call_id не отыскать");
-            assert_eq!(receipt.input_hash.len(), 64, "хеш ушедшего");
+            assert_eq!(
+                receipt.empty_input_digest.len(),
+                64,
+                "дайджест пустого тела входа, а не пустая строка"
+            );
         }
         other => panic!("ожидался SessionError::Tool, получено {other:?}"),
     }
@@ -281,7 +290,10 @@ fn a_calibrated_oversized_output_is_truncated_and_the_full_body_lands_in_an_arti
         std::ffi::OsStr::new(&named),
         "имя артефакта — хеш полного тела"
     );
-    assert_eq!(receipt.output_hash, shaped.sha256, "один хеш о полном теле");
+    assert_eq!(
+        receipt.full_output_hash, shaped.sha256,
+        "один хеш о полном теле"
+    );
 }
 
 #[test]

@@ -6,15 +6,12 @@
 //! расследовании. Вызов без чека не состоялся: без единственного следа в потоке
 //! вызов неотличим от небывшего.
 //!
-//! В чек идут только sha256 от тел входа и вывода, никогда сами тела: секрет из
-//! аргументов не уезжает в поток (REVIEW §3.2). Хеш пустого тела — канонический
-//! дайджест, а не `""`: пустая строка означала бы «не посчитали».
-//!
-//! RED-заглушка M3/packet-09: поверхность объявлена, поведение — packet-10.
+//! Тела в чек не идут никогда: секрет из аргументов не уезжает в поток (REVIEW §3.2).
+//! Уезжает sha256 полного тела ВЫВОДА, а по входу — только канонический дайджест
+//! пустого тела, потому что тела входа у слоя нет: `CallRequest` аргументов не несёт.
+//! `""` вместо дайджеста означала бы «не посчитали», а это другое состояние.
 
 use std::collections::BTreeMap;
-
-use thiserror::Error;
 
 use stellwerk_core::contract::{Event, EventSource, RiskClass};
 
@@ -37,29 +34,20 @@ pub struct Receipt {
     pub verdict: Verdict,
     /// Класс риска вызова: в поток уходит тот же, что и в решении.
     pub risk: RiskClass,
-    /// SHA-256 тела входа, hex в нижнем регистре. Само тело в чек не пишется.
-    pub input_hash: String,
-    /// SHA-256 полного тела вывода ДО shaping: хеш по усечённому тексту не
-    /// сверить с артефактом (REVIEW §3.3).
-    pub output_hash: String,
+    /// Дайджест ПУСТОГО тела: тела входа у слоя нет — `CallRequest` аргументов не несёт,
+    /// а в поток уезжает только хеш. «Входа нет» здесь неотличимо от «вход был пуст», и
+    /// пустым он и записан.
+    pub empty_input_digest: String,
+    /// SHA-256 полного тела вывода, посчитанный ДО шейпинга и не сохранённый: сверить
+    /// его можно только в момент захвата. На путях отказа и сбоя тела нет, и здесь лежит
+    /// дайджест пустого тела.
+    pub full_output_hash: String,
     /// Вывод усечён, полное тело ушло в артефакт.
     pub truncated: bool,
     /// Длительность вызова в миллисекундах. `u64`, а не `f64`: время не дробное.
     pub duration_ms: u64,
     /// Время вызова в RFC 3339 (UTC) — формат, которую ждёт `Event`.
     pub ts: String,
-}
-
-/// Что может помешать записи чека.
-#[derive(Debug, Error)]
-pub enum ReceiptError {
-    /// Поведение не реализовано; до M3/packet-10 чека в потоке не существует.
-    #[error("not implemented: чек вызова")]
-    NotImplemented,
-    /// Тело не отхешировалось. Хеш при этом не заполняется: пустым он быть не
-    /// может, а «не посчитали» — отдельное состояние, а не значение.
-    #[error("hash: {0}")]
-    Hash(String),
 }
 
 impl Receipt {
@@ -75,7 +63,6 @@ impl Receipt {
     /// константой выглядит полным, указывает не туда, где был вызов, и при одном
     /// рабочем месте неотличим от настоящего значения. Пустой строкой это не
     /// выражается: она означала бы «не посчитали», а чек без места не считается.
-    /// RED: поведение — M3/packet-10.
     pub fn to_event(&self, task_id: &str, workspace: &str) -> Event {
         let mut payload = BTreeMap::new();
         payload.insert("task_id".to_owned(), task_id.to_owned());
@@ -86,8 +73,11 @@ impl Receipt {
         // иначе расследование не отличит «запрещено политикой» от «не спросили».
         payload.insert("verdict".to_owned(), format!("{:?}", self.verdict));
         payload.insert("truncated".to_owned(), self.truncated.to_string());
-        payload.insert("input_hash".to_owned(), self.input_hash.clone());
-        payload.insert("output_hash".to_owned(), self.output_hash.clone());
+        payload.insert(
+            "empty_input_digest".to_owned(),
+            self.empty_input_digest.clone(),
+        );
+        payload.insert("full_output_hash".to_owned(), self.full_output_hash.clone());
         payload.insert("duration_ms".to_owned(), self.duration_ms.to_string());
 
         Event {

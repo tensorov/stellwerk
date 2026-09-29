@@ -34,8 +34,8 @@ fn receipt(verdict: Verdict) -> Receipt {
         module: "reg".into(),
         verdict,
         risk: RiskClass::R2,
-        input_hash: sha256_hex(INPUT.as_bytes()),
-        output_hash: sha256_hex(OUTPUT.as_bytes()),
+        empty_input_digest: sha256_hex(INPUT.as_bytes()),
+        full_output_hash: sha256_hex(OUTPUT.as_bytes()),
         truncated: false,
         duration_ms: 12,
         ts: "2026-09-28T10:00:00Z".into(),
@@ -117,7 +117,7 @@ fn empty_output_still_hashes() {
     // неотличима от значения, то есть подделкой под присутствие данных.
     const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
     let mut r = receipt(Verdict::Allow);
-    r.output_hash = sha256_hex(b"");
+    r.full_output_hash = sha256_hex(b"");
     let event = r.to_event(TASK, WORKSPACE);
     assert!(
         event.payload.values().any(|value| value == EMPTY_SHA256),
@@ -238,26 +238,27 @@ fn payload_carries_the_duration_of_the_call() {
 #[test]
 fn each_hash_sits_under_its_own_key() {
     // Дано: чек, у которого тела входа и вывода РАЗНЫЕ, а значит и хеши разные.
-    // Тогда: под `input_hash` лежит sha256 от INPUT, под `output_hash` — от
-    // OUTPUT.
-    // Поломка, которую ловит: обмен ключей `input_hash` ↔ `output_hash`. Поиск по
-    // значению (сценарий выше) обмен не видит: обе хеш-строки по-прежнему в
+    // Тогда: под `empty_input_digest` лежит sha256 от INPUT, под `full_output_hash` —
+    // от OUTPUT.
+    // Поломка, которую ловит: обмен ключей `empty_input_digest` ↔ `full_output_hash`.
+    // Поиск по значению (сценарий выше) обмен не видит: обе хеш-строки по-прежнему в
     // payload, и все семь прежних сценариев зелёные. А сверка ответа с артефактом
-    // идёт по `output_hash` — и после обмена она сравнивает выход с выходом,
+    // идёт по `full_output_hash` — и после обмена она сравнивает выход с выходом,
     // то есть подтверждает подмену вместо того, чтобы её поймать.
-    let input_hash = sha256_hex(INPUT.as_bytes());
-    let output_hash = sha256_hex(OUTPUT.as_bytes());
+    let empty_input_digest = sha256_hex(INPUT.as_bytes());
+    let full_output_hash = sha256_hex(OUTPUT.as_bytes());
     let event = receipt(Verdict::Allow).to_event(TASK, WORKSPACE);
     assert_eq!(
-        event.payload.get("input_hash"),
-        Some(&input_hash),
-        "под ключом входа лежит хеш входа: иначе запрос сверяется с артефактом \
-         не тем телом, и расхождение не видно"
+        event.payload.get("empty_input_digest"),
+        Some(&empty_input_digest),
+        "под ключом входа лежит дайджест ПУСТОГО тела, а не хеш входа: тела входа у \
+         слоя нет, а если бы ключи поменялись, сверка с артефактом пошла бы не по тому \
+         телу, и расхождение осталось бы невидимым"
     );
     assert_eq!(
-        event.payload.get("output_hash"),
-        Some(&output_hash),
-        "под ключом выхода лежит хеш вывода: по нему артефакт сверяется с \
+        event.payload.get("full_output_hash"),
+        Some(&full_output_hash),
+        "под ключом выхода лежит хеш ПОЛНОГО тела вывода: по нему артефакт сверяется с \
          ответом, и подмена делает сверку зелёной на любом выводе"
     );
 }
