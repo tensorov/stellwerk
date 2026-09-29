@@ -29,7 +29,7 @@
 | packet-11c | m3/session-failure-red | 11b | `--test session_failure` | RED: вопрос, истечение, сбой |
 | packet-12a | m3/session-routing-green | 11b | `--test session` | GREEN: монтаж, decide, вызов, чек |
 | packet-12b | m3/session-question-green | 12a, 11c | `--test session_failure` + `--test session_contract` | GREEN: вопрос, истечение, сбой, субагенты |
-| packet-12c | m3/session-budget-red | 12b, 17 | `--test session_failure` | RED: усечение и калибровка (ждёт 17) |
+| packet-12c | m3/session-budget-red | 12b, 17 | `--test session_failure` | RED: усечение и калибровка — **ПРИНЯТ** `9a49dd4`, аттест 106/107 |
 | packet-12d | m3/session-budget-green | 12c, 17, 18, 15, 16 | `--test session_failure` | GREEN: проверка калибровки, усечение, именованный отказ |
 | packet-17 | m3/session-calibration-surface | 12b, 15, 16, 06 | `cargo test -p stellwerk-gateway` | F-24: `TokenCalibration` в `Session` (4 файла, ждёт решения) |
 | packet-18 | m3/receipt-honesty | 17, 12c, 15, 16 | `cargo test -p stellwerk-gateway` | F-25 (6-7) + F-30 вариант A: поля чеков называются тем, что лежит, `ReceiptError` удалён (5 файлов) |
