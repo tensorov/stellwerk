@@ -91,6 +91,7 @@ fn session(run_id: &str, root: &Path) -> Session {
         },
         caller: PolicyLevel::L5Owner,
         budget_tokens: 43_000,
+        token_calibration: None,
         calls: 0,
         subagent_depth: 0,
         root: root.to_path_buf(),
