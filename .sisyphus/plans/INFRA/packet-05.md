@@ -5,7 +5,7 @@ files_allowed: [xtask/Cargo.toml, xtask/tests/red_fixture.rs, xtask/src/main.rs,
 limit_waiver: правка атомарна и на 4 файла по одной причине — строка таблицы без прибора даёт «не собрался», а прибор без строки недостижим и мёртв; кроме того `POSITIVE_FIXTURE` обязан указывать на новую строку в том же merge, иначе гейт остаётся без позитивной фикстуры. Три файла из четырёх обязательны попарно: Cargo.toml↔прибор, main.rs↔прибор, main.rs↔xtask_cli.rs. Сценарий «сначала прибор, потом строка» оставляет merge с недостижимым прибором, а «сначала строка» — с гейтом, который отвергает всё.
 max_diff_lines: 200
 test: cargo test -p xtask
-acceptance: `cargo test --workspace` → exit 0, при этом `red_fixture` НЕ появляется в выводе вовсе (таргет пропущен, а не пройден: «нет провала» не выдаётся за «тест зелёный»). `cargo test -p xtask --features red-fixture --test red_fixture` → ненулевой код, ровно 1 упавший. `cargo xtask red-gate-red-fixture` → exit 0 (красное принимается). `cargo xtask red-gate-permission` → ненулевой (зелёное отвергается). `cargo test -p xtask` → exit 0, причём все четыре теста, работающие через `POSITIVE_FIXTURE`, проходят НЕЗАВИСИМО от того, красный ли сейчас хоть один бинарь milestone. `cargo clippy --workspace --all-targets -- -D warnings` → чисто. Существующие строки `RED_GATES` не удалять.
+acceptance: `cargo test -p xtask` → exit 0, при этом `red_fixture` НЕ появляется в выводе вовсе (таргет пропущен, а не пройден: «нет провала» не выдаётся за «тест зелёный»). `cargo test -p xtask --features red-fixture --test red_fixture` → ненулевой код, ровно 1 упавший. `cargo xtask red-gate-red-fixture` → exit 0 (красное принимается). `cargo xtask red-gate-permission` → ненулевой (зелёное отвергается). `cargo test -p xtask` → exit 0, причём все четыре теста, работающие через `POSITIVE_FIXTURE`, проходят НЕЗАВИСИМО от того, красный ли сейчас хоть один бинарь milestone. `cargo clippy --workspace --all-targets -- -D warnings` → чисто. Существующие строки `RED_GATES` не удалять.
 forbidden: [cargo add, cargo install, #[ignore], #[allow], ослабление assert, "попутные" правки, перенаправление аргументов из argv в дочерний процесс, --all-features в коде и в рецептах, перенос прибора в crates/, ослабление запрета на произвольные аргументы]
 depends_on: [04]
 data_class: public
@@ -14,6 +14,17 @@ Contract-Change: xtask task surface — в RED_GATES появляется стр
 Decision: F-31, решение владельца 2026-09-29: откатить слияние, редизайн отдельным пакетом с ADR (FINDINGS.md)
 ADR: docs/adr/0004-red-gate-fixture.md
 Depends-On-External: F-08 (allowlist PolyForge, issue #1)
+
+## О приёмке, ослабленной после раздачи (2026-09-29)
+
+Изначально приёмка требовала `cargo test --workspace` → exit 0. Это условие **невыполнимо**
+и было моей ошибкой: в контейнере намеренно красная фикстура `session_failure` (M3-11c),
+которую озеленит M3-12b. Общий прогон на текущем `main` даёт 101 и обязан его давать.
+
+Заменено на `cargo test -p xtask` → exit 0: это и есть та цель, которую проверяет пакет.
+Признак «`red_fixture` не появляется в выводе вовсе» сохранён и остаётся главным —
+именно он отличает «таргет пропущен» от «тест зелёный». Воркер вернул `STATUS: BLOCKED`
+именно из-за этого условия, и был прав: он проверял пакет, а не доверял моей формулировке.
 
 ## Контекст
 
