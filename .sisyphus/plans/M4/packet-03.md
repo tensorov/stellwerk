@@ -4,7 +4,7 @@ goal: GREEN — `authorize` собирает `CallRequest` и спрашивае
 files_allowed: [crates/stellwerk-task/src/runner.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-task --test permission_wire
-acceptance: `cargo test -p stellwerk-task --test permission_wire` → 0 failed. `cargo test -p stellwerk-gateway` остаётся 27/27 — регрессии нет.
+acceptance: `cargo test -p stellwerk-task --test permission_wire` → 0 failed из 10. `cargo test -p stellwerk-gateway` остаётся 62/62 зелёных (gate 11, gate_ask 7, mount 8, permission 9, receipt 12, session 4, session_contract 5, shaping 6) — регрессии нет. `session_failure` остаётся красным 0/4: это фикстура M3-11c, её озеленит M3-12b, и её озеленить здесь нельзя — это был бы обход F-31.
 forbidden: [cargo add, cargo install, правка тестов, #[ignore], #[allow], ослабление assert, refactor, "попутные" правки]
 depends_on: [02, M2-09, M2-10, M2-11, M2-13, M2-14]
 data_class: public
@@ -40,7 +40,8 @@ lane: m4/authorize
 ## Evidence
 
 - `cargo test -p stellwerk-task --test permission_wire` → 0 failed.
-- `cargo test -p stellwerk-gateway` → 27/27, регрессии нет.
+- `cargo test -p stellwerk-gateway` → 62/62 зелёных, регрессии нет. Число 27, стоявшее здесь
+  раньше, не соответствовало коду и было исправлено при раздаче пакета (класс F-29).
 - clippy `-D warnings` и `fmt --check` чисто.
 - Формат ответа: `STATUS: DONE|BLOCKED` / `FILES:` / `TEST:` / `EVIDENCE:` (по `AGENTS.md`).
 - Коммит не делать без явного указания владельца.
