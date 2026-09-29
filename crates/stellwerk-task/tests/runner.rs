@@ -16,6 +16,7 @@ use stellwerk_task::runner::{EventSource, RunnerError};
 const SESSION: &str =
     r#"{"type":"session","version":3,"id":"fix","timestamp":"2026-09-27T00:00:00Z"}"#;
 const TURN_END: &str = r#"{"type":"turn_end","toolResults":[],"message":{"stopReason":"stop","usage":{"input":1000,"cacheRead":9000,"cacheWrite":0}}}"#;
+const TOOL_START: &str = r#"{"type":"tool_execution_start","toolCallId":"t1","toolName":"bash"}"#;
 const NOT_JSON: &str = "{не json";
 
 #[test]
@@ -158,30 +159,237 @@ fn unreported_run_is_never_valid() {
     assert_ne!(v, Verdict::Valid, "Unreported прошёл как успех");
 }
 
+// --- F-18b: счётчики приведены к validity_gate.py, наборы доноров — измеренные ---
+
 #[test]
-fn each_turn_end_adds_exactly_one_step() {
+fn only_tool_execution_start_adds_a_step_and_turn_end_adds_none() {
     let mut p = Progress::default();
     p.absorb(SESSION).expect("сессия — не ошибка");
     assert_eq!(p.tool_steps, 0, "сессия шагом не считается");
     p.absorb(TURN_END).expect("конец хода разбирается");
-    assert_eq!(p.tool_steps, 1, "первый turn_end даёт один шаг");
-    p.absorb(TURN_END).expect("конец хода разбирается");
+    assert_eq!(
+        p.tool_steps, 0,
+        "конец хода шага НЕ даёт — так же и в гейте"
+    );
+    assert_eq!(p.turns, 0, "ход — это message_end, а не конец хода");
+    p.absorb(TOOL_START)
+        .expect("начало инструмента разбирается");
+    assert_eq!(
+        p.tool_steps, 1,
+        "единственный донор шага — tool_execution_start"
+    );
+    p.absorb(TOOL_START)
+        .expect("начало инструмента разбирается");
     assert_eq!(p.tool_steps, 2, "второй даёт ещё шаг, а не снова один");
+    assert_eq!(p.turns, 0, "ни одно из них не ход");
+}
+
+/// Вырезка настоящей трассы `canary-packet-03-20260927-090729`
+/// (`scripts/worker/tests/traces/canary-packet-03-20260927-090729.jsonl.gz`, снята
+/// 2026-09-27 09:07:29) — события трёх донорских типов в исходном порядке, без
+/// повторов. Опущено только то, что раннер не читает: `content`, `sections`,
+/// `toolResults`, у `usage` — `cost`/`reasoning`, у `message_end` — всё, кроме `role`.
+/// Числа `usage` и `stopReason` — дословно из оригинала, их и сверяют с архивом.
+///
+/// Сама `.gz` в тест не распаковывается: такой зависимости в `[workspace.dependencies]`
+/// нет и добавлять её запрещено (закон 5). Порядок строк и их наборы воспроизводят
+/// расхождение сторон: на двух строках `turn_end`, `message_end` и
+/// `tool_execution_start` совпадают по счёту и дефект не виден.
+const CANARY_EXCERPT: &str = r#"
+{"type":"message_end","message":{"role":"system"}}
+{"type":"message_end","message":{"role":"user"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":4497,"output":134,"cacheRead":0,"cacheWrite":0,"totalTokens":4631},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-a85b66d5f65c6891","toolName":"bash"}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-a2568af76dbd9335","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":4497,"output":134,"cacheRead":0,"cacheWrite":0,"totalTokens":4631},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":977,"output":218,"cacheRead":4192,"cacheWrite":0,"totalTokens":5387},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-ab0ff1a37bdcddf4","toolName":"bash"}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-bc3c17913b1843eb","toolName":"bash"}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-874b3632b06d1b75","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":977,"output":218,"cacheRead":4192,"cacheWrite":0,"totalTokens":5387},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":1403,"output":253,"cacheRead":4192,"cacheWrite":0,"totalTokens":5848},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-a1b2563812c0be23","toolName":"read"}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-8216b3c1617e7dd3","toolName":"read"}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-acea26f03ca19e01","toolName":"read"}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-b484553a9dcc4ab2","toolName":"read"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":1403,"output":253,"cacheRead":4192,"cacheWrite":0,"totalTokens":5848},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":3016,"output":94,"cacheRead":4192,"cacheWrite":0,"totalTokens":7302},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-bf5c180a556f430f","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":3016,"output":94,"cacheRead":4192,"cacheWrite":0,"totalTokens":7302},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":1446,"output":1220,"cacheRead":6288,"cacheWrite":0,"totalTokens":8954},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-9bd80bf44ef9bcff","toolName":"write"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":1446,"output":1220,"cacheRead":6288,"cacheWrite":0,"totalTokens":8954},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":631,"output":115,"cacheRead":8384,"cacheWrite":0,"totalTokens":9130},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-8b66a046ca8bde0d","toolName":"write"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":631,"output":115,"cacheRead":8384,"cacheWrite":0,"totalTokens":9130},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":807,"output":80,"cacheRead":8384,"cacheWrite":0,"totalTokens":9271},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-a7503cf81bff34b8","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":807,"output":80,"cacheRead":8384,"cacheWrite":0,"totalTokens":9271},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":1231,"output":200,"cacheRead":8384,"cacheWrite":0,"totalTokens":9815},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-aced9070c499c8f1","toolName":"edit"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":1231,"output":200,"cacheRead":8384,"cacheWrite":0,"totalTokens":9815},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":1498,"output":70,"cacheRead":8384,"cacheWrite":0,"totalTokens":9952},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-9bfd8f06b1a01a40","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":1498,"output":70,"cacheRead":8384,"cacheWrite":0,"totalTokens":9952},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":1659,"output":84,"cacheRead":8384,"cacheWrite":0,"totalTokens":10127},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-ab9305f8d21f8b4e","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":1659,"output":84,"cacheRead":8384,"cacheWrite":0,"totalTokens":10127},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":4391,"output":631,"cacheRead":8384,"cacheWrite":0,"totalTokens":13406},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-9f05dc0110500cd6","toolName":"edit"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":4391,"output":631,"cacheRead":8384,"cacheWrite":0,"totalTokens":13406},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":897,"output":688,"cacheRead":12576,"cacheWrite":0,"totalTokens":14161},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-a73d76a2dd05056b","toolName":"edit"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":897,"output":688,"cacheRead":12576,"cacheWrite":0,"totalTokens":14161},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":1652,"output":197,"cacheRead":12576,"cacheWrite":0,"totalTokens":14425},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-8e907629cc5d808d","toolName":"edit"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":1652,"output":197,"cacheRead":12576,"cacheWrite":0,"totalTokens":14425},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":1916,"output":76,"cacheRead":12576,"cacheWrite":0,"totalTokens":14568},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-9c73e08cd01a51f2","toolName":"read"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":1916,"output":76,"cacheRead":12576,"cacheWrite":0,"totalTokens":14568},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":3185,"output":1653,"cacheRead":12576,"cacheWrite":0,"totalTokens":17414},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-bbf42134d7525d70","toolName":"edit"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":3185,"output":1653,"cacheRead":12576,"cacheWrite":0,"totalTokens":17414},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":713,"output":76,"cacheRead":16768,"cacheWrite":0,"totalTokens":17557},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-bb0f432153ec7f9b","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":713,"output":76,"cacheRead":16768,"cacheWrite":0,"totalTokens":17557},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":880,"output":73,"cacheRead":16768,"cacheWrite":0,"totalTokens":17721},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-b59e5c89652b1ba2","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":880,"output":73,"cacheRead":16768,"cacheWrite":0,"totalTokens":17721},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":1689,"output":572,"cacheRead":16768,"cacheWrite":0,"totalTokens":19029},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-9604104162ded4d9","toolName":"edit"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":1689,"output":572,"cacheRead":16768,"cacheWrite":0,"totalTokens":19029},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":232,"output":94,"cacheRead":18864,"cacheWrite":0,"totalTokens":19190},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-b15cd9730de1465c","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":232,"output":94,"cacheRead":18864,"cacheWrite":0,"totalTokens":19190},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":1218,"output":1338,"cacheRead":18864,"cacheWrite":0,"totalTokens":21420},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-be92a397d003625f","toolName":"edit"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":1218,"output":1338,"cacheRead":18864,"cacheWrite":0,"totalTokens":21420},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":527,"output":73,"cacheRead":20960,"cacheWrite":0,"totalTokens":21560},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-877ddc60c891c8dc","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":527,"output":73,"cacheRead":20960,"cacheWrite":0,"totalTokens":21560},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":1287,"output":1183,"cacheRead":20960,"cacheWrite":0,"totalTokens":23430},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-a4bcee0a7616f08c","toolName":"edit"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":1287,"output":1183,"cacheRead":20960,"cacheWrite":0,"totalTokens":23430},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":441,"output":73,"cacheRead":23056,"cacheWrite":0,"totalTokens":23570},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-8ec7cdc7291a3825","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":441,"output":73,"cacheRead":23056,"cacheWrite":0,"totalTokens":23570},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":2410,"output":1306,"cacheRead":23056,"cacheWrite":0,"totalTokens":26772},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-8a1dcba790fff0d6","toolName":"edit"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":2410,"output":1306,"cacheRead":23056,"cacheWrite":0,"totalTokens":26772},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":1687,"output":73,"cacheRead":25152,"cacheWrite":0,"totalTokens":26912},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-bf029ee2716d7237","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":1687,"output":73,"cacheRead":25152,"cacheWrite":0,"totalTokens":26912},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":2647,"output":1455,"cacheRead":25152,"cacheWrite":0,"totalTokens":29254},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-9accd11a18b56b98","toolName":"edit"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":2647,"output":1455,"cacheRead":25152,"cacheWrite":0,"totalTokens":29254},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":2073,"output":73,"cacheRead":27248,"cacheWrite":0,"totalTokens":29394},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-b8c8da94c9cebb64","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":2073,"output":73,"cacheRead":27248,"cacheWrite":0,"totalTokens":29394},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":495,"output":133,"cacheRead":29344,"cacheWrite":0,"totalTokens":29972},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-88c19e516b23e97a","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":495,"output":133,"cacheRead":29344,"cacheWrite":0,"totalTokens":29972},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":29325,"output":89,"cacheRead":0,"cacheWrite":0,"totalTokens":29414},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-96fb2df715723977","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":29325,"output":89,"cacheRead":0,"cacheWrite":0,"totalTokens":29414},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":161,"output":74,"cacheRead":29344,"cacheWrite":0,"totalTokens":29579},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-b00ab21237b87725","toolName":"read"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":161,"output":74,"cacheRead":29344,"cacheWrite":0,"totalTokens":29579},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":29589,"output":63,"cacheRead":0,"cacheWrite":0,"totalTokens":29652},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-be0c817bfdedc240","toolName":"read"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":29589,"output":63,"cacheRead":0,"cacheWrite":0,"totalTokens":29652},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":371,"output":86,"cacheRead":29344,"cacheWrite":0,"totalTokens":29801},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-93d153d96f37f8bb","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":371,"output":86,"cacheRead":29344,"cacheWrite":0,"totalTokens":29801},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":490,"output":69,"cacheRead":29344,"cacheWrite":0,"totalTokens":29903},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-a3a850d49eca0988","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":490,"output":69,"cacheRead":29344,"cacheWrite":0,"totalTokens":29903},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":627,"output":127,"cacheRead":29344,"cacheWrite":0,"totalTokens":30098},"stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"chatcmpl-tool-8c1bc459c561bec9","toolName":"bash"}
+{"type":"message_end","message":{"role":"toolResult"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":627,"output":127,"cacheRead":29344,"cacheWrite":0,"totalTokens":30098},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":29746,"output":153,"cacheRead":0,"cacheWrite":0,"totalTokens":29899},"stopReason":"stop"}}
+{"type":"turn_end","message":{"role":"assistant","usage":{"input":29746,"output":153,"cacheRead":0,"cacheWrite":0,"totalTokens":29899},"stopReason":"stop"}}
+"#;
+
+#[test]
+fn real_canary_trace_replay_gives_the_same_numbers_as_validity_gate() {
+    let mut p = Progress::default();
+    let mut f = Fake::of_lines(CANARY_EXCERPT);
+    p.drain(&mut f).expect("вырезка разбирается целиком");
+    // Числа — вывод `validity_gate.py --jsonl canary-packet-03-20260927-090729.jsonl.gz`.
+    assert_eq!(p.tool_steps, 40, "tool_execution_start, а не конец хода");
+    assert_eq!(p.turns, 77, "message_end: ходов больше, чем концов хода");
+    assert_eq!(
+        p.total_input_tokens, 655_622,
+        "message.usage всех turn_end: input 135 814 + cacheRead 519 808"
+    );
+    assert!(
+        p.total_input_tokens > 29_971,
+        "usage инкрементальный (максимум на событие 29 971) — раннер складывает, \
+         а не берёт последний: расхождение с гейтом было в наборе доноров, не в арифметике"
+    );
+
+    // Причина выбрана так, чтобы расхождение счётчиков было видно без её участия:
+    // последний turn_end объявляет `stop`, а расхождение было и на 34 предыдущих.
+    assert_eq!(
+        p.stop_reason,
+        Some(StopReason::Stop),
+        "хвост трассы объявил успех"
+    );
 }
 
 #[test]
 fn clean_stream_through_fake_executor_counts_its_steps() {
     let mut p = Progress::default();
-    let mut f = Fake::of(&[SESSION, TURN_END, TURN_END]);
+    let mut f = Fake::of(&[SESSION, TOOL_START, TOOL_START, TURN_END]);
     p.drain(&mut f).expect("чистый поток читается");
-    assert_eq!(p.tool_steps, 2, "по шагу на каждый turn_end");
+    assert_eq!(p.tool_steps, 2, "по шагу на каждый tool_execution_start");
     assert_eq!(p.stop_reason, Some(StopReason::Stop), "причина названа");
 }
 
 #[test]
 fn malformed_line_is_its_own_state_and_does_not_vanish() {
     let mut p = Progress::default();
-    let mut f = Fake::of(&[TURN_END, NOT_JSON, TURN_END]);
+    let mut f = Fake::of(&[TOOL_START, NOT_JSON, TOOL_START]);
     let refused = p.drain(&mut f).expect_err("строка видна");
     match refused {
         RunnerError::MalformedLine { line_no, line } => {
@@ -199,6 +407,18 @@ impl Fake {
     fn of(lines: &[&str]) -> Self {
         let owned: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
         Self(owned.into_iter())
+    }
+
+    /// Поток из одного многострочного блока — так в тест встраивается вырезка трассы.
+    fn of_lines(block: &str) -> Self {
+        Self(
+            block
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(str::to_string)
+                .collect::<Vec<String>>()
+                .into_iter(),
+        )
     }
 }
 

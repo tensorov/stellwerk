@@ -40,7 +40,7 @@ pub struct RunOutcome {
     pub stop_reason: StopReason,
     pub tool_steps: u32,
     pub turns: u32,
-    /// Входные токены вместе с кэшем — три счётчика `validity_gate.py:59`.
+    /// Входные токены вместе с кэшем — три счётчика `validity_gate.py:81-83`.
     pub total_input_tokens: u64,
     pub verdict: Verdict,
 }
@@ -143,17 +143,19 @@ impl Progress {
         Ok(())
     }
 
-    /// Счётчики из одного события.
+    /// Счётчики из одного события. Наборы доноров — измеренные на canary, а не выбранные:
+    /// гейт считает шаг по `tool_execution_start` (40) и ход по `message_end` (77), тогда как
+    /// концов хода всего 35. Считать оба счётчика по `turn_end` — считать одно и то же дважды.
     fn count(&mut self, event: &Value) {
         match event.get("type").and_then(Value::as_str) {
-            // Шаг — это ход: `toolResults` в потоке пуст, а шаг засчитан (packet-09,
-            // тест `each_turn_end_adds_exactly_one_step`).
+            Some("tool_execution_start") => self.tool_steps += 1,
+            Some("message_end") => self.turns += 1,
+            // `turn_end` шага не даёт — это единственный оставшийся донор: причина остановки
+            // и usage. Ось причин уже совпадала с гейтом и остаётся нетронутой.
             Some("turn_end") => {
-                self.turns += 1;
-                self.tool_steps += 1;
                 self.take_stop(event);
+                self.take_usage(event);
             }
-            Some("message_update") => self.take_usage(event),
             // Тип, которого мы не моделируем, — не ошибка: формат потока расширяется,
             // и лишнее событие не должно ронять прогон.
             _ => {}
@@ -172,15 +174,17 @@ impl Progress {
         }
     }
 
-    /// `input + cacheRead + cacheWrite` — три счётчика `validity_gate.py:59`.
+    /// `message.usage` на `turn_end` — донор контекста в гейте (`validity_gate.py:81-83`).
+    /// Читать `event.usage` из `message_update` — другой набор доноров: на canary это
+    /// 1 105 242 против 655 622, и разница не в арифметике, а в том, ЧТО сложено.
     fn take_usage(&mut self, event: &Value) {
-        if let Some(usage) = event.get("usage") {
+        if let Some(usage) = event.pointer("/message/usage") {
             self.total_input_tokens += usage_total(usage);
         }
     }
 }
 
-/// Три счётчика `validity_gate.py:59`. Счётчика, которого нет, — ноль: usage приходит
+/// Три счётчика `validity_gate.py:81-83`. Счётчика, которого нет, — ноль: usage приходит
 /// частичным объектом, и недостающий ключ не должен ронять разбор.
 fn usage_total(usage: &Value) -> u64 {
     ["input", "cacheRead", "cacheWrite"]
