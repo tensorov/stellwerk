@@ -51,9 +51,15 @@ C4  Поле задано свёрнутым YAML-блоком ('>' или '|').
 import argparse
 import os
 import re
+import subprocess
 import sys
 
 MAX_FILES_DEFAULT = 3
+# ADR-0003: src считается в логических строках (без пустых и //-комментариев),
+# тесты — полностью и отдельным бюджетом. Одно число на оба вида строк заставляло
+# платить за отсутствие объяснений и за честный RED.
+SRC_LINES_DEFAULT = 200
+TEST_LINES_DEFAULT = 250
 # Маркеры «приёмка инвертирована»: RED-пакет обязан требовать ПАДЕНИЯ теста.
 INVERT_MARKERS = ('! cargo', '!bash -c', 'падает', 'ожидается падение',
                   'не должен проходить', 'должен упасть', 'не зелёный')
@@ -463,6 +469,58 @@ def check_mirror_drift(root):
     return bad
 
 
+def is_test_path(path):
+    """Тестовый бюджет — по расположению, а не по имени: `src/x_test.rs` это src."""
+    return 'tests' in path.replace('\\', '/').split('/')
+
+
+def is_plan_path(path):
+    """Файл пакета вне бюджета: это задание воркеру, а не изменение под ревью."""
+    return '.sisyphus/plans' in path.replace('\\', '/')
+
+
+def added_counts(diff_text):
+    """(логические строки src, полные строки tests) из unified diff.
+
+    Считается ДОБАВЛЕННОЕ коммитом, а не нынешний размер файла: иначе пакет,
+    добавивший в общий файл десять строк, штрафуется за чужой код.
+    """
+    src = tests = 0
+    cur = ''
+    for line in diff_text.splitlines():
+        if line.startswith('+++ b/'):
+            cur = line[6:]
+        elif line.startswith('+') and not line.startswith('+++') and cur not in ('', '/dev/null'):
+            if is_plan_path(cur):
+                continue
+            body = line[1:]
+            if is_test_path(cur):
+                tests += 1
+            elif body.strip() and not body.strip().startswith('//'):
+                src += 1
+    return src, tests
+
+
+def budget_violations(name, src, tests, src_limit=SRC_LINES_DEFAULT,
+                      test_limit=TEST_LINES_DEFAULT):
+    bad = []
+    if src > src_limit:
+        bad.append(('C2', name, 'src %d логических строк (лимит %d)' % (src, src_limit)))
+    if tests > test_limit:
+        bad.append(('C2', name, 'tests %d строк (лимит %d)' % (tests, test_limit)))
+    return bad
+
+
+def measure_commit(root, ref, src_limit=SRC_LINES_DEFAULT, test_limit=TEST_LINES_DEFAULT):
+    """C2 по диффу коммита. Неизмеренный дифф — нарушение, а не «чисто»."""
+    proc = subprocess.run(['git', '-C', root, 'diff', '%s^1' % ref, ref, '--unified=0'],
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        return [('C2', ref, 'дифф не измерен: %s'
+                 % (proc.stderr.strip().split('\n')[0][:70]))]
+    return budget_violations(ref, *added_counts(proc.stdout), src_limit, test_limit)
+
+
 def check(plan_name, packets, raw_packets=(), max_files=MAX_FILES_DEFAULT):
     """Вернуть список нарушений: (код, пакет, сообщение)."""
     known = {n for n, _ in packets}
@@ -588,6 +646,47 @@ def self_test():
                              'acceptance': 'x -> exit 0',
                              'limit_waiver': 'include_str: миграция и регистрация — одна единица'})]
     expect(not check('T', four_ok), 'C2 снимается полем limit_waiver')
+
+    # 4a) C2, часть про строки (ADR-0003): бюджет — это ДОБАВЛЕННОЕ пакетом, а не
+    #     нынешний размер файла. Иначе все пакеты, трогающие один файл, получают
+    #     его полный размер и «нарушают» лимит задним числом.
+    def _add(path, lines, comments=0):
+        body = ['// инвариант'] * comments + ['строка'] * lines
+        return '+++ b/%s\n@@ -0,0 +1,%d @@\n%s' % (
+            path, len(body), '\n'.join('+' + l for l in body))
+
+    def _src(diff_text):
+        return added_counts(diff_text)[0]
+
+    def _tst(diff_text):
+        return added_counts(diff_text)[1]
+
+    over = _add('crates/x/src/lib.rs', 201, comments=150)
+    expect(_src(over) == 201, '201 логическая строка src считается за 201, не за 351')
+    expect(bool(budget_violations('p', *added_counts(over))),
+           'C2 ловит превышение src при 150 комментариях')
+    at200 = _add('crates/y/src/lib.rs', 200, comments=150)
+    expect(not budget_violations('p', *added_counts(at200)),
+           'C2 чист на 200 логических строках src с комментариями')
+    t251, t250 = _add('crates/x/tests/big.rs', 251), _add('crates/y/tests/big.rs', 250)
+    expect(_tst(t251) == 251 and _tst(t250) == 250,
+           'тесты считаются полностью, включая пустые строки')
+    expect(bool(budget_violations('p', *added_counts(t251)))
+           and not budget_violations('p', *added_counts(t250)),
+           'C2 ловит 251 строку теста и чист на 250')
+    fake = _add('crates/z/src/session_test.rs', 201)
+    expect(any('src' in m for _, _, m in budget_violations('p', *added_counts(fake))),
+           'файл с тестовым именем вне tests/ считается src')
+    import subprocess as _spr
+    _repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    expect(bool(measure_commit(_repo, 'no-such-ref-0000')),
+           'C2 ловит неизмеренный дифф: отсутствие замера не проходит как чистота')
+    plan = _add('.sisyphus/plans/M9/packet-99.md', 300)
+    expect(added_counts(plan) == (0, 0) and not budget_violations('p', *added_counts(plan)),
+           'файл пакета вне бюджета: план это задание, а не изменение под ревью')
+    doc = _add('docs/adr/0004-x.md', 201)
+    expect(bool(budget_violations('p', *added_counts(doc))),
+           'ADR идёт в src-бюджет логическими строками, отдельной категории нет')
 
     # 5) C3: RED-пакет с прямой приёмкой — нарушение; инвертированная — чисто
     red_bad = [('packet-r', {'goal': 'RED: спецификация', 'files_allowed': 'a.rs',
@@ -785,6 +884,7 @@ def main():
     ap.add_argument('plans', nargs='*', help='каталоги .sisyphus/plans/<M>')
     ap.add_argument('--self-test', action='store_true')
     ap.add_argument('--max-files', type=int, default=MAX_FILES_DEFAULT)
+    ap.add_argument('--budget', help='реф (merge-коммит) для замера бюджета строк (C2)')
     ap.add_argument('--gating', action='store_true',
                     help='код возврата определяет только C7 (сверка risk_class '
                          'с contract.rs); C1-C6 остаются информационными')
@@ -829,7 +929,17 @@ def main():
                 print('  [%s] %s: %s' % (code, pkt, msg))
         else:
             print('%s: %d пакетов, нарушений нет' % (name, len(packets)))
-    # C7 — сверка документированной таблицы с contract.rs. Печатается всегда,
+    if a.budget:
+        mb = measure_commit(root, a.budget)
+        if mb:
+            if not a.gating:
+                total += len(mb)
+            print('БЮДЖЕТ %s: нарушений %d' % (a.budget, len(mb)))
+            for code, pkt, msg in mb:
+                print('  [%s] %s: %s' % (code, pkt, msg))
+        else:
+            print('БЮДЖЕТ %s: в пределах лимита' % a.budget)
+      # C7 — сверка документированной таблицы с contract.rs. Печатается всегда,
     # даже когда пакеты переданы явными аргументами: это проверка не пакета, а
     # согласованности источников истины между собой.
     if a.gating:
