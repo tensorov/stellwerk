@@ -27,11 +27,28 @@ lane: m4/vertical
    - `authorize` даёт `Allow` (инструмент классифицирован как `R0`, данные `Public`,
      вызывающий `L2Contributor`, интерактивно);
    - worker вызван ровно один раз;
-   - чек содержит `ModelClaim`, `ToolAttestation`, `GateResult`;
+   - чек **вызова** содержит `ModelClaim` и `ToolAttestation`, а `GateResult`
+     закрывается на уровне **прогона** — как требует `goal` этого же пакета
+     («все стадии до `Done` с… закрытым gate») и как устроен `evaluate`:
+     `pub fn evaluate(outcome: &RunOutcome, chain: &[EvidenceEntry]) -> GateResult`
+     берёт `RunOutcome` (`stop_reason`, `tool_steps`, `turns`, `total_input_tokens`,
+     `verdict`), то есть исход прогона, а не вызова;
+
+     `can_transition_to`;
    - статус дошёл до `Done` **через предикаты**, и каждый переход был разрешён
      `can_transition_to`;
    - `ToolAttestation` присутствует и **непустая**: у разрешённого вызова есть
      хеш результата, и это отличие от `Deny`-вызова, где аттестации нет вовсе.
+
+     > **Правка 2026-09-29 (F-42).** Здесь стояло «чек содержит `ModelClaim`,
+     > `ToolAttestation`, `GateResult`», то есть `GateResult` — в чеке **отдельного
+     > вызова**. Это противоречило `goal` пакета и сигнатуре `evaluate` одновременно,
+     > то есть было ложным утверждением пакета о самом себе, а не выбором между
+     > прочтениями. Проверено: `RunOutcome` несёт `stop_reason`, `tool_steps`, `turns`,
+     > `total_input_tokens`, `verdict` — это прогон. Класть прогонный артефакт в чек
+     > каждого из вызовов означало бы, что чек врал бы о масштабе: вызовов было пять,
+     > а «результат прогона» ехал в каждом. Закон 6 запрещает превращать несогласованное
+     > в правдоподобное значение, и `GateResult` не измеряет вызов.
 2. Негативный сосед: `denied_call_leaves_no_attestation` — уже есть в packet-05,
    здесь **проверь**, что он не сломался после появления happy path: happy path не
    имеет права создавать `ToolAttestation` для вызовов, которых не было.
