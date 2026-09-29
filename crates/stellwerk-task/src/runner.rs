@@ -9,11 +9,15 @@
 //!
 //! RED M2/packet-09: тела — `unimplemented!()` (реализация — M2/packet-10).
 
+use std::future::Future;
+use std::pin::Pin;
+
 use crate::sandbox::Sandbox;
 use serde_json::Value;
 use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, TaskSpec};
 use stellwerk_gateway::gate::{decide, CallRequest};
 use stellwerk_gateway::permission::ToolRisk;
+use stellwerk_store::EventStore;
 use thiserror::Error;
 
 /// Решение по вызову — РЕЭКСПОРТ вердикта гейта, а не второе объявление: перевод
@@ -279,4 +283,81 @@ pub fn authorize(call: &Call, caller: PolicyLevel) -> CallVerdict {
         interactive: call.interactive,
     };
     decide(&request)
+}
+
+// --- M4/packet-05: вертикальный срез — решение обязано дойти до того, что произойдёт ---
+
+/// Попытка вызова: что собираются запустить, где и с какими полномочиями.
+///
+/// Отдельная от `RunRequest` (M2-09) сущность: прогон делает МНОГО вызовов, и один
+/// `RunRequest` на попытку не годится — `task_id` пришлось бы тащить в спецификацию
+/// прогона, а чек писать нечем.
+#[derive(Debug, Clone)]
+pub struct CallAttempt {
+    pub task_id: String,
+    pub call: Call,
+    pub caller: PolicyLevel,
+    pub workspace_ref: String,
+}
+
+/// Итог одного вызова: вывод рабочего места. Тела вывода в чек не идут — только хеш
+/// (пакет 06), и потому здесь нечего, кроме самого текста.
+#[derive(Debug, Clone)]
+pub struct ExecOutcome {
+    pub output: String,
+}
+
+/// Сбой рабочего места. Newtype над чужим текстом, а НЕ перечень причин: опись того,
+/// как чужой клиент падает, стала бы вторым источником истины о нём самом.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{0}")]
+pub struct WorkerError(pub String);
+
+/// Отказ прохода. Отдельным состоянием, а не `Allow`: упавший вызов, отчитавшийся
+/// успехом, неотличим от состоявшегося. Причина обязана называться — иначе сбой
+/// нечем расследовать.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{0}")]
+pub struct RunError(pub String);
+
+/// Шов запуска. `spawned()` отделён от `EventStore` намеренно: «воркер не вызван»
+/// иначе пришлось бы проверять по отсутствию события, а отсутствие события
+/// неотличимо от «событие записать забыли» — и такой тест прошёл бы при молчащем
+/// раннере, то есть не проверял бы ничего.
+pub trait Worker {
+    /// Вызвать инструмент. Future вместо `async fn`: в публичном трейте `async fn` не
+    /// даёт задать `Send`, а ADR-0001 разбирает ровно эту неразвязку; `ToolBackend` в
+    /// gateway объявлен так же.
+    fn exec(
+        &self,
+        workspace_ref: &str,
+        call: &Call,
+    ) -> Pin<Box<dyn Future<Output = Result<ExecOutcome, WorkerError>> + Send + '_>>;
+
+    /// Сколько раз воркер ФАКТИЧЕСКИ запускали, включая упавшие запуски.
+    fn spawned(&self) -> usize;
+}
+
+/// Один проход: решение → запуск или отказ → чек.
+///
+/// Чек пишется на КАЖДЫЙ вызов, включая запрещённый: вызов без следа неотличим от
+/// небывшего, и «тихие» попытки исчезают из расследования.
+///
+/// `async`, а не `pub fn`: `Worker::exec` и `EventStore::append` асинхронны, и
+/// синхронная подпись не дождалась бы ни того, ни другого.
+///
+/// `&impl EventStore`, а НЕ `&dyn EventStore`, как в пакете: трейт возвращает
+/// `impl Future`, а такой метод не помещается в vtable — `&dyn EventStore` не
+/// компилируется вовсе (ADR-0001 выбрал `impl Future` ради явного `Send`).
+/// RED M4/packet-05: тело — `unimplemented!()` (реализация — M4/packet-06).
+pub async fn run_once(
+    attempt: &CallAttempt,
+    worker: &dyn Worker,
+    store: &impl EventStore,
+) -> Result<CallVerdict, RunError> {
+    let _ = (worker, store);
+    unimplemented!(
+        "M4/packet-06: тело прохода для `{}` не написано",
+        attempt.task_id
+    )
 }
