@@ -39,7 +39,7 @@
 | packet-03 | m4/authorize | 02 | `--test permission_wire` | GREEN: `authorize` = `decide` |
 | packet-04 | m4/cli | M2-12 | `--test cli_watch` | GREEN: `watch` |
 | packet-05 | m4/vertical | 03, M2-12 | `--test vertical` | RED: чек на **каждый** вызов |
-| packet-06 | m4/vertical | 05 | `--test vertical` | GREEN: цепочка evidence |
+| packet-06 | m4/vertical | 05 | `--test vertical` | GREEN: чек на каждый вызов, включая отказ — **ПРИНЯТ** `585b584`, аттест 113/114 |
 | packet-07 | m4/approval | 03 | `--test inbox` | GREEN: Ask → Suspended + inbox |
 | packet-08 | m4/vertical | 04, 06, 07 | `--test vertical` | GREEN: **happy path** до Done |
 
