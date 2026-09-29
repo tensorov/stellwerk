@@ -197,6 +197,7 @@ fn the_seam_is_reachable_and_the_test_drives_the_future_itself() {
     let traced = match &outcome {
         Ok(outcome) => outcome.receipt.is_some(),
         Err(SessionError::Tool { receipt, .. }) => !receipt.call_id.is_empty(),
+        Err(SessionError::Calibration { receipt, .. }) => !receipt.call_id.is_empty(),
         Err(SessionError::ApprovalTimeout) => true,
     };
     assert!(traced, "вызов без следа: {outcome:?}");
