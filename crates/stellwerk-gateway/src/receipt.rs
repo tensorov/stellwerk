@@ -18,16 +18,6 @@ use thiserror::Error;
 
 use stellwerk_core::contract::{Event, EventSource, RiskClass};
 
-/// Рабочее место, подставляемое в чек.
-///
-/// У чека нет своего `workspace`, а `to_event` получает только `task_id`, поэтому
-/// РЕАЛЬНОЕ рабочее место вызвавшей стороны недоступно и подставляется константой.
-/// Это подстановка вместо отсутствующих данных, а не вычисленное значение: для
-/// федерации с несколькими рабочими местами чек окажется не там, где был вызов.
-/// Отдельный пакет должен принести `workspace` в чек настоящим значением; до
-/// него подстановка помечена явно, чтобы её не приняли за вычисленное.
-const GATEWAY_WORKSPACE: &str = "ws-stellwerk";
-
 /// Решение по вызову. Реэкспорт из `gate`, а не второе объявление: вердикт в чеке
 /// и вердикт `decide` обязаны быть одним типом, иначе чек мог бы оказаться про
 /// вызов, которого не было. `Suspended` отделён от `Deny` (В4): «никто не
@@ -80,8 +70,13 @@ impl Receipt {
     /// `list_by_task` выбирает по ней (stellwerk-store, `sqlite.rs`): чек без
     /// `task_id` не находился бы, и вызов без следа неотличим от небывшего.
     /// `workspace` заполняется: федеративным (`None`) чек вызова не бывает.
+    /// Он приходит аргументом, а не константой модуля: подстановка константы была
+    /// единственным выходом, пока значение было невыразимо, но чек с чужой
+    /// константой выглядит полным, указывает не туда, где был вызов, и при одном
+    /// рабочем месте неотличим от настоящего значения. Пустой строкой это не
+    /// выражается: она означала бы «не посчитали», а чек без места не считается.
     /// RED: поведение — M3/packet-10.
-    pub fn to_event(&self, task_id: &str) -> Event {
+    pub fn to_event(&self, task_id: &str, workspace: &str) -> Event {
         let mut payload = BTreeMap::new();
         payload.insert("task_id".to_owned(), task_id.to_owned());
         payload.insert("call_id".to_owned(), self.call_id.clone());
@@ -100,7 +95,7 @@ impl Receipt {
             source: EventSource::System,
             event_type: "gateway.call".to_owned(),
             actor: self.module.clone(),
-            workspace: Some(GATEWAY_WORKSPACE.to_owned()),
+            workspace: Some(workspace.to_owned()),
             risk: self.risk,
             payload,
             ts: self.ts.clone(),
