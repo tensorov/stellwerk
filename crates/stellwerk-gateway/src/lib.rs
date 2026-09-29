@@ -12,4 +12,5 @@ pub mod gate;
 pub mod mount;
 pub mod permission;
 pub mod receipt;
+pub mod session;
 pub mod shaping;
