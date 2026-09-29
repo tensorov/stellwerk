@@ -4,7 +4,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
-use stellwerk_store::{SqliteStore, StoreError, TaskStore};
+use stellwerk_core::contract::Event;
+use stellwerk_store::{EventStore, SqliteStore, StoreError, TaskStore};
 
 use crate::taskfile::TaskFile;
 
@@ -118,11 +119,57 @@ fn run_with(cli: Cli, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 }
                 Err(e) => fail(err, &format!("error: store: {e}")),
             },
-            TaskCommands::Watch { .. } => stub("watch", "packet-12", err),
+            // Существование задачи спрашивается ТОТ ЖЕ выборкой, что у `get`:
+            // `list_by_task` у несуществующей задачи вернул бы пустой вектор, и
+            // «задачи нет» стало бы неотличимо от «задача есть, событий нет» —
+            // ровно то смешение, которое запрещает закон 6.
+            TaskCommands::Watch { id } => match store.get(&id).await {
+                Ok(None) => fail(err, &format!("error: not found: {id}")),
+                Ok(Some(_)) => watch_events(&store, &id, out, err).await,
+                Err(e) => fail(err, &format!("error: store: {e}")),
+            },
             TaskCommands::Cancel { .. } => stub("cancel", "packet-06", err),
             TaskCommands::Logs { .. } => stub("logs", "packet-12", err),
         }
     })
+}
+
+/// Печать потока событий задачи. Порядок — тот, что отдал трейт, ничего не
+/// сортируется и не догоняется: второй порядок означал бы вторую правду о
+/// журнале.
+async fn watch_events(
+    store: &SqliteStore,
+    id: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> i32 {
+    match store.list_by_task(id).await {
+        // Отсутствие событий у СУЩЕСТВУЮЩЕЙ задачи — факт, а не ошибка: код 0 и
+        // строка на stdout. Код 1 здесь не поставил бы «событий нет» в один ряд с
+        // «задачи нет» и выглядел бы поломкой на только что созданной задаче.
+        Ok(events) if events.is_empty() => {
+            emit(out, &format!("no events for {id}"));
+            0
+        }
+        Ok(events) => {
+            for event in &events {
+                emit(out, &event_line(event));
+            }
+            0
+        }
+        Err(e) => fail(err, &format!("error: store: {e}")),
+    }
+}
+
+/// Строка события: `<timestamp> <kind> <краткое описание>`.
+///
+/// Отдельного поля «описание» у `Event` нет, а выдумывать содержимое нельзя
+/// (пакет, п.2): краткое описание — это `actor`, «кто совершил действие», взятое
+/// из события дословно. `payload` на это не годится — он пуст у события без
+/// содержимого, и строка с хвостовым пробелом была бы неотличима от события, у
+/// которого описания нет вовсе.
+fn event_line(event: &Event) -> String {
+    format!("{} {} {}", event.ts, event.event_type, event.actor)
 }
 
 /// Код 1 и имя пакета, который реализует заглушку: молчаливый отказ запрещён
@@ -324,11 +371,12 @@ mod tests {
     #[test]
     fn cli_stubs_name_their_packet() {
         let _guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        for (command, packet) in [
-            ("watch", "packet-12"),
-            ("cancel", "packet-06"),
-            ("logs", "packet-12"),
-        ] {
+        // `watch` из таблицы убран M4/packet-04 (п.4 — «убрать заглушку `watch`
+        // из `run`»): его контракт «вернуть 1 с текстом not implemented» пакет
+        // заменил на чтение событий, и проверка этого контракта живёт теперь в
+        // `tests/cli_watch.rs` тремя случаями вместо одной заглушки. `cancel` и
+        // `logs` остаются заглушками — их утверждения не тронуты.
+        for (command, packet) in [("cancel", "packet-06"), ("logs", "packet-12")] {
             let (rc, out, err) = run_capture(&[command, "t-1"]);
             assert_eq!(rc, 1, "{command} обязан вернуть 1 (п.4)");
             assert_eq!(out, "", "{command} не должен печатать в stdout");
