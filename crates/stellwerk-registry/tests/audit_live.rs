@@ -61,6 +61,15 @@ while IFS= read -r line; do
 done
 "#;
 
+/// Пишет свой PID в `__PIDFILE__` и выходит с кодом 3, не ответив на `initialize`. Файл нужен,
+/// чтобы отличить reap от зомби: у зомби запись в `/proc` есть, у reap-нутого процесса её нет.
+/// Путь вписывается в тело скрипта, потому что `Rpc::spawn` зовёт `Command::new(command)` без
+/// аргументов.
+const SERVER_SH_CRASH: &str = r#"#!/bin/sh
+echo $$ > '__PIDFILE__'
+exit 3
+"#;
+
 /// Что умеет фикстура: `Full` обслуживает t1,t2 и вызовы; `Extra` — t1,t2,t9 и вызовы;
 /// `CallMute` молчит только на `tools/call`; `Silent` не отвечает вовсе.
 #[derive(Clone, Copy)]
@@ -300,6 +309,66 @@ fn skill_module_is_deferred_and_never_reads_as_a_pass() {
     assert!(
         !stdout.contains("OK"),
         "a skipped audit must not read as a passed one: {stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// F-68: отказ на handshake обязан reap-ить дочерний процесс.
+///
+/// Проверяем не «произошла ошибка» — это уже покрывает тест на молчун, — а исчезновение PID.
+/// `Child` в std при drop не делает ни kill, ни wait, поэтому без `impl Drop` процесс остаётся
+/// зомби до конца жизни теста. 25 повторов отделяют «всегда» от «почти всегда».
+#[test]
+fn handshake_failure_reaps_the_child_process() {
+    const ROUNDS: usize = 25;
+    let dir = unique_dir("reap");
+    let pidfile = dir.join("child.pid");
+    let script = dir.join("crash.sh");
+    let body = SERVER_SH_CRASH.replace("__PIDFILE__", pidfile.to_str().expect("utf8 pidfile"));
+
+    // Запись в отдельном потоке: execve только что записанного скрипта на tmpfs возвращает
+    // ETXTBSY примерно в 3% случаев, если писатель и exec'ющий — один поток (см. scripts_dir).
+    let written = script.clone();
+    let writer = std::thread::spawn(move || {
+        std::fs::write(&written, body).expect("write the crashing server");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perm = std::fs::metadata(&written).expect("stat").permissions();
+            perm.set_mode(0o755);
+            std::fs::set_permissions(&written, perm).expect("chmod +x");
+        }
+    });
+    writer.join().expect("fixture writer");
+
+    write_manifest(&dir, script.to_str().expect("utf8 path"), &["t1"]);
+
+    let mut pids = Vec::with_capacity(ROUNDS);
+    for _ in 0..ROUNDS {
+        // Ошибка — ожидаемый исход: сервер умер, аудит обязан это увидеть, а не зависнуть.
+        let _ = audit_in_process(&dir, "fixture");
+        let raw = std::fs::read_to_string(&pidfile).expect("the fixture records its pid");
+        pids.push(raw.trim().parse::<u32>().expect("numeric pid"));
+    }
+
+    let leaked: Vec<String> = pids
+        .iter()
+        .map(|pid| format!("/proc/{pid}"))
+        .filter(|entry| Path::new(entry).exists())
+        .map(|entry| {
+            let stat = std::fs::read_to_string(Path::new(&entry).join("stat")).unwrap_or_default();
+            let state = stat
+                .rsplit_once(')')
+                .and_then(|(_, rest)| rest.split_whitespace().next())
+                .unwrap_or("?");
+            format!("{entry} state={state}")
+        })
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "{} из {} дочерних процессов не reap-нуты: {leaked:?}",
+        leaked.len(),
+        ROUNDS
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

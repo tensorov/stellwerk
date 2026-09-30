@@ -190,7 +190,7 @@ pub struct Rpc<R: BufRead, W: Write> {
     next_id: u64,
     timeout_ms: u64,
     /// Сервер, породивший эту пару: без него аудит оставил бы зомби на каждый запуск.
-    child: Option<Child>,
+    child: ChildGuard,
 }
 
 impl<R: BufRead + Send + 'static, W: Write> Rpc<R, W> {
@@ -200,12 +200,12 @@ impl<R: BufRead + Send + 'static, W: Write> Rpc<R, W> {
             writer,
             next_id: 1,
             timeout_ms,
-            child: None,
+            child: ChildGuard(None),
         }
     }
 
     fn with_child(mut self, child: Child) -> Self {
-        self.child = Some(child);
+        self.child = ChildGuard(Some(child));
         self
     }
 
@@ -258,20 +258,6 @@ impl<R: BufRead + Send + 'static, W: Write> Rpc<R, W> {
             }
         }
     }
-
-    /// Закрыть stdin (сервер получает EOF) и дождаться выхода — иначе остаётся зомби.
-    fn shutdown(self) {
-        let Self {
-            reader,
-            writer,
-            child,
-            ..
-        } = self;
-        drop((reader, writer));
-        if let Some(mut child) = child {
-            let _ = child.wait();
-        }
-    }
 }
 
 impl Rpc<BufReader<ChildStdout>, ChildStdin> {
@@ -292,6 +278,35 @@ impl Rpc<BufReader<ChildStdout>, ChildStdin> {
             .zip(child.stdout.take())
             .ok_or(AuditError::NoAnswer("child pipes unavailable"))?;
         Ok(Self::new(BufReader::new(stdout), stdin, timeout_ms).with_child(child))
+    }
+
+    fn shutdown(&mut self) {
+        self.child.reap();
+    }
+}
+
+struct ChildGuard(Option<Child>);
+
+impl ChildGuard {
+    /// Завершить процесс: `kill`, затем `wait`. Именно `wait` убирает запись из таблицы
+    /// процессов, а один только `kill` оставил бы зомби до конца жизни родителя.
+    ///
+    /// `kill`, а не EOF: `writer` нельзя освободить из `drop`, а `wait` до его освобождения встал
+    /// бы в deadlock — сервер ждал бы EOF, родитель ждал бы сервер. `Child::kill` в std есть,
+    /// поэтому reap остаётся ограниченным по времени и зависший сервер не подвесит аудит.
+    fn reap(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+impl Drop for ChildGuard {
+    /// Гарантия на каждом раннем выходе, включая `?` в вызывающем коде: `Child` в std не делает
+    /// ни `kill`, ни `wait` при drop, поэтому без этого зомби жил бы до конца процесса.
+    fn drop(&mut self) {
+        self.reap();
     }
 }
 
