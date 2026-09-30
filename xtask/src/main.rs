@@ -76,6 +76,13 @@ const TASKS: &[(&str, Task)] = &[
             args: &["check"],
         },
     ),
+    (
+        "ledger-encoding",
+        Task {
+            program: "cargo",
+            args: &["test", "-p", "xtask", "--test", "ledger_encoding"],
+        },
+    ),
 ];
 
 /// Инвертированный RED-гейт: имя задачи — литерал, значение — константный

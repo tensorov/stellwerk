@@ -245,3 +245,19 @@ fn red_gate_writes_nothing_to_stdout() {
         assert_not_unknown(&out, args[0]);
     }
 }
+
+/// Тест живёт здесь, а не в `tests/ledger_encoding.rs`, потому что задача сама запускает
+/// `cargo test -p xtask --test ledger_encoding`. Проверка «задача существует», поставленная
+/// внутрь проверяемого бинарника, даёт рекурсию: задача запустила бы прогон, который запустил
+/// бы задачу. Симптом — зависание на семафоре cargo, а не падение.
+#[test]
+fn ledger_encoding_task_is_known_and_passes() {
+    let out = run(&["ledger-encoding"]);
+    assert_not_unknown(&out, "ledger-encoding");
+    assert_eq!(
+        code(&["ledger-encoding"]),
+        0,
+        "задача обязана заканчиваться успехом: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
