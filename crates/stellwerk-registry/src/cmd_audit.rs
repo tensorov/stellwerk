@@ -1,4 +1,4 @@
-//! Audit: сверка манифеста с живым сервером — RED-шов (packet-08), реализация в 09.
+//! Audit: сверка манифеста с живым сервером — шов packet-08, сверка в 09, транспорт в 09b.
 //!
 //! Шов транспортно-независим и остаётся sync (`&mut self`): M0 не тянет async-клиент,
 //! а тесты не должны поднимать живой MCP-процесс. Таймаут в шов не зашит — бюджет
@@ -6,15 +6,15 @@
 
 use std::path::Path;
 
-use crate::model::Module;
+use crate::model::{Module, ModuleKind};
 
 /// Прод-бюджет на один тул; тесты инжектят 50 мс (packet-08, Контекст).
 pub const AUDIT_TIMEOUT_MS: u64 = 10_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuditError {
-    /// Заглушка RED-пакета: реальный stdio/rmcp транспорт приходит в packet-09.
-    #[error("audit not implemented (packet-09)")]
+    /// Заглушка RED-пакета: реальный stdio/rmcp транспорт приходит в packet-09b.
+    #[error("audit not implemented (packet-09b)")]
     NotImplemented,
     /// У модуля нет `command` — это не то же самое, что «сервер не поднялся».
     #[error("module {0} has no command")]
@@ -57,26 +57,64 @@ pub struct AuditReport {
 
 /// Сверка exact-set имён + вызываемости каждого заявленного тулла.
 ///
-/// RED: `Err(NotImplemented)` намеренно — тесты ниже обязаны падать явно, а не
-/// «проходить» на пустом отчёте. Зелёным это делает packet-09.
+/// `timeout_ms` пока не участвует: живого транспорта нет, а фейк моделирует таймаут
+/// исходом `CallOutcome::Timeout` — бюджет уходит в шов вместе с транспортом (09b).
 pub fn audit_manifest(
-    _tools: &[String],
-    _probe: &mut dyn McpProbe,
+    tools: &[String],
+    probe: &mut dyn McpProbe,
     _timeout_ms: u64,
 ) -> Result<AuditReport, AuditError> {
-    Err(AuditError::NotImplemented)
+    let server_tools = probe.list_tools()?;
+
+    let missing_in_server: Vec<String> = tools
+        .iter()
+        .filter(|name| !server_tools.contains(name))
+        .cloned()
+        .collect();
+    let extra_in_server: Vec<String> = server_tools
+        .iter()
+        .filter(|name| !tools.contains(name))
+        .cloned()
+        .collect();
+
+    let mut not_invocable = Vec::new();
+    for name in tools.iter().filter(|name| server_tools.contains(*name)) {
+        // Проба невалидными аргументами (Q3): валидный JSON-RPC ответ сам по себе
+        // доказывает вызываемость, валидацию аргументов делает сервер.
+        let outcome = probe.call_tool(name, "{}")?;
+        if matches!(outcome, CallOutcome::Timeout | CallOutcome::Malformed) {
+            not_invocable.push(name.clone());
+        }
+    }
+
+    Ok(AuditReport {
+        missing_in_server,
+        extra_in_server,
+        not_invocable,
+        // Этот шов обслуживает только `kind = mcp`; пропуск skill выставляет audit_module.
+        skill_skipped: false,
+    })
 }
 
 /// Аудит одного модуля: `kind = skill` → пропуск, `kind = mcp` → spawn + сверка.
 ///
-/// RED: транспорт — packet-09. `root`/`timeout_ms` уже в сигнатуре, чтобы 09 не менял
-/// публичный API шва.
+/// Транспорт — packet-09b, поэтому `kind = mcp` остаётся `Err(NotImplemented)`, а
+/// `root`/`timeout_ms` уже в сигнатуре, чтобы 09b не менял публичный API шва. Матч по
+/// `ModuleKind` полный: новый вид модуля не должен молча уйти из-под аудита.
 pub fn audit_module(
-    _module: &Module,
+    module: &Module,
     _root: &Path,
     _timeout_ms: u64,
 ) -> Result<AuditReport, AuditError> {
-    Err(AuditError::NotImplemented)
+    match module.kind {
+        ModuleKind::Skill => Ok(AuditReport {
+            missing_in_server: vec![],
+            extra_in_server: vec![],
+            not_invocable: vec![],
+            skill_skipped: true,
+        }),
+        ModuleKind::Mcp => Err(AuditError::NotImplemented),
+    }
 }
 
 // ── tests ──────────────────────────────────────────────────────────────────
