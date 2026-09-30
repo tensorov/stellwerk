@@ -1386,3 +1386,42 @@ grep -c 'U+FFFD' .night/STATE.md >/dev/null 2>&1
 printf "  U+FFFD: HEAD=%s сейчас=%s\n" \
   "$(git show HEAD:.night/STATE.md | grep -oP '\x{FFFD}' | wc -l | tr -d ' ')" \
   "$(grep -oP '\x{FFFD}' .night/STATE.md | wc -l | tr -d ' ')"
+## 2026-09-30 — historical RED reconstruction выполнена: M0-08 RED_UNRECOVERABLE, M4-07 неприменима
+
+Протокол владельца от 2026-09-30 применён на detached worktree родителя реализации. Обе ветки
+измерены, worktree удалён, старые worktrees не тронуты.
+
+```
+base_commit:            d1ce178512f924f249a5dd7c90623d46f911f7fe
+test_only_patch_hash:   07f7cebbfdc68c0328fec7babe0ddc294fb7a27f4a1857308ba22e8238f91eb3
+implementation_commit:  d5d1f2dc8a1fa398a2ad8eba29e3efa4f198d8dc
+merge_commit:           e74e074fe3d01a1f0eccb865d7d0524e4c7ad459
+RED, ветка 1 (модуль не подключён):  exit=0,   1 passed, 61 filtered out — audit-тестов 0
+RED, ветка 2 (модуль подключён):      exit=101, E0425 CallOutcome / E0405 McpProbe / E0425 AuditError
+```
+
+`test_only_patch_hash` начинается с `07f7cebbfdc68c0328fec7ba` — точное совпадение с хешем
+исходных девяти тестов `cmd_audit`, зафиксированным при M0-09b. Подмены нет.
+
+**`M0-08` → `STATUS: RED_UNRECOVERABLE`, `TDD: NOT_PROVEN`.** Тестовая часть неотделима от
+реализации: `use super::*` плюс опора на `McpProbe`, `CallOutcome`, `AuditError`,
+`AUDIT_TIMEOUT_MS`, `audit_manifest`, введённые тем же коммитом в том же файле. Код остаётся —
+он аттестован пакетами M0-09/09b/09c, — но `M0-08` нельзя задним числом объявить TDD-пакетом.
+Маркера у него нет, и теперь у этого есть измеренная причина.
+
+**`M4-07` → реконструкция неприменима.** `crates/stellwerk-task/src/approval.rs` никогда не
+существовал: коммита добавления нет, маркера нет, `lib.rs` не объявляет `mod approval`. Это не
+потерянная RED-стадия, а неначатый пакет. По решению владельца он зависит от `EventRisk` и упирается
+в нерешённый `answerable_by`.
+
+**Правило, которое меняет способ сбора evidence (F-74), и оно важнее самих вердиктов.**
+`ToolAttestation` потребляет ровно код возврата. Ветка 1 дала `exit=0` при **полном отсутствии**
+проверяемых тестов, и прибор зафиксировал бы `Verified` для пакета, который ничего не проверял.
+Поэтому: **отсортированный `cargo test -p <крейт> <фильтр>` не является доказательством, пока
+в этом дереве фильтр не сматчился хотя бы одним тестом.** Проверяется `--list` и сравнением числа
+строк с числом `filtered out`. Тот же механизм, что у F-73: агрегат по `test result` съедает
+свидетельство.
+
+**Что осталось за владельцем:** развилка ADR-0005 (`EventRisk` вытесняет `ToolRisk` — 22 файла, или
+стоит рядом — 14, при лимите 3) и F-08 (ручная задача во внешнем репозитории PolyForge, которую я
+выполнить не могу: нужен мерж, релиз и переустановка `polyforge-cli`/`polyforge-mcp`).
