@@ -9,6 +9,7 @@ preconditions:
   - владелец смержил PR в tensorov/polyforge и выпустил тег 0.4.1;
   - `polyforge-cli --version` и `polyforge-mcp` на хосте отдают 0.4.1;
   - запись `cargo xtask` присутствует в allowlist **этого** тега, а не только в ветке PR.
+test: cargo test --workspace --no-fail-fast
 forbidden: [ручная правка modules.lock, cargo add, правка корневого Cargo.toml, добавление
   polyforge-зависимости в crates/*, ослабление существующих тестов, #[allow], #[ignore]]
 
