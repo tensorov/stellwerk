@@ -35,10 +35,20 @@ forbidden: [cargo add, правка корневого Cargo.toml, правка 
    как владелец запретил `NotApplicable` для receipt. Значит здесь
    `EventRisk::Classified(self.risk)` — и это совместимо, но по причине, которую надо назвать в
    коде, а не угадать.
-3. **`gateway/tests/session_contract.rs:167` — `assert_eq!(back.risk, ToolRisk::Unclassified)`.**
-   Это `ApprovalRequest.risk`, а не `Event.risk`, и под вариантом A его тип не меняется. Правки
-   не требует; проверить, что не требует, — тоже результат, потому что легко снести её по
-   незнанию.
+3. **`gateway/tests/session_contract.rs` — правки не требует, и это проверено по составу, а не
+   предположено.** Два места выглядят походами на `Event.risk`, и оба — ловушки:
+   - `:95` — `risk: RiskClass::R0` внутри литерала **`Receipt`**, а не `Event`. `Receipt.risk`
+     остаётся `RiskClass`, потому что владелец запретил `NotApplicable` для receipt.
+     Преобразование живёт в `receipt.rs:89` (`EventRisk::Classified(self.risk)`) — в другом
+     файле, который и так правке подлежит.
+   - `:167` — `assert_eq!(back.risk, ToolRisk::Unclassified)`, то есть `ApprovalRequest.risk`,
+     а не `Event.risk`; под вариантом A его тип не меняется.
+
+   По той же причине не трогаются `store/tests/module_store.rs:43,140`: `loaded.risk` там —
+   `ModuleRecord.risk: Option<RiskClass>`, риск объявления модуля, а не события.
+
+   Записано явно, потому что «правки не требует» без указания причины есть неподкреплённое
+   отрицание: следующий проход по правке одного из этих файлов снесёт их по незнанию.
 
 ## Что здесь НЕ трогаем, хотя слово «risk» встречается
 
