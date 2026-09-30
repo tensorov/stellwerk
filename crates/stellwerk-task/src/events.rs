@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::runner::{RunOutcome, StopReason};
-use stellwerk_core::contract::{Event, EventSource, RiskClass, TaskSpec};
+use stellwerk_core::contract::{Event, EventRisk, EventSource, RiskClass, TaskSpec};
 
 /// `Verdict` объявлен в `runner` (M2-09) и здесь ТОЛЬКО реэкспортируется: вердикт о
 /// прогоне один, второй `Verdict` разошёлся бы с первым по смыслу.
@@ -57,10 +57,14 @@ pub struct Step {
 /// и, при невалидном вердикте, `run.invalid` с причиной в payload.
 pub fn events_for(spec: &TaskSpec, outcome: &RunOutcome, steps: &[Step]) -> Vec<Event> {
     let mut journal = Journal::new(spec);
-    journal.push("run.start", RiskClass::R1, &[]);
+    journal.push("run.start", EventRisk::Classified(RiskClass::R1), &[]);
     for step in steps {
         let tool = step.tool.as_str();
-        journal.push("run.step", step.kind.risk(), &[("tool", tool)]);
+        journal.push(
+            "run.step",
+            EventRisk::Classified(step.kind.risk()),
+            &[("tool", tool)],
+        );
     }
     // Конец прогона не тише самого рискованного шага: сеть наружу уже выходила, и тихий
     // `run.end` скрыл бы это от выборки по риску. Шагов не было — только старт, то есть
@@ -72,7 +76,7 @@ pub fn events_for(spec: &TaskSpec, outcome: &RunOutcome, steps: &[Step]) -> Vec<
         .unwrap_or(RiskClass::R1);
     journal.push(
         "run.end",
-        peak,
+        EventRisk::Classified(peak),
         &[
             ("stop_reason", stop_name(outcome.stop_reason)),
             ("verdict", verdict_name(outcome.verdict)),
@@ -89,7 +93,7 @@ pub fn events_for(spec: &TaskSpec, outcome: &RunOutcome, steps: &[Step]) -> Vec<
     if let Some(reason) = verdict_reason(outcome.verdict) {
         journal.push(
             "run.invalid",
-            RiskClass::R1,
+            EventRisk::Classified(RiskClass::R1),
             &[
                 ("reason", reason),
                 ("verdict", verdict_name(outcome.verdict)),
@@ -127,7 +131,7 @@ impl<'a> Journal<'a> {
     ///
     /// Ширина номера в `id` фиксирована и с запасом: `id` сравнивается лексикографически,
     /// и переход с `9999` на `10000` переставил бы события конца прогона.
-    fn push(&mut self, event_type: &str, risk: RiskClass, extra: &[(&str, &str)]) {
+    fn push(&mut self, event_type: &str, risk: EventRisk, extra: &[(&str, &str)]) {
         let mut payload: BTreeMap<String, String> = extra
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))

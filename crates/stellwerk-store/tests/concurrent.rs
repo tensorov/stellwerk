@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use stellwerk_core::contract::{Event, EventSource, RiskClass};
+use stellwerk_core::contract::{Event, EventRisk, EventSource, RiskClass};
 use stellwerk_store::{EventStore, SqliteStore};
 
 const THREADS: usize = 10;
@@ -29,7 +29,7 @@ fn event(thread: usize, n: usize) -> Event {
         event_type: "run.step".to_owned(),
         actor: format!("worker-{thread}"),
         workspace: Some("ws-stellwerk".to_owned()),
-        risk: RiskClass::R1,
+        risk: EventRisk::Classified(RiskClass::R1),
         payload,
         // Разные секунды, чтобы проверка порядка не зависела от interleaving.
         ts: format!("2026-09-27T01:{:02}:{:02}Z", thread, n),

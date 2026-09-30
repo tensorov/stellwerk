@@ -8,7 +8,9 @@
 
 use std::path::Path;
 
-use stellwerk_core::contract::{DataClass, Event, EventSource, RiskClass, TaskLimits, TaskSpec};
+use stellwerk_core::contract::{
+    DataClass, Event, EventRisk, EventSource, RiskClass, TaskLimits, TaskSpec,
+};
 use stellwerk_store::{EventStore, SqliteStore};
 use stellwerk_task::events::{events_for, Step, StepKind, Verdict};
 use stellwerk_task::runner::{RunOutcome, StopReason};
@@ -66,15 +68,26 @@ fn types_of(events: &[Event]) -> Vec<&str> {
 #[test]
 fn every_step_yields_one_run_step_with_its_own_risk() {
     let events = events_for(&spec(), &outcome(Verdict::Valid), &steps());
-    let risks: Vec<RiskClass> = of_type(&events, "run.step")
+    let risks: Vec<EventRisk> = of_type(&events, "run.step")
         .iter()
         .map(|e| e.risk)
         .collect();
     let why = "правка — R1, сеть — R2, по событию на шаг: иначе выход скрыт";
-    assert_eq!(risks, vec![RiskClass::R1, RiskClass::R2], "{why}");
+    assert_eq!(
+        risks,
+        vec![
+            EventRisk::Classified(RiskClass::R1),
+            EventRisk::Classified(RiskClass::R2)
+        ],
+        "{why}"
+    );
     let end = of_type(&events, "run.end");
     let end = end.first().unwrap_or_else(|| panic!("нет run.end"));
-    assert_eq!(end.risk, RiskClass::R2, "конец — максимум шагов, не первый");
+    assert_eq!(
+        end.risk,
+        EventRisk::Classified(RiskClass::R2),
+        "конец — максимум шагов, не первый"
+    );
 }
 
 #[test]
@@ -82,7 +95,11 @@ fn run_opens_with_start_at_r1_and_stamps_rfc3339_utc() {
     let events = events_for(&spec(), &outcome(Verdict::Valid), &steps());
     let start = of_type(&events, "run.start");
     let start = start.first().unwrap_or_else(|| panic!("нет run.start"));
-    assert_eq!(start.risk, RiskClass::R1, "старт прогона — R1");
+    assert_eq!(
+        start.risk,
+        EventRisk::Classified(RiskClass::R1),
+        "старт прогона — R1"
+    );
     let ts = start.ts.clone();
     let utc = ts.ends_with('Z') || ts.ends_with("+00:00");
     assert!(
@@ -101,7 +118,11 @@ fn every_invalid_reason_has_its_own_payload_name() {
         let events = events_for(&spec(), &outcome(verdict), &[]);
         let bad = of_type(&events, "run.invalid");
         let bad = bad.first().unwrap_or_else(|| panic!("{verdict:?} — нет"));
-        assert_eq!(bad.risk, RiskClass::R1, "{verdict:?} — R1");
+        assert_eq!(
+            bad.risk,
+            EventRisk::Classified(RiskClass::R1),
+            "{verdict:?} — R1"
+        );
         let named = bad.payload.get("reason").map(String::as_str);
         assert_eq!(named, Some(reason), "{verdict:?} дал {:?}", bad.payload);
     }

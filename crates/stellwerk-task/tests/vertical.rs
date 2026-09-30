@@ -7,7 +7,7 @@ use std::path::Path;
 use std::pin::Pin;
 
 use stellwerk_core::contract::{
-    DataClass, Event, ModelBinding, PolicyLevel, RetentionClass, RiskClass,
+    DataClass, Event, EventRisk, ModelBinding, PolicyLevel, RetentionClass, RiskClass,
 };
 use stellwerk_gateway::permission::ToolRisk;
 use stellwerk_store::{EventStore, SqliteStore};
@@ -161,7 +161,14 @@ async fn an_unclassified_tool_is_refused_and_never_looks_like_r0() {
     let seen = trail(&store, "t-unknown").await;
     assert!(!seen.is_empty(), "отказ по неизвестному тоже след");
     for e in &seen {
-        assert_ne!(e.risk, RiskClass::R0, "«риск неизвестен» — не R0");
+        // Именно `Unclassified`, а не «не R0»: `assert_ne!` прошёл бы и при R1, то есть при
+        // том самом схлопывании, которое пакет и устраняет. Неизвестное обязано быть названо
+        // своим состоянием, иначе «нет данных» снова неотличимо от «риск низкий».
+        assert_eq!(
+            e.risk,
+            EventRisk::Unclassified,
+            "неизвестный риск обязан остаться Unclassified, а не стать классом",
+        );
         assert!(!text_of(e).contains("R0"), "в payload тоже не R0");
     }
 }

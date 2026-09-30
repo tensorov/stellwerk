@@ -150,8 +150,9 @@ pub struct Event {
     pub actor: String,
     /// Рабочее место, в контексте которого произошло событие. `None` — федеративное.
     pub workspace: Option<String>,
-    /// Класс риска операции, породившей событие.
-    pub risk: RiskClass,
+    /// Риск операции, породившей событие. Не `Option`: «нет данных» и «нет риска» — разные
+    /// факты, а `Unclassified` при сериализации даёт `"unclassified"`, а не пустое значение.
+    pub risk: EventRisk,
     /// Полезная нагрузка. Плоская карта, чтобы не тащить зависимости в ядро.
     #[serde(default)]
     pub payload: BTreeMap<String, String>,

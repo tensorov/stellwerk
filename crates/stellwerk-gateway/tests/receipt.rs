@@ -4,7 +4,7 @@
 //! бы вторую копию и оставил экспорт непроверенным (F-14).
 
 use sha2::{Digest, Sha256};
-use stellwerk_core::contract::{Event, EventSource, RiskClass};
+use stellwerk_core::contract::{Event, EventRisk, EventSource, RiskClass};
 use stellwerk_gateway::receipt::{Receipt, Verdict};
 
 /// Задача, в чей поток пишется чек: `append` кладёт `payload["task_id"]` в
@@ -50,7 +50,11 @@ fn every_call_becomes_a_gateway_call_event() {
     assert_eq!(event.event_type, "gateway.call");
     assert_eq!(event.source, EventSource::System);
     assert_eq!(event.actor, "reg", "актёр — модуль, а не агент");
-    assert_eq!(event.risk, RiskClass::R2, "риск берётся из чека");
+    assert_eq!(
+        event.risk,
+        EventRisk::Classified(RiskClass::R2),
+        "риск берётся из чека"
+    );
     assert!(event.workspace.is_some(), "workspace обязан быть заполнен");
 }
 
@@ -76,7 +80,11 @@ fn denied_call_is_recorded_too() {
     let reason = "risk_denied: класс R5 запрещён".to_string();
     let denied = receipt(Verdict::Deny { reason }).to_event(TASK, WORKSPACE);
     assert_eq!(denied.event_type, "gateway.call", "запрет — тоже вызов");
-    assert_eq!(denied.risk, RiskClass::R2, "риск чек сохраняет");
+    assert_eq!(
+        denied.risk,
+        EventRisk::Classified(RiskClass::R2),
+        "риск чек сохраняет"
+    );
     let verdict_of = |event: &Event| event.payload.get("verdict").cloned().unwrap_or_default();
     let allow = receipt(Verdict::Allow).to_event(TASK, WORKSPACE);
     let suspended = receipt(Verdict::Suspended).to_event(TASK, WORKSPACE);

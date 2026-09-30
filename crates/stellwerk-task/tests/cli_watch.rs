@@ -14,7 +14,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-use stellwerk_core::contract::{Event, EventSource, RiskClass};
+use stellwerk_core::contract::{Event, EventRisk, EventSource, RiskClass};
 use stellwerk_store::{EventStore, SqliteStore};
 
 /// Код и обе строки раздельно: пакет различает случаи тем, ЧТО ушло в stdout.
@@ -83,7 +83,7 @@ fn event(id: &str, task_id: &str, event_type: &str, ts: &str) -> Event {
         event_type: event_type.to_owned(),
         actor: "m-default".to_owned(),
         workspace: Some("ws-watch".to_owned()),
-        risk: RiskClass::R1,
+        risk: EventRisk::Classified(RiskClass::R1),
         payload,
         ts: ts.to_owned(),
     }

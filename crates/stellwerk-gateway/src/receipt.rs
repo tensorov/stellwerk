@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use stellwerk_core::contract::{Event, EventSource, RiskClass};
+use stellwerk_core::contract::{Event, EventRisk, EventSource, RiskClass};
 
 /// Решение по вызову. Реэкспорт из `gate`, а не второе объявление: вердикт в чеке
 /// и вердикт `decide` обязаны быть одним типом, иначе чек мог бы оказаться про
@@ -86,7 +86,7 @@ impl Receipt {
             event_type: "gateway.call".to_owned(),
             actor: self.module.clone(),
             workspace: Some(workspace.to_owned()),
-            risk: self.risk,
+            risk: EventRisk::Classified(self.risk),
             payload,
             ts: self.ts.clone(),
         }

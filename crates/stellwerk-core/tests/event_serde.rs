@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use serde_json::json;
-use stellwerk_core::contract::{Event, EventSource, RiskClass};
+use stellwerk_core::contract::{Event, EventRisk, EventSource, RiskClass};
 
 fn event(source: EventSource) -> Event {
     let mut payload = BTreeMap::new();
@@ -17,7 +17,7 @@ fn event(source: EventSource) -> Event {
         event_type: "task.delegated".to_owned(),
         actor: "owner".to_owned(),
         workspace: Some("ws-stellwerk".to_owned()),
-        risk: RiskClass::R2,
+        risk: EventRisk::Classified(RiskClass::R2),
         payload,
         ts: "2026-09-27T02:14:03Z".to_owned(),
     }

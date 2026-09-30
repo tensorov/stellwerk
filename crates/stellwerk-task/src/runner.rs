@@ -18,7 +18,7 @@ use crate::events::now_rfc3339;
 use crate::sandbox::Sandbox;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use stellwerk_core::contract::{DataClass, Event, ModelBinding, PolicyLevel, RiskClass, TaskSpec};
+use stellwerk_core::contract::{DataClass, Event, EventRisk, ModelBinding, PolicyLevel, TaskSpec};
 use stellwerk_gateway::gate::{decide, CallRequest};
 use stellwerk_gateway::permission::ToolRisk;
 use stellwerk_store::EventStore;
@@ -523,15 +523,13 @@ async fn record(
         .map_err(|err| RunError(format!("чек не записан: {err}")))
 }
 
-/// Класс риска для колонки `Event.risk`. У `Unclassified` честного значения нет, и
-/// колонка его не вмещает, поэтому берётся R1 — тот же пол, что и у событий прогона
-/// без шагов (`events.rs`): поднимать неизвестное до верха таблицы значило бы выдумать
-/// выход наружу, которого не было. Настоящее «неизвестно» остаётся в payload — ключа
-/// `risk` у такого чека нет. Закрыть дыру по-настоящему — значит сделать риск события
-/// непустимым, а это пакет с меткой `contract-change`, не этот.
-fn column_risk(risk: ToolRisk) -> RiskClass {
+/// Риск события в колонке `Event.risk`. Раньше здесь стоял `R1` для
+/// `ToolRisk::Unclassified` — то есть «никто не ответил» превращался в «риск высокий»,
+/// и это значение ничем не отличалось от сознательно присвоенного R1. Теперь неизвестное
+/// называется своим состоянием (`Unclassified`) и сериализуется в `"unclassified"`.
+fn column_risk(risk: ToolRisk) -> EventRisk {
     match risk {
-        ToolRisk::Classified(class) => class,
-        ToolRisk::Unclassified => RiskClass::R1,
+        ToolRisk::Classified(class) => EventRisk::Classified(class),
+        ToolRisk::Unclassified => EventRisk::Unclassified,
     }
 }

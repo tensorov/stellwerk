@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use stellwerk_core::contract::{Event, EventSource, RiskClass};
+use stellwerk_core::contract::{Event, EventRisk, EventSource, RiskClass};
 use stellwerk_store::{EventStore, SqliteStore};
 
 fn store() -> SqliteStore {
@@ -28,7 +28,7 @@ fn event(i: usize) -> Event {
         event_type: "run.step".to_owned(),
         actor: "worker-1".to_owned(),
         workspace: Some("ws-stellwerk".to_owned()),
-        risk: RiskClass::R1,
+        risk: EventRisk::Classified(RiskClass::R1),
         payload,
         ts: ts(i),
     }
@@ -117,4 +117,37 @@ impl TaskInPayload for Event {
         self.payload
             .insert("task_id".to_owned(), task_id.to_owned());
     }
+}
+
+/// Сверка с базой по приёмке `packet-09f`. Идёт через настоящий `SqliteStore`, а не через
+/// `from_str`: `sqlite.rs:361-362` и `386-387` превращают ошибку десериализации в
+/// `QueryReturnedNoRows`, поэтому битая совместимость выглядит как пустая выборка, а не как
+/// ошибка. Непустота выборки поэтому проверяется утверждением — на нём и поймалась бы поломка.
+#[tokio::test]
+async fn classified_risk_keeps_legacy_bytes_and_unclassified_persists() {
+    let store = store();
+
+    let mut legacy = event(7);
+    legacy.risk = EventRisk::Classified(RiskClass::R3);
+    assert_eq!(
+        serde_json::to_value(&legacy).expect("must serialize")["risk"],
+        serde_json::json!("R3"),
+        "Classified обязан лежать старой строкой, иначе нужна миграция базы",
+    );
+
+    let mut unknown = event(8);
+    unknown.risk = EventRisk::Unclassified;
+    assert_eq!(
+        serde_json::to_value(&unknown).expect("must serialize")["risk"],
+        serde_json::json!("unclassified"),
+        "неизвестный риск обязан быть виден на проводе своим состоянием",
+    );
+
+    store.append(legacy).await.expect("append legacy");
+    store.append(unknown).await.expect("append unknown");
+
+    let all = store.list_since(&ts(0)).await.expect("list must succeed");
+    assert_eq!(all.len(), 2, "пустая выборка не доказывает совместимость");
+    assert_eq!(all[0].risk, EventRisk::Classified(RiskClass::R3), "R3");
+    assert_eq!(all[1].risk, EventRisk::Unclassified, "неизвестный");
 }
