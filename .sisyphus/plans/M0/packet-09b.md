@@ -1,99 +1,108 @@
 # packet-09b
 plan_id: M0
-goal: audit GREEN, часть 2 — живой транспорт sync stdio JSON-RPC (как в cmd_measure), audit_module для kind=mcp, обязательное использование rmcp::model, dispatch CLI audit с exit 0/1 и реальный прогон на polyforge-mcp.
-files_allowed: [crates/stellwerk-registry/src/cmd_audit.rs, crates/stellwerk-registry/src/cli.rs]
+goal: audit GREEN, часть 2 — sync stdio JSON-RPC транспорт (write_message, read_response, разбор tools/list, поштучный tools/call), StdioProbe как живая реализация McpProbe, и ветка kind=mcp в audit_module. Транспорт обобщён над <R: BufRead, W: Write> и потому тестируется in-memory, без процесса. CLI и сквозные тесты вынесены в packet-09c.
+files_allowed: [crates/stellwerk-registry/src/cmd_audit.rs, crates/stellwerk-registry/tests/audit_transport.rs]
 max_diff_lines: 200
-test: cargo test -p stellwark-registry audit
-acceptance: `cargo test -p stellwark-registry audit` → 0 failed; собранный `target/debug/stellwerk module audit` на реальном polyforge-mcp (в PATH) → exit 0 и отчёт без not_invocable; `kind=skill` в tempdir → exit 0 с сообщением «deferred»; при недоступном сервере → exit 1, без паники; `cargo fmt --all -- --check` → чисто; `cargo clippy --all-targets -- -D warnings` → чисто.
-forbidden: [cargo add, правка корневого Cargo.toml, правка Cargo.toml крейта (rmcp уже добавлен в 08), правка modules.lock, правка contract.rs, правка lib.rs/model.rs, правка modules.toml, таймаут ≠10s в прод-пути (в тестах 50ms), #[ignore], #[allow], ослабление тестов пакетов 08 и 09, async, tokio-рантайм]
-depends_on: [packet-05, packet-07a, packet-09, packet-11]
+test: cargo test -p stellwerk-registry
+acceptance: `cargo test -p stellwerk-registry` → 0 failed; девять тестов packet-08 и девять тестов packet-09 остаются зелёными и побайтно неизменными; `cargo fmt --all -- --check` → чисто; `cargo clippy --all-targets -- -D warnings` → чисто.
+forbidden: [cargo add, правка корневого Cargo.toml, правка Cargo.toml крейта (rmcp уже добавлен в 08), правка modules.lock, правка contract.rs, правка lib.rs/model.rs/cli.rs, правка modules.toml, реальный spawn MCP в тестах, async, tokio-рантайм, #[ignore], #[allow], ослабление тестов пакетов 08 и 09]
+depends_on: [packet-08, packet-09]
 
-## GREEN-пакет, часть 2 из 2
+## GREEN-пакет, часть 2 из 3
 
-Пакет выделен из `M0-09` после измерения (F-54): транспорт, `cli.rs` и интеграционные тесты
-не помещались вместе с `audit_manifest` в 200 логических строк. Часть 1 — `packet-09`, она
-делает `audit_manifest` и skill-ветку `audit_module` зелёными. Здесь остаётся всё, что
-живёт: spawn, stdio, JSON-RPC, `rmcp`, CLI, интеграционные тесты, ручной прогон.
+Пакет выделен из `M0-09b` после измерения. F-54 оценивала транспорт в 138 логических строк;
+перепроверка дала **119**: `write_message` 6, `read_response` 40, `parse_tools_list_response` 28,
+`run_session` 45 (все — в `crates/stellwerk-registry/src/cmd_measure.rs`, границы функций
+измерены, логические строки — без пустых и без строк, первым идущих с `//`). К этому добавляется
+`tools/call`, которого в крейте нет **ни одного** вхождения, то есть пишется с нуля.
 
-`depends_on` объявлен на четыре пакета, и это порядок, а не формальность. `packet-09b`
-пишет в `crates/stellwerk-registry/src/cli.rs`, и раньше его писали `packet-05`,
-`packet-07a` и `packet-11`, а `packet-09` — в тот же `cmd_audit.rs`. Применить `09b`
-до них нельзя: он правит код, которого ещё нет. Проверка C1 требует, чтобы пересечение
-по файлам было упорядочено хотя бы одной стороной, и здесь это не синоним того, что
-зависимость фиктивна.
+Оба файла пакета раньше считались одним кошельком на 200 строк, потому что оба лежали в `src/`.
+Теперь тесты вынесены в `crates/stellwerk-registry/tests/audit_transport.rs`, и ADR-0003 даёт
+каталогу `tests/` **отдельный** бюджет 250 «по расположению», а не по имени файла. Это не
+техническая уловка, а прямое следствие решения транспорта: обобщение над
+`<R: BufRead, W: Write>` делает его тестируемым без процесса, ровно как уже сделано
+`run_session` в `cmd_measure.rs` с явной пометкой «testable without a process».
+
+Ожидаемая арифметика: `src/cmd_audit.rs` ≈ 119 транспорт + ~22 `tools/call` + ~20 `StdioProbe`
++ ~22 ветка `kind=mcp` = **≈183 логических строки при пределе 200**;
+`tests/audit_transport.rs` ≈ 150 при пределе 250. Обе оценки — предварительные; фактическое
+значение обязано быть измерено коммитом, а не сложено.
 
 ## Решение по транспорту ЗАФИКСИРОВАНО, не выбирай
 
 **Sync stdio JSON-RPC, тем же подходом, что в `cmd_measure`**: `std::process`, `initialize` →
-`notifications/initialized` → `tools/list` → поштучные `tools/call`. Без tokio-рантайма и без
-async-клиента `rmcp`. Трейт `McpProbe` из 08 остаётся **sync**.
+`notifications/initialized` → `tools/list` → поштучные `tools/call`. Без tokio и без
+async-клиента `rmcp`. Трейт `McpProbe` из 08 остаётся **sync** и по сигнатуре не меняется.
 
 Скопировать `cmd_measure.rs` нельзя: он вне `files_allowed`, а его `write_message` и
 `read_response` приватные. Своя реализация поверх `std::io` — да.
 
+**Тесты не поднимают процесс.** Транспорт обобщён над `R: BufRead, W: Write`, поэтому
+`tests/audit_transport.rs` гоняет полный цикл `initialize` → `tools/list` → `tools/call` на
+`&[u8]` в памяти: подставь входные строки, собери выход, проверь. Ни `Command`, ни `tempdir`, ни
+зависимостей. Прецедент — `run_session`, уже обобщённый так же.
+
 ## `rmcp` ОБЯЗАТЕЛЬНО live
 
-Зависимость добавлена в 08, но до этого пакета не использовалась — «мёртвая». Здесь в
-`cmd_audit.rs` нужен **реальный импорт и реальное использование** хотя бы одного публичного
-item `rmcp::model` — тип или константа протокола. Точный API смотри в исходниках крейта из
-lockfile (`~/.cargo/registry/src/*/rmcp-3.4.0/src/model.rs`), **не угадывай имена**: в
-версии 3.4.0 есть `rmcp::model::{CallToolResult, CallToolRequestParams, Tool, …}`, и имена
-менялись между минорными версиями. `#[allow(dead_code)]`-подмена запрещена: это не
-использование, а объявление о нём.
+Зависимость добавлена в 08, но до этого пакета не использовалась — «мёртвая». Здесь нужен
+**реальный импорт и реальное использование** хотя бы одного публичного item `rmcp::model` —
+типа или константы протокола. Точный API смотри в исходниках крейта из lockfile
+(`~/.cargo/registry/src/*/rmcp-3.4.0/src/model.rs`), **не угадывай имена**: в 3.4.0 есть
+`rmcp::model::{CallToolResult, CallToolRequestParams, Tool, …}`, а имена менялись между
+минорными версиями. `#[allow(dead_code)]`-подмена запрещена: это объявление о применении, а не
+применение.
 
 ## Что сделать
 
-1. **Живой зонд** — реализация `McpProbe` поверх `std::process`: spawn с piped stdin/stdout,
-   построчный обмен по JSON-RPC с подстановкой id, парсинг ответа в `rmcp::model`-типы,
-   классификация не-успеха в `CallOutcome::{Timeout, Malformed}`. `NotFound` при spawn →
-   `AuditError::Spawn`, **без `unwrap()` и без паники** на всём, что пришло от процесса.
-2. **Таймаут честно.** Прод-путь — 10_000 мс, тесты — 50 мс. Реализация: reader-thread плюс
-   `std::sync::mpsc::channel` и `recv_timeout(timeout_ms)`, без новых крейтов. Значение
-   таймаута **внедряется**, а не зашито: константа `AUDIT_TIMEOUT_MS` и тестовые 50 мс
-   зафиксированы тестом из 08 и не могут быть подменены.
-3. **`audit_module`, ветка `kind = mcp`.** Взять `module.command`; `None` → `AuditError::NoCommand`.
-   Далее initialize → `tools/list` → `tools/call` каждого заявленного тулла с `"{}"`, сбор
-   `AuditReport`. Ветка `kind = skill` уже закрыта в packet-09 — не переписывать.
-4. **CLI.** Dispatch-arm для уже разобранного `ModuleCommand::Audit(_)` (сейчас печатает
-   «not implemented (packet-09)»). Arm — **в конец существующего `match`**, чужие arms не
-   трогать. Имя модуля обязательно, как у `measure`; `cwd` — корень. Печать отчёта
-   человекочитаемо: списки `missing` / `extra` / `not_invocable`, либо «OK», когда всё пусто.
-   Код возврата 0 при пустых векторах расхождений, 1 иначе.
-5. **`lib.rs` не трогать** — `pub mod cmd_audit` уже объявлен в 08.
+1. **Транспорт** в `src/cmd_audit.rs`, обобщённый над `R: BufRead, W: Write`:
+   - `write_message` — запись строки + `\n` + `flush`;
+   - `read_response(reader, id)` — построчное чтение до ответа на нужный `id`, с пропуском
+     уведомлений и границей на число прочитанных сообщений, чтобы сервер со сломанным
+     кадрированием не закручивал вызывающего в бесконечный цикл (прецедент — `MAX_SKIPPED`
+     в `cmd_measure.rs`);
+   - разбор ответа `tools/list` в `Vec<String>` имён.
+2. **`tools/call`** — запрос с подстановкой инкрементального `id`, ответ классифицируется в
+   `CallOutcome`: `result` → `Result`, `error` → `Error` (тул жив, Q3), битый JSON или отсутствие
+   и `result`, и `error` → `Malformed`. Таймаут различает `Timeout`.
+3. **Таймаут честно и без новых крейтов**: reader-thread кладёт прочитанную строку в
+   `std::sync::mpsc::channel`, вызывающий ждёт `recv_timeout(timeout_ms)`. Значение
+   **внедряется**, не зашито: `AUDIT_TIMEOUT_MS = 10_000` в проде и 50 мс в тестах зафиксированы
+   тестом из 08. `timeout_ms` из 08 перестаёт быть неиспользуемым параметром.
+4. **`StdioProbe`** — реализация `McpProbe` поверх `std::process::Child` с piped stdin/stdout.
+   `NotFound` при spawn → `AuditError::Spawn`. **Без `unwrap()` и без паники** на всём, что
+   пришло от процесса: ошибка чтения/записи становится `Malformed`, а не аварий.
+5. **`audit_module`, ветка `kind = mcp`:** взять `module.command`; `None` → `AuditError::NoCommand`.
+   Далее initialize → `tools/list` → собрать `AuditReport` через уже готовый `audit_manifest`.
+   Ветку `kind = skill` не переписывать — она закрыта в packet-09.
+6. **`lib.rs` не трогать** — `pub mod cmd_audit` объявлен в 08.
 
-## Тесты
+## Тесты — `tests/audit_transport.rs`
 
-- Интеграционный: tempdir + sh-фикстура «MCP server». Её `tools/list` отдаёт
-  `{"tools":[{"name":"t1","inputSchema":{"type":"object"}},{"name":"t2",…}]}`, на `tools/call`
-  с любым id — `{"jsonrpc":"2.0","id":<id из запроса>,"result":{"content":[]}}`; id вытягивать
-  из строки запроса. `modules.toml` с `command` = путь к скрипту и `tools=["t1","t2"]` → отчёт
-  пустой, exit 0.
-- Фикстура, чей `tools/list` отдаёт лишний тул, не заявленный в манифесте → `extra_in_server`,
-  exit 1.
-- Фикстура, которая не отвечает → `Timeout` → `not_invocable`, exit 1 (50 мс в тесте).
-- `kind = skill` → exit 0, «deferred». Уже закрыто тестом из 08, здесь не дублировать.
-- Ручная приёмка (в отчёте, **не** в тестах): `target/debug/stellwerk module audit` с реальным
-  `polyforge-mcp`. Если бинаря нет — `STATUS: BLOCKED` в отчёте, а не ослабление теста.
+Новый интеграционный файл, RED пишется первым. Кейсы:
+
+- полный цикл на входе в памяти: `initialize` → `tools/list` отдаёт `t1`, `t2` → `tools/call`
+  возвращает `result`; `CallOutcome::Result`, отчёт без расхождений;
+- ответ с `error` на `tools/call` → `CallOutcome::Error`, тул остаётся вызываемым (Q3);
+- битый JSON на `tools/call` → `CallOutcome::Malformed`;
+- сервер не отвечает, тест ждёт с бюджетом 50 мс → `CallOutcome::Timeout`;
+- уведомление `notifications/initialized` в потоке не должно сбивать чтение ответа на `id`;
+- `tools/list` с лишним именем → `extra_in_server`, в `audit_manifest`, а не здесь.
 
 ## БЮДЖЕТ: измерь и верни SPLIT_REQUIRED, а не подгоняй
 
-Лимит — 200 логических строк **добавленных коммитом** (ADR-0003: без пустых и без строк,
-первым идущих `//`). Оба файла в `src/`, поэтому интеграционные тесты в `cmd_audit.rs` идут в
-**тот же** кошелёк: тестовый бюджет 250 даётся по расположению (`tests/` в пути), а такого
-пути в `files_allowed` нет.
+Лимит — 200 логических строк **добавленных коммитом** для `src/cmd_audit.rs` и 250 для
+`tests/audit_transport.rs` (ADR-0003: без пустых и без строк, первым идущих `//`, у `tests/`
+считаются полностью). Измерение обязательно и должно быть в отчёте: `git diff --numstat`, затем
+исключение пустых строк и строк с `//`, **с разбивкой по файлам**.
 
-Измерение обязательно и должно быть в отчёте: `git diff --numstat`, затем исключить пустые
-строки и строки с `//`, с разбивкой по файлам.
-
-**Если больше 200 — верни `SPLIT_REQUIRED`** с точным числом, разбивкой по файлам и
-предложением разреза, у которого у каждой части остаётся свой RED. **Нельзя** сжимать тесты,
-выкашивать комментарии или упрощать приёмку ради прохода. Пакет важнее лимита, но сокрытие
-превышения запрещено.
+**Если сумма по `src/cmd_audit.rs` больше 200 — верни `SPLIT_REQUIRED`** с точным числом,
+разбивкой и предложением разреза. **Нельзя** сжимать тесты, выкашивать комментарии или упрощать
+приёмку ради прохода. Пакет важнее лимита, но сокрытие превышения запрещено.
 
 ## Evidence
 
-- GREEN вывод `cargo test -p stellwark-registry audit`.
-- Реальный прогон `polyforge-mcp` — дословно, с кодом возврата.
-- PROOF: `evidence_append(ModelClaim)` +
-  `evidence_verify(cmd='cargo test -p stellwark-registry audit')` + `gate_evaluate`.
+- GREEN вывод `cargo test -p stellwerk-registry`.
+- Блок тестов пакетов 08 и 09 побайтно неизменен — это проверяется по diff, а не тестом.
+- PROOF: `evidence_append(ModelClaim)` + `evidence_verify(cmd='cargo test -p stellwerk-registry')`
+  + `gate_evaluate`.
 - Отдельный коммит `chore(evidence): attest M0-09b after merge` с chain_tail.
