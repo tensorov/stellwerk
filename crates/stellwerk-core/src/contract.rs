@@ -64,6 +64,53 @@ impl RiskClass {
     }
 }
 
+const EVENT_RISK_UNCLASSIFIED: &str = "unclassified";
+const EVENT_RISK_NOT_APPLICABLE: &str = "not_applicable";
+
+/// Риск события — три различимых состояния вместо полного класса и вместо `Option`.
+///
+/// `Option<RiskClass>` не годится: `None` не позволяет отличить «забыли классифицировать» от
+/// «риск неприменим», и оба исхода выглядят на проводе одинаково (закон 6). Голый `RiskClass`
+/// тоже не годится: он обязан заявить конкретный класс даже там, где действия нет.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EventRisk {
+    /// Событие связано с действием известного риска.
+    Classified(RiskClass),
+    /// Классификация обязательна, но не выполнена. Policy-решение с таким риском — `Deny`.
+    Unclassified,
+    /// Информационное событие без действия: смена статуса, heartbeat.
+    NotApplicable,
+}
+
+impl Serialize for EventRisk {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            // Голой строкой, а не объектом: байты в `events.data` не меняются, поэтому миграция
+            // базы не нужна — старые строки читаются новым кодом как `Classified`.
+            EventRisk::Classified(class) => class.serialize(serializer),
+            EventRisk::Unclassified => serializer.serialize_str(EVENT_RISK_UNCLASSIFIED),
+            EventRisk::NotApplicable => serializer.serialize_str(EVENT_RISK_NOT_APPLICABLE),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for EventRisk {
+    /// `serde(default)` здесь запрещён: отсутствие значения обязано быть ошибкой, а не тихо
+    /// превратиться в `Classified(R0)`. Неизвестная строка — тоже ошибка, а не запасной класс.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        match raw.as_str() {
+            EVENT_RISK_UNCLASSIFIED => Ok(EventRisk::Unclassified),
+            EVENT_RISK_NOT_APPLICABLE => Ok(EventRisk::NotApplicable),
+            _ => RiskClass::deserialize(serde::de::value::StringDeserializer::<
+                serde::de::value::Error,
+            >::new(raw.clone()))
+            .map(EventRisk::Classified)
+            .map_err(|_| serde::de::Error::custom(format!("unknown event risk: {raw}"))),
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Events
 // ═══════════════════════════════════════════════════════════════════════════
