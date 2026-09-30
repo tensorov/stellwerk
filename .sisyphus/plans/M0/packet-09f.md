@@ -1,24 +1,27 @@
-# packet-09f — ПРЕДЛОЖЕН, не исполнять без подписи владельца
+# packet-09f — ПРИНЯТ владельцем 2026-09-30, waiver на 11 файлов выдан, к исполнению
 
 plan_id: M0
-status: предложен
+status: принят
 goal: слайс 2 лестницы ADR-0005 — переключить `Event.risk` на `EventRisk` и перестать выдавать R1 за неизвестный риск.
 files_allowed: [crates/stellwerk-core/src/contract.rs, crates/stellwerk-core/tests/event_serde.rs, crates/stellwerk-gateway/src/receipt.rs, crates/stellwerk-gateway/tests/receipt.rs, crates/stellwerk-store/tests/concurrent.rs, crates/stellwerk-store/tests/event_append.rs, crates/stellwerk-task/src/events.rs, crates/stellwerk-task/src/runner.rs, crates/stellwerk-task/tests/cli_watch.rs, crates/stellwerk-task/tests/events.rs, crates/stellwerk-task/tests/vertical.rs]
-limit_waiver: ТРЕБУЕТ ПОДПИСИ ВЛАДЕЛЬЦА. Заявлено 11 файлов при лимите 3, и это число **измерено, а не оценено**: проба в отдельном worktree меняла тип поля и чинила волну ошибок до нуля компиляции, после чего `git diff --name-only` дал ровно эти 11 файлов. Обоснование: смена типа поля атомарна — все конструкторы `Event { risk: … }` перестают компилироваться разом, промежуточного компилируемого состояния нет, поэтому разбить на зелёные слайсы невозможно в принципе, а не по нехватке времени. Без waiver пакет остаётся `SPLIT_REQUIRED`, и я не могу его выполнить.
+limit_waiver: ВЫДАН владельцем 2026-09-30 на 11 файлов при лимите 3. Заявлено 11 файлов, и это число **измерено, а не оценено**: проба в отдельном worktree меняла тип поля и чинила волну ошибок до нуля компиляции, после чего `git diff --name-only` дал ровно эти 11 файлов. Обоснование, по которому waiver выдан: смена типа поля атомарна — все конструкторы `Event { risk: … }` перестают компилироваться разом, промежуточного компилируемого состояния нет, поэтому разбить на зелёные слайсы невозможно в принципе, а не по нехватке времени. Без waiver пакет оставался бы `SPLIT_REQUIRED`.
 max_diff_lines: 200
 test: cargo test -p stellwerk-core -p stellwerk-gateway -p stellwerk-store -p stellwerk-task
 forbidden: [cargo add, правка корневого Cargo.toml, правка modules.lock, правка contract.rs кроме поля risk, правка policy.rs/gate.rs/mount.rs/session.rs, ToolRisk, Receipt.risk, Module.risk, serde(default), #[ignore], #[allow], ослабление существующих тестов, обёртывание column_risk в Classified]
 
 **Помечен contract-change.** Правится `crates/stellwerk-core/src/contract.rs` — файл из
 запрещённого списка `AGENTS.md`. ADR: `docs/adr/0005-event-risk-three-states.md`, статус
-«предложен».
+«принят» (подпись владельца 2026-09-30).
 
-## Почему пакет ждёт подписи, а не исполняется
+## Два решения, которые потребовались, и кто какое принял
 
-`ADR-0005` имеет статус «предложен». Вариант A (`EventRisk` только для `Event.risk`, `ToolRisk`
-не трогаем) выбран мной по дисциплине скоупа: закон 4 запрещает расширять скоуп, а владелец не
-просил переписывать политику разрешений. Но выбор варианта не даёт права превысить лимит файлов
-на публичном контракте. Это два разных решения, и второе — владельца.
+Вариант A (`EventRisk` только для `Event.risk`, `ToolRisk` не трогаем) выбрал я по дисциплине
+скоупа: закон 4 запрещает расширять скоуп, а владелец не просил переписывать политику разрешений.
+
+Waiver на 11 файлов выдал владелец 2026-09-30, и это было второе, отдельное решение: выбирать
+вариант мне можно было, а превышать лимит файлов на публичном контракте — нельзя, и это следствие
+выбора варианта не вытекает. К запросу было приложено измеренное обоснование, а не просьба
+«разрешите больше файлов» (см. `limit_waiver`).
 
 ## Три места, где правка НЕ механическая
 
