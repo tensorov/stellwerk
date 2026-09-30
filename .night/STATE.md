@@ -1325,3 +1325,64 @@ allowlist, — для `INFRA-02` это уже не один пакет, а кл
 запросом в леджер, то есть отдельной задачей; я её не начинаю. Отдельно записано, что две мои
 первые попытки census дали ложные числа (разные пространства имён, F-67 в регулярке) и были
 опровергнуты контрольной проверкой, а не молча приняты.
+
+## Решения владельца и M0-09d (2026-09-30)
+
+**M0-09d принят.** Коммит `a770841`, claim 129 → `ToolAttestation` 130 (`Verified`, exit 0,
+команда `cargo test -p stellwerk-registry` на самом `a770841`), гейт `passed: true`,
+chain_tail `2e2c5a113d11c38818ddf9fc4d0ba3c79d1ff549ecac40ddc143070d641ac5b9`, маркер `9bdcc7e`.
+Закрывает F-68. Workspace 325 passed (было 324, +1 — новый тест), fmt и clippy `-D warnings`
+чисты, бюджет пакета 2 файла: src +32/−17, tests +69.
+
+**Записаны четыре решения владельца как закон.**
+
+1. `M0-08` и `M4-07` — протокол **historical RED reconstruction** на detached worktree родительского
+   коммита: переносится только тест, RED засчитывается лишь если тест компилируется, падает на
+   ожидаемом assertion, а не из-за отсутствующего файла; при неотделимости теста от реализации —
+   `STATUS: RED_UNRECOVERABLE`, `TDD: NOT_PROVEN`. **Маркер пакета не является доказательством ни
+   RED, ни GREEN.**
+2. Новое состояние **`BLOCKED_VERIFIER`** для команд вне allowlist: пакет не называется
+   `VERIFIED`, отсутствие allowlist-записи не считается дефектом реализации, подменять команду
+   посторонним `cargo test` нельзя. Политика merge: security/gateway/approvals/evidence/contracts —
+   нельзя, production-код — по умолчанию нельзя, документация без исполняемого claim — можно.
+3. `Event.risk` — отдельный contract-change с `enum EventRisk { Classified(RiskClass),
+   Unclassified, NotApplicable }`, без `serde(default)`, миграция старого `RiskClass` в
+   `Classified`. `Unclassified` + policy-решение → `Deny`; `NotApplicable` запрещён для tool call,
+   approval, receipt и external action. `M4-07` зависит от него.
+4. F-08 — ручная owner-задача в PolyForge: применить diff из issue #1, проверить allowlist-запись
+   `cargo xtask`, прогнать workspace, выпустить patch, переустановить `polyforge-cli`/`polyforge-mcp`.
+
+**F-70 и F-71 — решения по ведению леджера.** Исторические строки с `U+FFFD` не переписываются
+(append-only), вместо этого append-коррекция со ссылкой на повреждённые entries, а новые записи
+проверяются на валидный UTF-8 с явной пометкой `encoding_corruption`. Источник истины по
+статусу пакета — **PolyForge gate report + chain_tail + bundle hash**; маркер пакета есть кэш для
+интерфейса, поэтому `marker absent ≠ unverified` и `marker present ≠ verified` без gate report.
+Ручной обход 56 пакетов не производится.
+
+### Коррекция: §2 упирается в F-08, и одна из его трёх команд неаттестуема
+
+Это измерено, а не предположено, и меняет порядок работ.
+
+- **Все три команды §2 сейчас невыполнимы прибором.** `cargo xtask worker-tests`,
+  `cargo xtask plan-lint` и `cargo xtask plan-lint-selftest` локально проходят (exit 0, 1, 0), но по
+  F-69 запись allowlist — это «программа + подкоманда», и bare `cargo` в allowlist **нет**: отказ
+  `not on the allowlist`. То есть §2 заработает ровно после F-08, а не сам по себе.
+- **`cargo xtask plan-lint` не может стать канонической проверкой в принципе.** Он даёт exit 1, и
+  это не поломка: за ним 34 предсуществующих нарушения (12 C1, 12 C8, 10 C9). По F-66 `Verified`
+  даётся только на успехе, поэтому аттестовать через эту команду нельзя никогда — даже после
+  F-08. Аттестуема только `plan-lint-selftest` (exit 0), и именно её называет пакет `INFRA-02`.
+- **Порядок 3 и 4 меняется местами.** В списке владельца `F-08` стоит четвёртым, а RED-реконструкция
+  третьим, но RED-реконструкция упирается в §2, а §2 — в F-08. Исполняемый порядок:
+  **F-68 (✅ сделан) → EventRisk contract-change → F-08 → RED-реконструкция M0-08/M4-07 → M3/M4 GREEN.**
+  Либо владелец сознательно объявляет RED-реконструкцию `BLOCKED_VERIFIER` до F-08 — это законное
+  состояние, но тогда третий пункт не выполняется вовсе.
+
+**F-08, high priority, до массового аудита.** Пока reap не было, любой неуспешный handshake мог
+оставить процесс; теперь это закрыто, и запрет владельца на массовый аудит неизвестных MCP-серверов
+можно снимать.
+TBL
+echo "  дописано строк: $(git diff --numstat -- .night/STATE.md | awk '{print $1}')"
+grep -c 'U+FFFD' .night/STATE.md >/dev/null 2>&1
+printf "  U+FFFD: HEAD=%s сейчас=%s\n" \
+  "$(git show HEAD:.night/STATE.md | grep -oP '\x{FFFD}' | wc -l | tr -d ' ')" \
+  "$(grep -oP '\x{FFFD}' .night/STATE.md | wc -l | tr -d ' ')"
