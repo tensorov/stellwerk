@@ -1,8 +1,12 @@
 //! CLI definitions — packet-03 (RED).
 
+use std::path::Path;
+
 use crate::cmd_add;
+use crate::cmd_audit;
 use crate::cmd_measure;
 use crate::cmd_update;
+use crate::model::ModulesFile;
 use clap::{Parser, Subcommand, ValueEnum};
 
 /// stellwerk — federation manager
@@ -111,15 +115,32 @@ pub fn dispatch(cli: &Cli) -> i32 {
                     }
                 }
             }
-            ModuleCommand::Audit(_) => {
-                eprintln!("module audit: not implemented (packet-09)");
-                1
-            }
             ModuleCommand::Update(a) => {
                 match cmd_update::run(a, &std::env::current_dir().unwrap()) {
                     Ok(()) => 0,
                     Err(e) => {
                         eprintln!("{}", e);
+                        1
+                    }
+                }
+            }
+            ModuleCommand::Audit(a) => {
+                // Имя модуля и корень обязательны: неизвестный корень — отказ с кодом 1,
+                // а не путь по умолчанию (тот же AGENTS.md, закон 6).
+                let root = match std::env::current_dir() {
+                    Ok(root) => root,
+                    Err(e) => {
+                        eprintln!("module audit: current directory is unavailable: {e}");
+                        return 1;
+                    }
+                };
+                match audit(a, &root, cmd_audit::AUDIT_TIMEOUT_MS) {
+                    Ok((report, code)) => {
+                        print!("{report}");
+                        code
+                    }
+                    Err(e) => {
+                        eprintln!("module audit: {e}");
                         1
                     }
                 }
@@ -140,6 +161,64 @@ pub fn run(args: Vec<std::ffi::OsString>) -> i32 {
         }
         Ok(cli) => dispatch(&cli),
     }
+}
+
+/// Отказ `module audit` на уровне CLI: имя обязательно, модуль должен быть в манифесте,
+/// манифест должен читаться. Ни один из них не паника и не «пустой OK».
+#[derive(Debug, thiserror::Error)]
+pub enum CliAuditError {
+    #[error("module required: stellwerk module audit <name>")]
+    NameRequired,
+    #[error("no such module: {0} (not declared in modules.toml)")]
+    NoModule(String),
+    #[error("modules.toml: {0}")]
+    Manifest(#[from] crate::model::ModelError),
+    #[error(transparent)]
+    Audit(#[from] cmd_audit::AuditError),
+}
+
+/// Аудит одного модуля: вернуть `(отчёт, код возврата)`.
+///
+/// `timeout_ms` инжектится, а не берётся из константы: прод-дефолт в 10 секунд слишком
+/// долог для теста, а зашитый в тело дефолт тихо утопил бы тестовый бюджет (packet-08).
+pub fn audit(
+    args: &NameArgs,
+    root: &Path,
+    timeout_ms: u64,
+) -> Result<(String, i32), CliAuditError> {
+    let name = args.name.as_deref().ok_or(CliAuditError::NameRequired)?;
+    let mf = ModulesFile::load(&root.join("modules.toml"))?;
+    let module = mf
+        .module
+        .get(name)
+        .ok_or_else(|| CliAuditError::NoModule(name.to_owned()))?;
+    let report = cmd_audit::audit_module(module, root, timeout_ms)?;
+    let clean = report.missing_in_server.is_empty()
+        && report.extra_in_server.is_empty()
+        && report.not_invocable.is_empty();
+    Ok((audit_report_text(name, &report), i32::from(!clean)))
+}
+
+/// Отчёт человекочитаемый: по строке на каждое расхождение, `OK` при полном совпадении.
+///
+/// `skill_skipped` — отдельная строка вместо `OK`: «аудит не выполнялся» и «аудит прошёл»
+/// обязаны выглядеть по-разному, иначе отложенная проверка читается как успешная.
+fn audit_report_text(name: &str, report: &cmd_audit::AuditReport) -> String {
+    if report.skill_skipped {
+        return format!("audit {name}: SKIPPED — kind = skill, the server was not spawned\n");
+    }
+    let mut lines = Vec::new();
+    for (label, entries) in [
+        ("missing_in_server", &report.missing_in_server),
+        ("extra_in_server", &report.extra_in_server),
+        ("not_invocable", &report.not_invocable),
+    ] {
+        lines.extend(entries.iter().map(|entry| format!("  {label}: {entry}")));
+    }
+    if lines.is_empty() {
+        return format!("audit {name}: OK\n");
+    }
+    format!("audit {name}:\n{}\n", lines.join("\n"))
 }
 
 #[cfg(test)]
