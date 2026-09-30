@@ -4,7 +4,7 @@ goal: audit GREEN, часть 2 — sync stdio JSON-RPC транспорт (writ
 files_allowed: [crates/stellwerk-registry/src/cmd_audit.rs, crates/stellwerk-registry/tests/audit_transport.rs]
 max_diff_lines: 200
 test: cargo test -p stellwerk-registry
-acceptance: `cargo test -p stellwerk-registry` → 0 failed; девять тестов packet-08 и девять тестов packet-09 остаются зелёными и побайтно неизменными; `cargo fmt --all -- --check` → чисто; `cargo clippy --all-targets -- -D warnings` → чисто.
+acceptance: `cargo test -p stellwerk-registry` → 0 failed; девять тестов `cmd_audit::tests::*`, написанных пакетом 08 и позеленелённых пакетом 09, остаются зелёными и побайтно неизменными; `cargo fmt --all -- --check` → чисто; `cargo clippy --all-targets -- -D warnings` → чисто.
 forbidden: [cargo add, правка корневого Cargo.toml, правка Cargo.toml крейта (rmcp уже добавлен в 08), правка modules.lock, правка contract.rs, правка lib.rs/model.rs/cli.rs, правка modules.toml, реальный spawn MCP в тестах, async, tokio-рантайм, #[ignore], #[allow], ослабление тестов пакетов 08 и 09]
 depends_on: [packet-08, packet-09]
 
