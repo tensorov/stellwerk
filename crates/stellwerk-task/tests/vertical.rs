@@ -7,13 +7,15 @@ use std::path::Path;
 use std::pin::Pin;
 
 use stellwerk_core::contract::{
-    DataClass, Event, EventRisk, ModelBinding, PolicyLevel, RetentionClass, RiskClass,
+    DataClass, Event, EventRisk, ModelBinding, PolicyLevel, RetentionClass, RiskClass, TaskStatus,
 };
 use stellwerk_gateway::permission::ToolRisk;
-use stellwerk_store::{EventStore, SqliteStore};
+use stellwerk_store::{EventStore, SqliteStore, TaskStore};
 use stellwerk_task::runner::{
-    authorize, run_once, Call, CallAttempt, CallVerdict, ExecOutcome, Worker, WorkerError,
+    authorize, run_once, Call, CallAttempt, CallVerdict, ExecOutcome, RunOutcome, StopReason,
+    Verdict, Worker, WorkerError,
 };
+use stellwerk_task::taskfile::TaskFile;
 
 /// Счётчик запусков отделён от факта записи: иначе «воркер не вызван» прошёл бы и при
 /// молчащем раннере.
@@ -255,3 +257,168 @@ async fn a_receipt_carries_the_digest_of_the_output_and_never_its_body() {
 }
 
 const BODY_SHA256: &str = "886400b989d41df6ea6ca1de6958a25d77565fe6e1ba994e84d5c9920e9c06b0";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// M4/packet-08 — вертикальный срез: один Task доходит до `Done`
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Фикстура `m4-vertical-demo` пишется во временный каталог, а не лежит в репозитории:
+/// `files_allowed` пакета не содержит ни одного `.toml`, и `TaskFile::load` требует путь.
+const DEMO_FIXTURE: &str = r#"
+[task]
+id = "m4-vertical-demo"
+goal = "Дойти до Done с проверенным доказательством"
+workspace_ref = "ws-stellwerk"
+model_ref = "qwen-local"
+packet = "выполнить ровно один разрешённый вызов"
+evidence_policy = "cargo test -p stellwerk-task --test vertical"
+
+[task.limits]
+max_files = 3
+max_diff_lines = 200
+timeout_seconds = 900
+max_retries = 2
+context_budget_tokens = 40000
+data_class = "internal"
+"#;
+
+fn demo_fixture() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join("stellwerk-m4-08");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("fixture dir must be creatable");
+    let path = dir.join("m4-vertical-demo.toml");
+    std::fs::write(&path, DEMO_FIXTURE).expect("fixture must be written");
+    path
+}
+
+/// `TaskStore` отдаёт future, а проверка статусов синхронна: тот же `rt()`, что и в
+/// `lifecycle.rs`, — из async-контекста `block_on` не вызывается.
+fn rt() -> tokio::runtime::Runtime {
+    tokio::runtime::Runtime::new().expect("runtime must build")
+}
+
+/// `advance` создаёт `Runtime` и зовёт `block_on`, поэтому цепочка статусов проверяется
+/// вне async-контекста: внутри `#[tokio::test]` `block_on` запаникует.
+#[test]
+fn happy_path_reaches_done_with_verified_attestation() {
+    use stellwerk_task::lifecycle::advance;
+
+    let loaded = TaskFile::load(&demo_fixture()).expect("фикстура обязана читаться");
+    assert_eq!(loaded.spec.id, "m4-vertical-demo", "id из фикстуры");
+
+    let store = store();
+    let spec = loaded
+        .into_spec()
+        .expect("фикстура обязана давать TaskSpec");
+    let id = spec.id.clone();
+    rt().block_on(store.create(spec))
+        .expect("create must succeed");
+
+    // Каждый переход сначала проверяется предикатом, потом выполняется: иначе «дошёл до
+    // Done» ничего не говорит о том, каким путём дошёл.
+    let path = [
+        TaskStatus::Planned,
+        TaskStatus::Reviewed,
+        TaskStatus::Delegated,
+        TaskStatus::Running,
+        TaskStatus::EvidenceSubmitted,
+        TaskStatus::Verified,
+        TaskStatus::Validated,
+        TaskStatus::Done,
+    ];
+    let mut current = TaskStatus::Draft;
+    for next in path {
+        assert!(
+            current.can_transition_to(next),
+            "{current:?} → {next:?} обязан быть разрешён предикатом"
+        );
+        let landed = advance(&store, &id, next).expect("переход обязан пройти");
+        assert_eq!(landed, next);
+        current = landed;
+    }
+    assert_eq!(
+        rt().block_on(store.status_of(&id))
+            .expect("read must succeed"),
+        Some(TaskStatus::Done),
+        "задача обязана дойти до Done"
+    );
+}
+
+/// `evaluate` требует `ToolAttestation` **и** `Validation`, иначе гейт не закрывается.
+/// Плюс вердикт прогона `Valid`: гейт читает его как данное и не пересчитывает.
+#[test]
+fn the_run_gate_closes_only_with_attestation_and_validation() {
+    use stellwerk_task::evidence::{evaluate, EvidenceEntry, EvidenceKind};
+
+    let outcome = RunOutcome {
+        stop_reason: StopReason::Stop,
+        tool_steps: 1,
+        turns: 1,
+        total_input_tokens: 120,
+        verdict: Verdict::Valid,
+    };
+    let entry = |id: &str, kind: EvidenceKind| EvidenceEntry {
+        id: id.to_owned(),
+        task_id: "m4-vertical-demo".to_owned(),
+        kind,
+        command: "cargo test -p stellwerk-task --test vertical".to_owned(),
+        result_hash: format!("hash-{id}"),
+        ts: "2026-10-01T00:00:00Z".to_owned(),
+    };
+
+    let closed = evaluate(
+        &outcome,
+        &[
+            entry("e-1", EvidenceKind::ModelClaim),
+            entry("e-2", EvidenceKind::ToolAttestation),
+            entry("e-3", EvidenceKind::Validation),
+        ],
+    );
+    assert!(
+        closed.passed,
+        "полная цепочка обязана закрывать гейт: {:?}",
+        closed.missing
+    );
+
+    let without_attestation = evaluate(
+        &outcome,
+        &[
+            entry("e-1", EvidenceKind::ModelClaim),
+            entry("e-3", EvidenceKind::Validation),
+        ],
+    );
+    assert!(
+        !without_attestation.passed,
+        "без ToolAttestation гейт обязан остаться открытым"
+    );
+
+    // Непустая аттестация: у разрешённого вызова есть хеш результата, и это отличие от
+    // вызова отказного, где аттестации нет вовсе.
+    let att = entry("e-2", EvidenceKind::ToolAttestation);
+    assert!(
+        !att.result_hash.is_empty(),
+        "аттестация обязана нести хеш результата"
+    );
+}
+
+/// Негативный сосед. Пакет утверждал, что он уже есть в packet-05 — измерением он не
+/// найден нигде, кроме текстов пакетов, значит писать его здесь.
+#[tokio::test]
+async fn denied_call_leaves_no_attestation() {
+    let (store, worker) = bench(false);
+    let ask = attempt("t-denied", R5, true, PolicyLevel::L5Owner);
+    let got = run_once(&ask, &worker, &store).await.expect("отказ");
+    assert!(
+        matches!(got, CallVerdict::Deny { .. }),
+        "R5 у владельца — отказ"
+    );
+    assert_eq!(worker.spawned(), 0, "отказный вызов не запускает воркер");
+
+    let seen = trail(&store, "t-denied").await;
+    assert!(!seen.is_empty(), "отказ тоже виден");
+    let blob: String = seen.iter().map(text_of).collect();
+    assert!(
+        !blob.contains("ToolAttestation"),
+        "у отказного вызова аттестации быть не должно — её нечего подтверждать"
+    );
+}
