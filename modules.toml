@@ -15,7 +15,7 @@ measured_at     = "2026-09-26T21:47:46Z"
 kind     = "mcp"
 autoload = true
 risk     = "R3"
-source   = { git = "https://github.com/tensorov/polyforge", rev = "71c295c6f29546743a2c1fe43a64a04a07c9516c" }
+source   = { git = "https://github.com/tensorov/polyforge", rev = "b81f5848d5131d730f72d67e81db50f7377ab0c7" }
 command  = "polyforge-mcp"
 tools    = ["evidence_append", "evidence_verify", "gate_evaluate", "gate_report"]
 context_cost_tokens = 0
