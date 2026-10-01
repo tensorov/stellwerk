@@ -1,3 +1,4 @@
+pub mod approval;
 pub mod cli;
 pub mod events;
 pub mod evidence;
