@@ -1,19 +1,22 @@
-#!/usr/bin/env python3
-"""packet-replay: машинная проверка acceptance-команд канонических packet-файлов.
+"""packet-replay: точка входа, разбор packet-файлов, инвентаризация.
 
-Назначение инструмента — заменить ручной разбор, который трижды подряд дал ложный
-результат. Причина у всех одна: число, попадающее в отчёт, получалось конвейером,
-собранным в моменте, и не сверялось с эталоном.
+Модуль только читает план и печатает машинно-читаемый отчёт. Ничего не исполняет,
+ничего не правит и ничего не запускает — это отдельная забота других двух модулей.
 
 Правила, которые инструмент обязан соблюдать:
 
 * источник истины — только `.sisyphus/plans/*/packet-*.md`; каталог `_archive`
-  пропускается, `.omo/plans/` не обходится вовсе (это зеркало, а не канон);
+  пропускается, `.omo/plans/` не обходится вовсе: это зеркало, а не канон, и
+  выдача из зеркала воркеру приносит пакет с несуществующей зависимостью;
 * поле `test:` ищется по структуре строки, а не по вхождению слова «test»
   в прозе или внутри ограждённого блока;
 * значение поля сохраняется целиком — имена длинные и обрезать их нельзя;
 * режим работы приходит из закрытого перечисления, а не из произвольной команды;
-* ни одна acceptance-команда этим модулем не исполняется: только `inventory`.
+* каталог, который не является каноном, не попадает в обход ни при каких флагах.
+
+Ровно этот модуль закрывает INFRA-08. Разбор полей и инвентаризация живут здесь, а
+семантика команд и арифметика прогона вынесены: смешивать разбор с исполнением
+значит невозможно проверить первое, не запустив второе.
 """
 
 from __future__ import annotations
@@ -23,10 +26,14 @@ import re
 import sys
 from pathlib import Path
 
-# Закрытый перечень режимов. Вызывающий не выбирает произвольное действие: он выбирает
-# одно из перечисленных, и каждое перечисление проверяется самотестом.
-MODES = ("inventory",)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from packet_replay_validate import validate
+
+
+MODES = ("inventory", "validate")
+
+WORKSPACE = Path(__file__).resolve().parent.parent
 CANONICAL_GLOB = ".sisyphus/plans/*/packet-*.md"
 ARCHIVE_DIR = "_archive"
 MIRROR_DIR = ".omo"
@@ -109,6 +116,24 @@ def canonical_files(root: Path) -> list[Path]:
     return found
 
 
+def collect_rows(root: Path) -> list[dict[str, str]]:
+    """Собрать пакеты, у которых поле `test:` непустое."""
+    rows: list[dict[str, str]] = []
+    for path in canonical_files(root):
+        fields, _ = read_fields(path)
+        command = fields.get("test", "")
+        if not command:
+            continue
+        rows.append(
+            {
+                "milestone": path.parent.name,
+                "packet_id": path.stem.replace("packet-", ""),
+                "command": command,
+            }
+        )
+    return rows
+
+
 def inventory(root: Path) -> int:
     """Разобрать все пакеты и напечатать счётчики. Ничего не исполняется."""
     rows: list[dict[str, str]] = []
@@ -176,7 +201,10 @@ def main(argv: list[str] | None = None) -> int:
         help="корень обхода; xtask его не передаёт, значение нужно самотестам",
     )
     args = parser.parse_args(argv)
-    return inventory(args.root)
+
+    if args.mode == "inventory":
+        return inventory(args.root)
+    return validate(collect_rows(args.root))
 
 
 if __name__ == "__main__":
