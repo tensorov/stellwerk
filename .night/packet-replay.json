@@ -1,0 +1,3645 @@
+{
+  "tool": "packet-replay/1.0",
+  "tested_commit": "148f53fac976a90c2fb1c9eede7c2241b3802d5f",
+  "started_at": 1790928267.6885934,
+  "finished_at": 1790928402.95221,
+  "duration_s": 135.3,
+  "sandbox": "/tmp/stellwerk-replay-4x7lwjsp",
+  "toolchain": {
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-2)",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-2)",
+    "python3": "Python 3.14.7",
+    "git": "git version 2.56.0"
+  },
+  "inventory": {
+    "total": 102,
+    "parsed": 95,
+    "no_command": 7,
+    "parse_error": 0
+  },
+  "summary": {
+    "total": 95,
+    "executed": 90,
+    "not_executed": 5,
+    "by_verdict": {
+      "FAIL": 5,
+      "PASS": 85,
+      "UNSUPPORTED_COMMAND": 5
+    }
+  },
+  "notable": {
+    "errors": [
+      {
+        "milestone": "INFRA",
+        "packet_id": "04",
+        "command": "cargo test -p xtask",
+        "verdict": "FAIL",
+        "reason": ""
+      },
+      {
+        "milestone": "INFRA",
+        "packet_id": "05",
+        "command": "cargo test -p xtask",
+        "verdict": "FAIL",
+        "reason": ""
+      },
+      {
+        "milestone": "INFRA",
+        "packet_id": "07",
+        "command": "cargo test --workspace --no-fail-fast",
+        "verdict": "FAIL",
+        "reason": ""
+      },
+      {
+        "milestone": "INFRA",
+        "packet_id": "10",
+        "command": "cargo test -p xtask --test packet_replay_execute",
+        "verdict": "FAIL",
+        "reason": ""
+      },
+      {
+        "milestone": "M4",
+        "packet_id": "07",
+        "command": "cargo test -p stellwerk-task --test inbox",
+        "verdict": "FAIL",
+        "reason": ""
+      }
+    ],
+    "empty_selection": [],
+    "unsupported": [
+      {
+        "milestone": "INFRA",
+        "packet_id": "01",
+        "command": "cargo xtask plan-lint",
+        "verdict": "UNSUPPORTED_COMMAND",
+        "reason": "не семейство cargo test"
+      },
+      {
+        "milestone": "INFRA",
+        "packet_id": "02",
+        "command": "python3 scripts/plan-lint.py --self-test",
+        "verdict": "UNSUPPORTED_COMMAND",
+        "reason": "не семейство cargo test"
+      },
+      {
+        "milestone": "INFRA",
+        "packet_id": "03",
+        "command": "bash scripts/worker/tests/run.sh",
+        "verdict": "UNSUPPORTED_COMMAND",
+        "reason": "не семейство cargo test"
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "01",
+        "command": "cargo test -p stellwerk-gateway --test permission && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings",
+        "verdict": "UNSUPPORTED_COMMAND",
+        "reason": "shell-оператор или перевод строки в команде"
+      },
+      {
+        "milestone": "M4",
+        "packet_id": "01",
+        "command": "cargo build -p stellwerk-task",
+        "verdict": "UNSUPPORTED_COMMAND",
+        "reason": "не семейство cargo test"
+      }
+    ],
+    "passed": [
+      {
+        "milestone": "INFRA",
+        "packet_id": "06",
+        "command": "cargo test -p xtask --test ledger_encoding",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "INFRA",
+        "packet_id": "08",
+        "command": "cargo test -p xtask --test packet_replay_selftest",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "INFRA",
+        "packet_id": "09",
+        "command": "cargo test -p xtask --test packet_replay_validate",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "INFRA",
+        "packet_id": "11",
+        "command": "cargo test -p xtask --test packet_replay_aggregate",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "INFRA",
+        "packet_id": "12",
+        "command": "cargo test -p xtask --test packet_replay_run",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "INFRA",
+        "packet_id": "13",
+        "command": "cargo test -p xtask --test xtask_cli",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M0",
+        "packet_id": "01",
+        "command": "cargo test -p stellwerk-registry model",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M0",
+        "packet_id": "02",
+        "command": "cargo test -p stellwerk-registry model",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M0",
+        "packet_id": "03",
+        "command": "cargo test -p stellwerk-registry cli",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M0",
+        "packet_id": "04",
+        "command": "cargo test -p stellwerk-registry cli",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M0",
+        "packet_id": "05",
+        "command": "cargo test -p stellwerk-registry add",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M0",
+        "packet_id": "06",
+        "command": "cargo test -p stellwerk-registry measure",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M0",
+        "packet_id": "07a",
+        "command": "cargo test -p stellwerk-registry measure",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M0",
+        "packet_id": "07b",
+        "command": "cargo test -p stellwerk-registry measure",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M0",
+        "packet_id": "08",
+        "command": "cargo test -p stellwerk-registry audit",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M0",
+        "packet_id": "09",
+        "command": "cargo test -p stellwerk-registry audit",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M0",
+        "packet_id": "09b",
+        "command": "cargo test -p stellwerk-registry",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M0",
+        "packet_id": "09c",
+        "command": "cargo test -p stellwerk-registry",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M0",
+        "packet_id": "09d",
+        "command": "cargo test -p stellwerk-registry",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M0",
+        "packet_id": "09e",
+        "command": "cargo test -p stellwerk-core --test event_risk",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M0",
+        "packet_id": "09f",
+        "command": "cargo test -p stellwerk-core -p stellwerk-gateway -p stellwerk-store -p stellwerk-task",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M0",
+        "packet_id": "10",
+        "command": "cargo test -p stellwerk-registry update",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M0",
+        "packet_id": "11",
+        "command": "cargo test -p stellwerk-registry update",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M1",
+        "packet_id": "01",
+        "command": "cargo test -p stellwerk-core",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M1",
+        "packet_id": "02",
+        "command": "cargo test -p stellwerk-core --test task_lifecycle",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M1",
+        "packet_id": "03",
+        "command": "cargo test -p stellwerk-core --test workspace_policy",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M1",
+        "packet_id": "04",
+        "command": "cargo test -p stellwerk-core --test data_class_routing",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M1",
+        "packet_id": "05",
+        "command": "cargo test -p stellwerk-core --test rbac_level",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M1",
+        "packet_id": "06",
+        "command": "cargo test -p stellwerk-core --test risk_level_policy",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M1",
+        "packet_id": "07",
+        "command": "cargo test -p stellwerk-store",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M1",
+        "packet_id": "08",
+        "command": "cargo test -p stellwerk-store --test task_crud",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M1",
+        "packet_id": "09",
+        "command": "cargo test -p stellwerk-store --test task_crud",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M1",
+        "packet_id": "10",
+        "command": "cargo test -p stellwerk-store --test task_crud list_by_workspace",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M1",
+        "packet_id": "11",
+        "command": "cargo test -p stellwerk-store --test event_append",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M1",
+        "packet_id": "12",
+        "command": "cargo test -p stellwerk-store --test module_store",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M1",
+        "packet_id": "13",
+        "command": "cargo test -p stellwerk-core --test risk_level_policy",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "01",
+        "command": "cargo test -p stellwerk-task --test taskfile",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "02",
+        "command": "cargo test -p stellwerk-task --test taskfile",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "03",
+        "command": "cargo test -p stellwerk-task --lib cli",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "04",
+        "command": "cargo test -p stellwerk-task --lib cli",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "05",
+        "command": "cargo test -p stellwerk-task --test lifecycle",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "05a",
+        "command": "cargo test -p stellwerk-store --test status_transition",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "05b",
+        "command": "cargo test -p stellwerk-store --test status_transition",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "06",
+        "command": "cargo test -p stellwerk-task --test lifecycle",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "07",
+        "command": "cargo test -p stellwerk-task --test sandbox",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "08",
+        "command": "cargo test -p stellwerk-task --test sandbox",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "09",
+        "command": "cargo test -p stellwerk-task --test runner",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "10",
+        "command": "cargo test -p stellwerk-task --test runner",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "11",
+        "command": "cargo test -p stellwerk-task --test events",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "12",
+        "command": "cargo test -p stellwerk-task",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "12b",
+        "command": "cargo test -p stellwerk-task --test evidence",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "12c",
+        "command": "cargo test -p stellwerk-task",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "13",
+        "command": "cargo test -p stellwerk-task --test runner",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M2",
+        "packet_id": "14",
+        "command": "cargo test -p stellwerk-task --test runner",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "02",
+        "command": "cargo test -p stellwerk-gateway --test permission",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "03a",
+        "command": "cargo test -p stellwerk-gateway --test gate",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "03b",
+        "command": "cargo test -p stellwerk-gateway --test gate_ask",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "04",
+        "command": "cargo test -p stellwerk-gateway --test gate",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "05",
+        "command": "cargo test -p stellwerk-gateway --test shaping",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "06",
+        "command": "cargo test -p stellwerk-gateway --test shaping",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "07",
+        "command": "cargo test -p stellwerk-gateway --test mount",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "08",
+        "command": "cargo test -p stellwerk-gateway --test mount",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "09",
+        "command": "cargo test -p stellwerk-gateway --test receipt",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "10",
+        "command": "cargo test -p stellwerk-gateway --test receipt",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "11",
+        "command": "cargo test -p stellwerk-gateway --test session",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "11a",
+        "command": "cargo test -p stellwerk-gateway --test session_contract",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "11b",
+        "command": "cargo test -p stellwerk-gateway --test session",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "11c",
+        "command": "cargo test -p stellwerk-gateway --test session_failure",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "12",
+        "command": "cargo test -p stellwerk-gateway",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "12a",
+        "command": "cargo test -p stellwerk-gateway --test session",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "12b",
+        "command": "cargo test -p stellwerk-gateway --test session_failure --test session_contract",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "12c",
+        "command": "cargo test -p stellwerk-gateway --test session_failure",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "12d",
+        "command": "cargo test -p stellwerk-gateway --test session_failure",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "13",
+        "command": "cargo test -p stellwerk-gateway --test shaping",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "14",
+        "command": "cargo test -p stellwerk-gateway --test receipt",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "15",
+        "command": "cargo test -p stellwerk-gateway --test receipt",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "16",
+        "command": "cargo test -p stellwerk-gateway --test shaping",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "17",
+        "command": "cargo test -p stellwerk-gateway",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M3",
+        "packet_id": "18",
+        "command": "cargo test -p stellwerk-gateway",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M4",
+        "packet_id": "02",
+        "command": "cargo test -p stellwerk-task --test permission_wire",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M4",
+        "packet_id": "03",
+        "command": "cargo test -p stellwerk-task --test permission_wire",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M4",
+        "packet_id": "04",
+        "command": "cargo test -p stellwerk-task --test cli_watch",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M4",
+        "packet_id": "05",
+        "command": "cargo test -p stellwerk-task --test vertical",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M4",
+        "packet_id": "06",
+        "command": "cargo test -p stellwerk-task --test vertical",
+        "verdict": "PASS",
+        "reason": ""
+      },
+      {
+        "milestone": "M4",
+        "packet_id": "08",
+        "command": "cargo test -p stellwerk-task --test vertical",
+        "verdict": "PASS",
+        "reason": ""
+      }
+    ]
+  },
+  "records": [
+    {
+      "command": "cargo xtask plan-lint",
+      "argv": [],
+      "status": "UNSUPPORTED_COMMAND",
+      "package": "",
+      "target": "",
+      "filter": "",
+      "selected_by_list": null,
+      "totals": null,
+      "exit_code": null,
+      "timed_out": false,
+      "duration_s": 0.0,
+      "verdict": "UNSUPPORTED_COMMAND",
+      "reason": "не семейство cargo test",
+      "execution_kind": "",
+      "milestone": "INFRA",
+      "packet_id": "01"
+    },
+    {
+      "command": "python3 scripts/plan-lint.py --self-test",
+      "argv": [],
+      "status": "UNSUPPORTED_COMMAND",
+      "package": "",
+      "target": "",
+      "filter": "",
+      "selected_by_list": null,
+      "totals": null,
+      "exit_code": null,
+      "timed_out": false,
+      "duration_s": 0.0,
+      "verdict": "UNSUPPORTED_COMMAND",
+      "reason": "не семейство cargo test",
+      "execution_kind": "",
+      "milestone": "INFRA",
+      "packet_id": "02"
+    },
+    {
+      "command": "bash scripts/worker/tests/run.sh",
+      "argv": [],
+      "status": "UNSUPPORTED_COMMAND",
+      "package": "",
+      "target": "",
+      "filter": "",
+      "selected_by_list": null,
+      "totals": null,
+      "exit_code": null,
+      "timed_out": false,
+      "duration_s": 0.0,
+      "verdict": "UNSUPPORTED_COMMAND",
+      "reason": "не семейство cargo test",
+      "execution_kind": "",
+      "milestone": "INFRA",
+      "packet_id": "03"
+    },
+    {
+      "command": "cargo test -p xtask",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "xtask"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "xtask",
+      "target": "",
+      "filter": "",
+      "selected_by_list": 44,
+      "totals": {
+        "passed": 10,
+        "failed": 4,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 4
+      },
+      "exit_code": 101,
+      "timed_out": false,
+      "duration_s": 0.448,
+      "verdict": "FAIL",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "INFRA",
+      "packet_id": "04"
+    },
+    {
+      "command": "cargo test -p xtask",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "xtask"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "xtask",
+      "target": "",
+      "filter": "",
+      "selected_by_list": 44,
+      "totals": {
+        "passed": 10,
+        "failed": 4,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 4
+      },
+      "exit_code": 101,
+      "timed_out": false,
+      "duration_s": 0.435,
+      "verdict": "FAIL",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "INFRA",
+      "packet_id": "05"
+    },
+    {
+      "command": "cargo test -p xtask --test ledger_encoding",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "xtask",
+        "--test",
+        "ledger_encoding"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "xtask",
+      "target": "ledger_encoding",
+      "filter": "",
+      "selected_by_list": 2,
+      "totals": {
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.095,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "INFRA",
+      "packet_id": "06"
+    },
+    {
+      "command": "cargo test --workspace --no-fail-fast",
+      "argv": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--no-fail-fast"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "",
+      "target": "",
+      "filter": "",
+      "selected_by_list": 378,
+      "totals": {
+        "passed": 373,
+        "failed": 5,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 56
+      },
+      "exit_code": 101,
+      "timed_out": false,
+      "duration_s": 18.539,
+      "verdict": "FAIL",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "INFRA",
+      "packet_id": "07"
+    },
+    {
+      "command": "cargo test -p xtask --test packet_replay_selftest",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "xtask",
+        "--test",
+        "packet_replay_selftest"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "xtask",
+      "target": "packet_replay_selftest",
+      "filter": "",
+      "selected_by_list": 9,
+      "totals": {
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.272,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "INFRA",
+      "packet_id": "08"
+    },
+    {
+      "command": "cargo test -p xtask --test packet_replay_validate",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "xtask",
+        "--test",
+        "packet_replay_validate"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "xtask",
+      "target": "packet_replay_validate",
+      "filter": "",
+      "selected_by_list": 5,
+      "totals": {
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 1.659,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "INFRA",
+      "packet_id": "09"
+    },
+    {
+      "command": "cargo test -p xtask --test packet_replay_execute",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "xtask",
+        "--test",
+        "packet_replay_execute"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "xtask",
+      "target": "packet_replay_execute",
+      "filter": "",
+      "selected_by_list": 4,
+      "totals": {
+        "passed": 0,
+        "failed": 4,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 101,
+      "timed_out": false,
+      "duration_s": 0.223,
+      "verdict": "FAIL",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "INFRA",
+      "packet_id": "10"
+    },
+    {
+      "command": "cargo test -p xtask --test packet_replay_aggregate",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "xtask",
+        "--test",
+        "packet_replay_aggregate"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "xtask",
+      "target": "packet_replay_aggregate",
+      "filter": "",
+      "selected_by_list": 8,
+      "totals": {
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.278,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "INFRA",
+      "packet_id": "11"
+    },
+    {
+      "command": "cargo test -p xtask --test packet_replay_run",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "xtask",
+        "--test",
+        "packet_replay_run"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "xtask",
+      "target": "packet_replay_run",
+      "filter": "",
+      "selected_by_list": 6,
+      "totals": {
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 3.182,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "INFRA",
+      "packet_id": "12"
+    },
+    {
+      "command": "cargo test -p xtask --test xtask_cli",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "xtask",
+        "--test",
+        "xtask_cli"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "xtask",
+      "target": "xtask_cli",
+      "filter": "",
+      "selected_by_list": 10,
+      "totals": {
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 1.323,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "INFRA",
+      "packet_id": "13"
+    },
+    {
+      "command": "cargo test -p stellwerk-registry model",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-registry",
+        "model"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-registry",
+      "target": "",
+      "filter": "model",
+      "selected_by_list": 8,
+      "totals": {
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 80,
+        "result_lines": 5
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.156,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M0",
+      "packet_id": "01"
+    },
+    {
+      "command": "cargo test -p stellwerk-registry model",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-registry",
+        "model"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-registry",
+      "target": "",
+      "filter": "model",
+      "selected_by_list": 8,
+      "totals": {
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 80,
+        "result_lines": 5
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.182,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M0",
+      "packet_id": "02"
+    },
+    {
+      "command": "cargo test -p stellwerk-registry cli",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-registry",
+        "cli"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-registry",
+      "target": "",
+      "filter": "cli",
+      "selected_by_list": 12,
+      "totals": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 76,
+        "result_lines": 5
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.198,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M0",
+      "packet_id": "03"
+    },
+    {
+      "command": "cargo test -p stellwerk-registry cli",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-registry",
+        "cli"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-registry",
+      "target": "",
+      "filter": "cli",
+      "selected_by_list": 12,
+      "totals": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 76,
+        "result_lines": 5
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.169,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M0",
+      "packet_id": "04"
+    },
+    {
+      "command": "cargo test -p stellwerk-registry add",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-registry",
+        "add"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-registry",
+      "target": "",
+      "filter": "add",
+      "selected_by_list": 20,
+      "totals": {
+        "passed": 20,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 68,
+        "result_lines": 5
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.16,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M0",
+      "packet_id": "05"
+    },
+    {
+      "command": "cargo test -p stellwerk-registry measure",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-registry",
+        "measure"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-registry",
+      "target": "",
+      "filter": "measure",
+      "selected_by_list": 22,
+      "totals": {
+        "passed": 22,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 66,
+        "result_lines": 5
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.167,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M0",
+      "packet_id": "06"
+    },
+    {
+      "command": "cargo test -p stellwerk-registry measure",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-registry",
+        "measure"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-registry",
+      "target": "",
+      "filter": "measure",
+      "selected_by_list": 22,
+      "totals": {
+        "passed": 22,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 66,
+        "result_lines": 5
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.167,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M0",
+      "packet_id": "07a"
+    },
+    {
+      "command": "cargo test -p stellwerk-registry measure",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-registry",
+        "measure"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-registry",
+      "target": "",
+      "filter": "measure",
+      "selected_by_list": 22,
+      "totals": {
+        "passed": 22,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 66,
+        "result_lines": 5
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.17,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M0",
+      "packet_id": "07b"
+    },
+    {
+      "command": "cargo test -p stellwerk-registry audit",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-registry",
+        "audit"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-registry",
+      "target": "",
+      "filter": "audit",
+      "selected_by_list": 10,
+      "totals": {
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 78,
+        "result_lines": 5
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.154,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M0",
+      "packet_id": "08"
+    },
+    {
+      "command": "cargo test -p stellwerk-registry audit",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-registry",
+        "audit"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-registry",
+      "target": "",
+      "filter": "audit",
+      "selected_by_list": 10,
+      "totals": {
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 78,
+        "result_lines": 5
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.16,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M0",
+      "packet_id": "09"
+    },
+    {
+      "command": "cargo test -p stellwerk-registry",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-registry"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-registry",
+      "target": "",
+      "filter": "",
+      "selected_by_list": 88,
+      "totals": {
+        "passed": 88,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 6
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.549,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M0",
+      "packet_id": "09b"
+    },
+    {
+      "command": "cargo test -p stellwerk-registry",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-registry"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-registry",
+      "target": "",
+      "filter": "",
+      "selected_by_list": 88,
+      "totals": {
+        "passed": 88,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 6
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.55,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M0",
+      "packet_id": "09c"
+    },
+    {
+      "command": "cargo test -p stellwerk-registry",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-registry"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-registry",
+      "target": "",
+      "filter": "",
+      "selected_by_list": 88,
+      "totals": {
+        "passed": 88,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 6
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.562,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M0",
+      "packet_id": "09d"
+    },
+    {
+      "command": "cargo test -p stellwerk-core --test event_risk",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-core",
+        "--test",
+        "event_risk"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-core",
+      "target": "event_risk",
+      "filter": "",
+      "selected_by_list": 5,
+      "totals": {
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.121,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M0",
+      "packet_id": "09e"
+    },
+    {
+      "command": "cargo test -p stellwerk-core -p stellwerk-gateway -p stellwerk-store -p stellwerk-task",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-core",
+        "-p",
+        "stellwerk-gateway",
+        "-p",
+        "stellwerk-store",
+        "-p",
+        "stellwerk-task"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "",
+      "filter": "",
+      "selected_by_list": 246,
+      "totals": {
+        "passed": 246,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 42
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 1.131,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M0",
+      "packet_id": "09f"
+    },
+    {
+      "command": "cargo test -p stellwerk-registry update",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-registry",
+        "update"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-registry",
+      "target": "",
+      "filter": "update",
+      "selected_by_list": 12,
+      "totals": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 76,
+        "result_lines": 5
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.171,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M0",
+      "packet_id": "10"
+    },
+    {
+      "command": "cargo test -p stellwerk-registry update",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-registry",
+        "update"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-registry",
+      "target": "",
+      "filter": "update",
+      "selected_by_list": 12,
+      "totals": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 76,
+        "result_lines": 5
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.181,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M0",
+      "packet_id": "11"
+    },
+    {
+      "command": "cargo test -p stellwerk-core",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-core"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-core",
+      "target": "",
+      "filter": "",
+      "selected_by_list": 60,
+      "totals": {
+        "passed": 60,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 10
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.307,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M1",
+      "packet_id": "01"
+    },
+    {
+      "command": "cargo test -p stellwerk-core --test task_lifecycle",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-core",
+        "--test",
+        "task_lifecycle"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-core",
+      "target": "task_lifecycle",
+      "filter": "",
+      "selected_by_list": 11,
+      "totals": {
+        "passed": 11,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.098,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M1",
+      "packet_id": "02"
+    },
+    {
+      "command": "cargo test -p stellwerk-core --test workspace_policy",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-core",
+        "--test",
+        "workspace_policy"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-core",
+      "target": "workspace_policy",
+      "filter": "",
+      "selected_by_list": 8,
+      "totals": {
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.084,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M1",
+      "packet_id": "03"
+    },
+    {
+      "command": "cargo test -p stellwerk-core --test data_class_routing",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-core",
+        "--test",
+        "data_class_routing"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-core",
+      "target": "data_class_routing",
+      "filter": "",
+      "selected_by_list": 7,
+      "totals": {
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.09,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M1",
+      "packet_id": "04"
+    },
+    {
+      "command": "cargo test -p stellwerk-core --test rbac_level",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-core",
+        "--test",
+        "rbac_level"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-core",
+      "target": "rbac_level",
+      "filter": "",
+      "selected_by_list": 11,
+      "totals": {
+        "passed": 11,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.092,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M1",
+      "packet_id": "05"
+    },
+    {
+      "command": "cargo test -p stellwerk-core --test risk_level_policy",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-core",
+        "--test",
+        "risk_level_policy"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-core",
+      "target": "risk_level_policy",
+      "filter": "",
+      "selected_by_list": 8,
+      "totals": {
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.085,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M1",
+      "packet_id": "06"
+    },
+    {
+      "command": "cargo test -p stellwerk-store",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-store"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-store",
+      "target": "",
+      "filter": "",
+      "selected_by_list": 27,
+      "totals": {
+        "passed": 27,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 7
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.29,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M1",
+      "packet_id": "07"
+    },
+    {
+      "command": "cargo test -p stellwerk-store --test task_crud",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-store",
+        "--test",
+        "task_crud"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-store",
+      "target": "task_crud",
+      "filter": "",
+      "selected_by_list": 7,
+      "totals": {
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.123,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M1",
+      "packet_id": "08"
+    },
+    {
+      "command": "cargo test -p stellwerk-store --test task_crud",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-store",
+        "--test",
+        "task_crud"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-store",
+      "target": "task_crud",
+      "filter": "",
+      "selected_by_list": 7,
+      "totals": {
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.121,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M1",
+      "packet_id": "09"
+    },
+    {
+      "command": "cargo test -p stellwerk-store --test task_crud list_by_workspace",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-store",
+        "--test",
+        "task_crud",
+        "list_by_workspace"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-store",
+      "target": "task_crud",
+      "filter": "",
+      "selected_by_list": 1,
+      "totals": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 6,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.11,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M1",
+      "packet_id": "10"
+    },
+    {
+      "command": "cargo test -p stellwerk-store --test event_append",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-store",
+        "--test",
+        "event_append"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-store",
+      "target": "event_append",
+      "filter": "",
+      "selected_by_list": 5,
+      "totals": {
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.116,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M1",
+      "packet_id": "11"
+    },
+    {
+      "command": "cargo test -p stellwerk-store --test module_store",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-store",
+        "--test",
+        "module_store"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-store",
+      "target": "module_store",
+      "filter": "",
+      "selected_by_list": 7,
+      "totals": {
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.128,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M1",
+      "packet_id": "12"
+    },
+    {
+      "command": "cargo test -p stellwerk-core --test risk_level_policy",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-core",
+        "--test",
+        "risk_level_policy"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-core",
+      "target": "risk_level_policy",
+      "filter": "",
+      "selected_by_list": 8,
+      "totals": {
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.082,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M1",
+      "packet_id": "13"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test taskfile",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "taskfile"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "taskfile",
+      "filter": "",
+      "selected_by_list": 4,
+      "totals": {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.146,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "01"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test taskfile",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "taskfile"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "taskfile",
+      "filter": "",
+      "selected_by_list": 4,
+      "totals": {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.133,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "02"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --lib cli",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--lib",
+        "cli"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "",
+      "filter": "cli",
+      "selected_by_list": 12,
+      "totals": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.144,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "03"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --lib cli",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--lib",
+        "cli"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "",
+      "filter": "cli",
+      "selected_by_list": 12,
+      "totals": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.141,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "04"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test lifecycle",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "lifecycle"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "lifecycle",
+      "filter": "",
+      "selected_by_list": 7,
+      "totals": {
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.143,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "05"
+    },
+    {
+      "command": "cargo test -p stellwerk-store --test status_transition",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-store",
+        "--test",
+        "status_transition"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-store",
+      "target": "status_transition",
+      "filter": "",
+      "selected_by_list": 4,
+      "totals": {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.114,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "05a"
+    },
+    {
+      "command": "cargo test -p stellwerk-store --test status_transition",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-store",
+        "--test",
+        "status_transition"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-store",
+      "target": "status_transition",
+      "filter": "",
+      "selected_by_list": 4,
+      "totals": {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.116,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "05b"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test lifecycle",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "lifecycle"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "lifecycle",
+      "filter": "",
+      "selected_by_list": 7,
+      "totals": {
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.137,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "06"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test sandbox",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "sandbox"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "sandbox",
+      "filter": "",
+      "selected_by_list": 3,
+      "totals": {
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.147,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "07"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test sandbox",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "sandbox"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "sandbox",
+      "filter": "",
+      "selected_by_list": 3,
+      "totals": {
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.15,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "08"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test runner",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "runner"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "runner",
+      "filter": "",
+      "selected_by_list": 15,
+      "totals": {
+        "passed": 15,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.135,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "09"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test runner",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "runner"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "runner",
+      "filter": "",
+      "selected_by_list": 15,
+      "totals": {
+        "passed": 15,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.132,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "10"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test events",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "events"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "events",
+      "filter": "",
+      "selected_by_list": 6,
+      "totals": {
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.141,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "11"
+    },
+    {
+      "command": "cargo test -p stellwerk-task",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "",
+      "filter": "",
+      "selected_by_list": 88,
+      "totals": {
+        "passed": 88,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 14
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.463,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "12"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test evidence",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "evidence"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "evidence",
+      "filter": "",
+      "selected_by_list": 4,
+      "totals": {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.128,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "12b"
+    },
+    {
+      "command": "cargo test -p stellwerk-task",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "",
+      "filter": "",
+      "selected_by_list": 88,
+      "totals": {
+        "passed": 88,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 14
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.482,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "12c"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test runner",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "runner"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "runner",
+      "filter": "",
+      "selected_by_list": 15,
+      "totals": {
+        "passed": 15,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.143,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "13"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test runner",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "runner"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "runner",
+      "filter": "",
+      "selected_by_list": 15,
+      "totals": {
+        "passed": 15,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.138,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M2",
+      "packet_id": "14"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test permission && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings",
+      "argv": [],
+      "status": "UNSUPPORTED_COMMAND",
+      "package": "",
+      "target": "",
+      "filter": "",
+      "selected_by_list": null,
+      "totals": null,
+      "exit_code": null,
+      "timed_out": false,
+      "duration_s": 0.0,
+      "verdict": "UNSUPPORTED_COMMAND",
+      "reason": "shell-оператор или перевод строки в команде",
+      "execution_kind": "",
+      "milestone": "M3",
+      "packet_id": "01"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test permission",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "permission"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "permission",
+      "filter": "",
+      "selected_by_list": 9,
+      "totals": {
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.126,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "02"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test gate",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "gate"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "gate",
+      "filter": "",
+      "selected_by_list": 11,
+      "totals": {
+        "passed": 11,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.111,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "03a"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test gate_ask",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "gate_ask"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "gate_ask",
+      "filter": "",
+      "selected_by_list": 7,
+      "totals": {
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.114,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "03b"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test gate",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "gate"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "gate",
+      "filter": "",
+      "selected_by_list": 11,
+      "totals": {
+        "passed": 11,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.108,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "04"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test shaping",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "shaping"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "shaping",
+      "filter": "",
+      "selected_by_list": 6,
+      "totals": {
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.139,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "05"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test shaping",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "shaping"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "shaping",
+      "filter": "",
+      "selected_by_list": 6,
+      "totals": {
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.144,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "06"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test mount",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "mount"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "mount",
+      "filter": "",
+      "selected_by_list": 8,
+      "totals": {
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.111,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "07"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test mount",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "mount"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "mount",
+      "filter": "",
+      "selected_by_list": 8,
+      "totals": {
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.118,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "08"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test receipt",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "receipt"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "receipt",
+      "filter": "",
+      "selected_by_list": 12,
+      "totals": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.119,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "09"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test receipt",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "receipt"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "receipt",
+      "filter": "",
+      "selected_by_list": 12,
+      "totals": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.132,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "10"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test session",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "session"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "session",
+      "filter": "",
+      "selected_by_list": 4,
+      "totals": {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.114,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "11"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test session_contract",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "session_contract"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "session_contract",
+      "filter": "",
+      "selected_by_list": 5,
+      "totals": {
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.115,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "11a"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test session",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "session"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "session",
+      "filter": "",
+      "selected_by_list": 4,
+      "totals": {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.111,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "11b"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test session_failure",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "session_failure"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "session_failure",
+      "filter": "",
+      "selected_by_list": 9,
+      "totals": {
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.184,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "11c"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "",
+      "filter": "",
+      "selected_by_list": 71,
+      "totals": {
+        "passed": 71,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 11
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.352,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "12"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test session",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "session"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "session",
+      "filter": "",
+      "selected_by_list": 4,
+      "totals": {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.105,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "12a"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test session_failure --test session_contract",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "session_failure",
+        "--test",
+        "session_contract"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "session_contract",
+      "filter": "",
+      "selected_by_list": 14,
+      "totals": {
+        "passed": 14,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 2
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.199,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "12b"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test session_failure",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "session_failure"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "session_failure",
+      "filter": "",
+      "selected_by_list": 9,
+      "totals": {
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.193,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "12c"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test session_failure",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "session_failure"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "session_failure",
+      "filter": "",
+      "selected_by_list": 9,
+      "totals": {
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.19,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "12d"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test shaping",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "shaping"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "shaping",
+      "filter": "",
+      "selected_by_list": 6,
+      "totals": {
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.138,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "13"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test receipt",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "receipt"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "receipt",
+      "filter": "",
+      "selected_by_list": 12,
+      "totals": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.114,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "14"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test receipt",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "receipt"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "receipt",
+      "filter": "",
+      "selected_by_list": 12,
+      "totals": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.111,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "15"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway --test shaping",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway",
+        "--test",
+        "shaping"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "shaping",
+      "filter": "",
+      "selected_by_list": 6,
+      "totals": {
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.146,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "16"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "",
+      "filter": "",
+      "selected_by_list": 71,
+      "totals": {
+        "passed": 71,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 11
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.359,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "17"
+    },
+    {
+      "command": "cargo test -p stellwerk-gateway",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-gateway"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-gateway",
+      "target": "",
+      "filter": "",
+      "selected_by_list": 71,
+      "totals": {
+        "passed": 71,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 11
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.365,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M3",
+      "packet_id": "18"
+    },
+    {
+      "command": "cargo build -p stellwerk-task",
+      "argv": [],
+      "status": "UNSUPPORTED_COMMAND",
+      "package": "",
+      "target": "",
+      "filter": "",
+      "selected_by_list": null,
+      "totals": null,
+      "exit_code": null,
+      "timed_out": false,
+      "duration_s": 0.0,
+      "verdict": "UNSUPPORTED_COMMAND",
+      "reason": "не семейство cargo test",
+      "execution_kind": "",
+      "milestone": "M4",
+      "packet_id": "01"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test permission_wire",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "permission_wire"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "permission_wire",
+      "filter": "",
+      "selected_by_list": 10,
+      "totals": {
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.136,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M4",
+      "packet_id": "02"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test permission_wire",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "permission_wire"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "permission_wire",
+      "filter": "",
+      "selected_by_list": 10,
+      "totals": {
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.132,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M4",
+      "packet_id": "03"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test cli_watch",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "cli_watch"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "cli_watch",
+      "filter": "",
+      "selected_by_list": 3,
+      "totals": {
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.156,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M4",
+      "packet_id": "04"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test vertical",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "vertical"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "vertical",
+      "filter": "",
+      "selected_by_list": 12,
+      "totals": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.181,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M4",
+      "packet_id": "05"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test vertical",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "vertical"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "vertical",
+      "filter": "",
+      "selected_by_list": 12,
+      "totals": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.171,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M4",
+      "packet_id": "06"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test inbox",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "inbox"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "inbox",
+      "filter": "",
+      "selected_by_list": 9,
+      "totals": {
+        "passed": 8,
+        "failed": 1,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 101,
+      "timed_out": false,
+      "duration_s": 0.146,
+      "verdict": "FAIL",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M4",
+      "packet_id": "07"
+    },
+    {
+      "command": "cargo test -p stellwerk-task --test vertical",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "stellwerk-task",
+        "--test",
+        "vertical"
+      ],
+      "status": "VALID_COMMAND",
+      "package": "stellwerk-task",
+      "target": "vertical",
+      "filter": "",
+      "selected_by_list": 12,
+      "totals": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0,
+        "result_lines": 1
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.178,
+      "verdict": "PASS",
+      "reason": "",
+      "execution_kind": "RUN",
+      "milestone": "M4",
+      "packet_id": "08"
+    }
+  ]
+}
