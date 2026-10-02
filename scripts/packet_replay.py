@@ -28,10 +28,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from packet_replay_aggregate import aggregate
 from packet_replay_validate import validate
 
 
-MODES = ("inventory", "validate")
+MODES = ("inventory", "validate", "aggregate")
 
 WORKSPACE = Path(__file__).resolve().parent.parent
 CANONICAL_GLOB = ".sisyphus/plans/*/packet-*.md"
@@ -200,11 +201,24 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(__file__).resolve().parent.parent,
         help="корень обхода; xtask его не передаёт, значение нужно самотестам",
     )
+    parser.add_argument(
+        "--exit-code",
+        type=int,
+        default=0,
+        help="код завершения прогона, который описывает переданный вывод",
+    )
+    parser.add_argument(
+        "--timed-out",
+        action="store_true",
+        help="прогон прерван по таймауту",
+    )
     args = parser.parse_args(argv)
 
     if args.mode == "inventory":
         return inventory(args.root)
-    return validate(collect_rows(args.root))
+    if args.mode == "validate":
+        return validate(collect_rows(args.root))
+    return aggregate(args.exit_code, args.timed_out)
 
 
 if __name__ == "__main__":
