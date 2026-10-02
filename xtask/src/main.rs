@@ -83,6 +83,38 @@ const TASKS: &[(&str, Task)] = &[
             args: &["test", "-p", "xtask", "--test", "ledger_encoding"],
         },
     ),
+    (
+        "packet-replay",
+        Task {
+            program: "python3",
+            args: &["scripts/packet_replay.py", "report", "--report"],
+        },
+    ),
+    (
+        // Пять наборов перечислены поимённо, а не одним префиксом: префикс выбрал бы
+        // ещё и будущие наборы, и тогда задача меняла бы смысл вместе с ростом
+        // тестов. Список закрыт здесь же, в коде, — иначе вызывающий выбирал бы, что
+        // именно проверяется, а аттестуемость требует, чтобы список был в коде.
+        "packet-replay-selftest",
+        Task {
+            program: "cargo",
+            args: &[
+                "test",
+                "-p",
+                "xtask",
+                "--test",
+                "packet_replay_selftest",
+                "--test",
+                "packet_replay_validate",
+                "--test",
+                "packet_replay_aggregate",
+                "--test",
+                "packet_replay_execute",
+                "--test",
+                "packet_replay_run",
+            ],
+        },
+    ),
 ];
 
 /// Инвертированный RED-гейт: имя задачи — литерал, значение — константный

@@ -29,11 +29,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from packet_replay_aggregate import aggregate
-from packet_replay_execute import make_sandbox, sandbox_report
 from packet_replay_validate import validate
 
 
-MODES = ("inventory", "validate", "aggregate", "replay")
+MODES = ("inventory", "validate", "aggregate", "replay", "report")
 
 WORKSPACE = Path(__file__).resolve().parent.parent
 CANONICAL_GLOB = ".sisyphus/plans/*/packet-*.md"
@@ -196,33 +195,21 @@ def main(argv: list[str] | None = None) -> int:
         description="Проверка воспроизводимости acceptance-команд пакетов.",
     )
     parser.add_argument("mode", choices=MODES, help="режим из закрытого перечисления")
-    parser.add_argument(
-        "--root",
-        type=Path,
-        default=Path(__file__).resolve().parent.parent,
-        help="корень обхода; xtask его не передаёт, значение нужно самотестам",
-    )
-    parser.add_argument(
-        "--exit-code",
-        type=int,
-        default=0,
-        help="код завершения прогона, который описывает переданный вывод",
-    )
-    parser.add_argument(
-        "--timed-out",
-        action="store_true",
-        help="прогон прерван по таймауту",
-    )
-    parser.add_argument(
-        "--sandbox-only",
-        action="store_true",
-        help="построить песочницу, напечатать её путь и ничего не исполнять",
-    )
+    parser.add_argument("--root", type=Path, default=WORKSPACE, help="корень обхода")
+    parser.add_argument("--exit-code", type=int, default=0, help="код прогона, который описывает вывод")
+    parser.add_argument("--timed-out", action="store_true", help="прогон прерван по таймауту")
+    parser.add_argument("--sandbox-only", action="store_true", help="построить песочницу и выйти")
+    parser.add_argument("--only", default="", help="ограничить проход одним milestone")
+    parser.add_argument("--timeout", type=float, default=300.0, help="предел времени на команду, с")
+    parser.add_argument("--report", action="store_true", help="записать отчёт и json")
     args = parser.parse_args(argv)
 
-    if args.mode == "replay":
-        print(sandbox_report(make_sandbox()))
-        return 0
+    if args.mode == "replay" or args.mode == "report":
+        # Импорт внутри ветви: драйвер берёт обход плана из точки входа, и верхнеуровневый
+        # импорт здесь превращался бы в цикл на этапе загрузки модулей.
+        from packet_replay_report import replay
+
+        return replay(args)
     if args.mode == "inventory":
         return inventory(args.root)
     if args.mode == "validate":
