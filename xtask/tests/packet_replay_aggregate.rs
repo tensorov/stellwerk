@@ -64,6 +64,25 @@ fn field_of(stdout: &str, key: &str) -> String {
 }
 
 /// a. Позиционный фильтр `measure` не становится target'ом.
+/// Одна строка FAILED среди нескольких ok → FAIL.
+///
+/// Ветка `failed > 0` не была покрыта ни одним тестом: зелёные строки суммировались
+/// корректно, но падение где-то среди них молча проходило как PASS.
+#[test]
+fn one_failed_line_among_ok_is_fail() {
+    let fixture = "\
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out";
+    let out = agg(fixture, 0);
+    assert_eq!(field_of(&out, "FAILED"), "1", "{}", out);
+    assert_eq!(
+        class_of(&out),
+        "FAIL",
+        "одна упавшая строка обесценивает прогон целиком: {}",
+        out
+    );
+}
+
 #[test]
 fn several_result_lines_are_summed() {
     let fixture = "\
