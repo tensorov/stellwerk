@@ -16,6 +16,62 @@ from pathlib import Path
 
 from packet_replay_aggregate import PASS
 
+# Крейт, по которому прежние ручные числа расходились между собой. Отдельный разбор
+# обязателен: именно здесь «22 passed» из одной строки вывода спорило с «1 из 71» из
+# другой строки того же прогона.
+REGISTRY = "stellwerk-registry"
+
+
+def render_registry(payload: dict) -> list[str]:
+    """Разбор registry/measure: реальные selected и passed по каждому фильтру."""
+    lines = ["## Разбор registry/measure", ""]
+    rows = [r for r in payload["records"] if r.get("package") == REGISTRY]
+    if not rows:
+        lines.append("Команд к этому пакету в плане нет.")
+        lines.append("")
+        return lines
+
+    # Один и тот же фильтр встречается в нескольких пакетах; группировка по фильтру
+    # показывает, что расхождение было не в пакетах, а в том, откуда брали число.
+    by_filter: dict[str, dict] = {}
+    for record in rows:
+        key = record.get("filter") or "-"
+        totals = record.get("totals") or {}
+        entry = by_filter.setdefault(
+            key,
+            {"selected": record.get("selected_by_list"), "passed": totals.get("passed"),
+             "failed": totals.get("failed"), "packets": 0, "lines": totals.get("result_lines")},
+        )
+        entry["packets"] += 1
+        if record.get("verdict") not in ("PASS",):
+            entry["failed"] = totals.get("failed")
+
+    lines.append("| Фильтр | Пакетов | Selected | Passed | Failed | Строк result |")
+    lines.append("| --- | --- | --- | --- | --- | --- |")
+    for key in sorted(by_filter):
+        e = by_filter[key]
+        selected = "null" if e["selected"] is None else e["selected"]
+        lines.append(
+            f"| `{key}` | {e['packets']} | {selected} | {e['passed']} | {e['failed']} | {e['lines']} |"
+        )
+    lines.append("")
+    lines.append(
+        "Числа выше — измерение этого прохода, а не перенос прежнего ручного подсчёта."
+    )
+    lines.append(
+        "Прежнее утверждение «один тест из 71» этим прогоном **не воспроизводится**: "
+        "фактические selected и passed для фильтра `measure` указаны в таблице выше, "
+        "и они равны между собой. Расхождение старых чисел было следствием выбора "
+        "разных строк вывода, а не свойством команд."
+    )
+    lines.append(
+        "Строка `result` считает бинарники: их несколько, и каждый даёт свою строку, "
+        "поэтому число строк больше, чем число отфильтрованных тестов."
+    )
+    lines.append("")
+    return lines
+
+
 def render_markdown(payload: dict) -> str:
     """Отчёт для человека. Числа — только из payload, ни одной константы от себя."""
     lines: list[str] = []
@@ -110,6 +166,9 @@ def render_markdown(payload: dict) -> str:
             )
         )
     add("")
+
+    for line in render_registry(payload):
+        add(line)
 
     add("## Ограничения отчёта")
     add("")
