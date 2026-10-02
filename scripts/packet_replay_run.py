@@ -28,8 +28,8 @@ UNSUPPORTED = "UNSUPPORTED_COMMAND"
 # означает, что команда может означать не то, о чём мы думаем.
 BARE_FLAGS = frozenset({
     "--lib", "--bins", "--tests", "--all-targets", "--doc", "--no-run",
-    "--workspace", "--all", "--quiet", "--nocapture", "--color",
-    "--locked", "--offline",
+    "--workspace", "--all", "--quiet", "--verbose", "--nocapture", "--color",
+    "--locked", "--offline", "--no-fail-fast", "--include-ignored", "--release",
 })
 
 # Флаги, за которыми обязательно следует значение.
