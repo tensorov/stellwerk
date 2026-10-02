@@ -29,10 +29,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from packet_replay_aggregate import aggregate
+from packet_replay_execute import make_sandbox, sandbox_report
 from packet_replay_validate import validate
 
 
-MODES = ("inventory", "validate", "aggregate")
+MODES = ("inventory", "validate", "aggregate", "replay")
 
 WORKSPACE = Path(__file__).resolve().parent.parent
 CANONICAL_GLOB = ".sisyphus/plans/*/packet-*.md"
@@ -212,8 +213,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="прогон прерван по таймауту",
     )
+    parser.add_argument(
+        "--sandbox-only",
+        action="store_true",
+        help="построить песочницу, напечатать её путь и ничего не исполнять",
+    )
     args = parser.parse_args(argv)
 
+    if args.mode == "replay":
+        print(sandbox_report(make_sandbox()))
+        return 0
     if args.mode == "inventory":
         return inventory(args.root)
     if args.mode == "validate":

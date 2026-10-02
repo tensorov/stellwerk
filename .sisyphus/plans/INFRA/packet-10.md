@@ -1,85 +1,67 @@
-# packet-10 — ИСПОЛНЕНИЕ В ПЕСОЧНИЦЕ, АГРЕГАЦИЯ И ОТЧЁТ
+# packet-10 — ПЕСОЧНИЦА ПРОГОНА ИЗ `git archive HEAD`
 
 plan_id: INFRA
 status: предложен
-goal: исполнить только валидно распознанные acceptance-команды в отдельной песочнице,
-  просуммировать ВСЕ строки `test result` и выпустить отчёт, который отвечает ровно на
-  вопрос «воспроизводима ли команда на текущем HEAD».
-files_allowed: [scripts/packet_replay.py, xtask/tests/packet_replay_selftest.rs]
+goal: дать прогону acceptance-команды отдельную копию дерева репозитория, в которой нет
+  `.git`, нет ссылки на рабочее дерево и нет ни одной возможности изменить исходники.
+files_allowed: [scripts/packet_replay.py, scripts/packet_replay_execute.py, xtask/tests/packet_replay_execute.rs]
 max_diff_lines: 200
-test: cargo test -p xtask --test packet_replay_selftest
-acceptance: `cargo test -p xtask --test packet_replay_selftest` → 0 failed, 0 filtered out;
-  `cargo xtask packet-replay` создаёт `.night/PACKET_REPLAY_REPORT.md` и
-  `.night/packet-replay.json`; основной checkout не изменён (HEAD и status совпадают до и
-  после).
-forbidden: [cargo add, правка корневого Cargo.toml, shell=True, eval, bash -c,
-  исполнение acceptance-команд в основном checkout, параллельный запуск, правка packet-файлов
-  на основе отчёта, создание PolyForge markers задним числом, выводы об историческом RED или
-  coverage, переписывание исторического текста леджера]
-depends_on: [08, 09]
+test: cargo test -p xtask --test packet_replay_execute
+acceptance: `cargo test -p xtask --test packet_replay_execute` → 0 failed, 0 filtered out;
+  песочница построена из настоящего `git archive HEAD`; в ней нет `.git`; она содержит
+  корень workspace и каталог крейтов; она не является symlink; она лежит вне рабочего
+  дерева; рабочее дерево после прогона содержит только три файла этого пакета.
+forbidden: [cargo add, правка корневого Cargo.toml, shell=True, eval, bash -c, cut, awk,
+  копирование `.git` в песочницу, песочница внутри рабочего дерева, правка packet-файлов,
+  переписывание исторического текста леджера]
+depends_on: [09, 11]
 data_class: public
 lane: infra/replay
 
 ## Контекст
 
-Разбор и семантика готовы; осталось исполнить и **не обмануть себя на агрегации**. Ручной
-опыт уже показал все три способа это сделать: взять первую строку `test result` (теряются
-остальные бинарники), назвать зелёным прогон с нулём выполненных тестов, и сложить выводы
-разных прогонов в одну цифру.
+Прогон acceptance-команды в основном checkout — это право испортить то, что потом
+аттестуется. Значит исполнять её там нельзя вовсе.
+
+`cp -r` для копии не годится: он тащит `.git` целиком, и команда получает возможность
+дописать в историю. `git archive HEAD` выгружает только отслеживаемые файлы, поэтому
+история не попадает в песочницу физически, а не по забывчивости.
 
 ## Что сделать
 
-1. **Песочница, а не основной checkout.** Для каждого пакета: свежая копия через
-   `git archive HEAD` в `/tmp/stellwerk-replay-*`. В песочнице нет `.git` и нет symlink на
-   основной репозиторий. CWD команды — корень песочницы. Это гарантирует, что прогон
-   acceptance-команды не может изменить рабочее дерево, и после прогона HEAD/status
-   основного репозитория сверяются с исходными.
-2. **Строго argv.** `subprocess.run` со списком аргументов, `shell=False`. Последовательно,
-   без параллели. Timeout 300с по умолчанию.
-3. **Discovery перед точным запуском:** эквивалент той же cargo test с libtest `--list`, чтобы
-   знать `selected_by_list`. Discovery не заменяет фактический прогон, а сообщает, сколько
-   тестов команда вообще собирается выполнить — это и есть разница между «зелёным» и
-   «проверенным».
-4. **Агрегация по ВСЕМ строкам `test result`.** Парсить каждую, суммировать `passed`,
-   `failed`, `ignored`, `measured`, `filtered`. Считать `result_lines`. Ни первую, ни последнюю
-   строку отдельно.
-5. Общий run-local `CARGO_TARGET_DIR` **вне исходного дерева**, очищаемый после отчёта:
-   переиспользование ускоряет 96 прогонов, а дерево остаётся чистым.
-6. **Классификация строго по брифу.** `filtered_total > 0` при `passed_total > 0` — это PASS,
-   а не дефект: `22 passed; 49 filtered` означает, что команда отбирала подмножество, и это
-   законно. Дефектом это становится только при `passed_total == 0`.
-7. Отчёт: total, статусы разбора, статусы валидности, PASS/FAIL/INCONCLUSIVE, разбивка по
-   milestone, полный список каждого не-PASS с причиной, точная статистика `registry measure`.
+1. Создать каталог вне рабочего дерева через `tempfile.mkdtemp(prefix="stellwerk-replay-")`.
+2. Выгрузить `git archive --format=tar HEAD` и распаковать его в этот каталог.
+3. Напечатать путь машиночитаемо: `SANDBOX=<путь>`. Разбирать путь из прозаического
+   вывода нельзя — вызывающий не должен вычислять то, что инструмент уже знает.
+4. Ни одной внешней командой не пользоваться shell-строкой: только список аргументов.
+5. Каталог после распаковки не убирать: уборка — дело вызывающего, потому что только он
+   знает, когда проверка закончилась.
 
-## Границы, которые пакет не пересекает
+## Границы пакета
 
-- Ответ отчёта — только «воспроизводима ли команда на текущем HEAD». Не «был ли исторический
-  RED», не «покрыт ли крейт полностью».
-- `NO_COMMAND` не делает milestone незакрытым.
-- Отчёт **не правит** packet-файлы. Каждый дефект — FINDING с packet id и машинным
-  результатом.
-- Маркеры PolyForge задним числом не создаются.
+Пакет выделен по предмету: песочница — это про извлечение состояния репозитория, а не про
+исполнение. Дальше по цепочке:
+
+- **packet-12** — исполнитель: строгий argv, последовательный прогон, таймаут, discovery
+  через libtest `--list`, и `selected_by_list` как отдельное состояние;
+- **packet-13** — отчёт `.night/PACKET_REPLAY_REPORT.md` и `.night/packet-replay.json`
+  и регистрация задач `packet-replay` и `packet-replay-selftest` в `TASKS`.
+
+Пакет разделён не по размеру, а по лимиту ADR-0003: три файла на пакет, логика ≤200
+логических строк на файл, тесты ≤250 полных. Совмещённый пакет не помещался ни в одну из
+этих границ.
 
 ## Self-tests, обязательные
 
-1. Первая строка `0 passed; 49 filtered`, вторая `22 passed; 0 filtered` → PASS,
-   `passed_total == 22`.
-2. Только `0 passed; 49 filtered` → INCONCLUSIVE_ZERO_EXECUTED.
-3. `22 passed; 49 filtered` → PASS.
-4. Одна строка FAILED среди нескольких ok → FAIL.
-5. Exit 101 без строки результата → FAIL.
-6. Exit 0 без строк результата → INCONCLUSIVE_NO_RESULT.
-7. Несколько бинарников суммируются, а не перезаписывают друг друга.
-8. Timeout → FAIL с признаком timeout.
+1. Песочница построена, в ней нет `.git`.
+2. В песочнице есть корень workspace (`Cargo.toml`) и каталог `crates/`.
+3. Песочница — каталог, а не symlink.
+4. Песочница лежит вне рабочего дерева.
 
 ## Evidence
 
-- `cargo test -p xtask --test packet_replay_selftest` → 0 failed, 0 filtered out.
-- Регрессия на реальной команде `cargo test -p stellwerk-registry measure`: команда
-  распознана как cargo test, `measure` распознан как FILTER, package существует,
-  `result_lines >= 1`, `passed_total > 0`, `failed_total == 0`, итог PASS. Ожидаемые числа
-  **не хардкодить** — записать измеренные.
-- Регрессия на `cargo test -p stellwerk-core --test workspace_policy`: target найден через
-  metadata, выполнен ≥1 тест.
-- `HEAD` и `git status` основного репозитория совпадают до и после replay.
-- `.night/PACKET_REPLAY_REPORT.md` и `.night/packet-replay.json` созданы.
+- `cargo test -p xtask --test packet_replay_execute` → 0 failed, 0 filtered out.
+- Наборы предыдущих пакетов не сломаны: `packet_replay_selftest` 9, `packet_replay_validate`
+  5, `packet_replay_aggregate` 8 — все 0 failed.
+- Ни одна acceptance-команда этим пакетом не исполнена: выполняются только `git archive`
+  и `tar` над выгрузкой.
