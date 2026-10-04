@@ -1,7 +1,7 @@
 # packet-06 — панель оркестраторского диалога
 plan_id: M5
 status: предложен
-goal: GREEN — дать оркестратору постоянную панель в интерактивной области Pi, которая показывает состояние работы и позволяет вмешаться, не перезапуская сессию.
+goal: GREEN — дать оркестратору панель состояния работы в интерактивной области Pi, которая позволяет вмешаться, не перезапуская сессию; панель строится как компонент области, а не как захват экрана, и в режимах без интерфейса не создаётся.
 files_allowed: [plugin/src/orchestrator-panel.ts, plugin/tests/orchestrator-panel.test.ts, plugin/src/panel-layout.json]
 max_diff_lines: 200
 test: cargo test -p xtask --test plugin_manifest
