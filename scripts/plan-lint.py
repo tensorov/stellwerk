@@ -67,33 +67,47 @@ KEY_RE = re.compile(r'^([a-z_][a-z0-9_]*):\s*(.*)$')
 
 
 def parse(path):
-    """Достать frontmatter пакета: плоские key: value до первой пустой строки."""
+    """Достать frontmatter пакета: плоские key: value до маркера конца блока.
+
+    Граница блока — `---` или первый заголовок `##`, а не первая пустая строка.
+    Разрыв по пустой строке означал, что валидный пакет с пустой строкой между
+    заголовком и метаданными не разбирался вовсе: `parse()` возвращал пусто, пакет
+    выпадал из выборки, а линт печатал «пакетов нет» вместо результата проверки.
+    Проверка, которая не ловит то, для чего написана, хуже её отсутствия.
+
+    Продолжение значения — строка без `ключ:` — присоединяется к предыдущему полю,
+    поэтому длинное поле не усекается до первой строки. Свёрнутый блок (`>` или `|`)
+    по-прежнему НЕ разворачивается: его разворот меняет контракт линта шире этой
+    починки, и за него отвечает C4.
+    """
     head = []
     with open(path, encoding='utf-8') as fh:
         for line in fh:
             line = line.rstrip('\n')
-            if line.strip() == '':
+            stripped = line.strip()
+            if stripped == '---' or stripped.startswith('## '):
                 break
             head.append(line)
+    # Заголовок — ровно первая строка. Взять «все непустые строки подряд» нельзя:
+    # у пакетов M1 после заголовка пустой строки нет, и весь frontmatter ушёл бы в
+    # заголовок, а полей не осталось бы — пакет молча выпал бы из проверки.
     if not head or not head[0].startswith('#'):
         return None
     data = {}
     folded = []
+    prev = None
     for line in head[1:]:
         m = KEY_RE.match(line.strip())
         if m:
             key, val = m.group(1), m.group(2).strip()
-            # Свёрнутое значение ('>' или '|') этот парсер НЕ разворачивает:
-            # в data[key] попадёт односимвольный маркер, а настоящий текст
-            # останется в следующих строках, которые парсер не читает. Запоминаем
-            # такие ключи, чтобы C4 сообщил об этом ВМЕСТО молчаливого искажения.
+            prev = key
             if val in ('>', '|'):
                 folded.append(key)
             data[key] = val
-        elif line.startswith((' ', '\t')) and 'depends_on' not in data:
-            pass  # продолжение значения — не используем
-    if folded:
-        data['_folded'] = folded
+        elif line.strip() == '' or line.startswith((' ', '\t')):
+            # Пустая строка внутри блока и отступ — продолжение предыдущего поля.
+            if prev is not None and line.strip() != '':
+                data[prev] = (data[prev] + ' ' + line.strip()).strip()
     return data or None
 
 
@@ -605,6 +619,59 @@ def self_test():
         print('  %s %s' % ('ok  ' if cond else 'FAIL', label))
         if not cond:
             fails.append(label)
+
+    # 0) RED-фикстура пакета: пустая строка между заголовком и метаданными.
+    #    До починки parse() обрывался на первой пустой строке, и пакет выпадал
+    #    из проверки целиком, а линт печатал «пакетов нет» вместо результата.
+    here = os.path.dirname(os.path.abspath(__file__))
+    fixture = os.path.join(here, "tests", "plan-lint-parse-fixture.md")
+    parsed = parse(fixture) if os.path.exists(fixture) else None
+    expect(
+        parsed is not None and parsed.get("plan_id") == "TEST",
+        "пустая строка в метаданных не обрывает разбор пакета",
+    )
+    expect(
+        bool(parsed) and str(parsed.get("files_allowed", "")) == "[a.rs]",
+        "значение поля читается целиком, а не обрезается до первой строки",
+    )
+    # Регрессия по настоящим пакетам. Фикстура проверяет частный случай, а живой
+    # прогон — единственный, кто поймал регрессию, внесённую этой же починкой:
+    # self-test был зелёным, а M1/M2/M4/M5 перестали разбираться целиком.
+    plans_root = os.path.join(os.path.dirname(here), ".sisyphus", "plans")
+    physical = parsed_count = 0
+    unreadable = []
+    for milestone in sorted(os.listdir(plans_root)) if os.path.isdir(plans_root) else []:
+        mdir = os.path.join(plans_root, milestone)
+        if not os.path.isdir(mdir):
+            continue
+        for name in sorted(os.listdir(mdir)):
+            # Тот же отбор, что и в load_plan: packet-NN.result.md — артефакт
+            # результата, а не пакет, и считать его пакетом значит требовать
+            # метаданных от файла, который пакетом не является.
+            if not re.match(r"^packet-[\w-]+\.md$", name):
+                continue
+            physical += 1
+            if parse(os.path.join(mdir, name)) is not None:
+                parsed_count += 1
+            else:
+                unreadable.append("%s/%s" % (milestone, name))
+    # Известные нечитаемые пакеты: у них блок-цитата стоит ПЕРЕД заголовком, и
+    # они не разбирались никогда — ни старым, ни новым парсером. Это отдельный дефект
+    # (зафиксирован как FINDING), а не следствие починки. Перечисление явное, чтобы
+    # новое непроверяемое правило всё равно роняло тест.
+    known_unparsed = {"M2/packet-12.md", "M3/packet-12.md"}
+    unexpected = sorted(set(unreadable) - known_unparsed)
+    expect(
+        physical > 0 and parsed_count + len(known_unparsed) == physical and not unexpected,
+        "все пакеты кроме известных нечитаемых разобраны: %d из %d%s"
+        % (parsed_count, physical, ("; неожиданно не прочитаны: " + ", ".join(unexpected)) if unexpected else ""),
+    )
+
+    junk = os.path.join(here, "tests", "plan-lint-no-title.tmp")
+    with open(junk, "w", encoding="utf-8") as fh:
+        fh.write("plan_id: X\ngoal: g\n")
+    expect(parse(junk) is None, "файл без заголовка не становится пакетом")
+    os.remove(junk)
 
     # 1) чистый план: последовательная цепочка на общем файле — нарушений нет
     ok = [
