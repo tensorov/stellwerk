@@ -38,6 +38,15 @@
 //! входит (`red-gate <имя>` невыразима). `TASKS` и `RED_GATES` не сливаются:
 //! у них разный смысл кода, и общий флаг означал бы, что смысл теряется по дороге.
 
+//!
+//! # Почему вердикт мутационного гейта не кодируется кодом возврата
+//!
+//! `cargo mutants` по `outcome.rs:110-124` возвращает `0` только при полном успехе
+//! (baseline зелёный, `timeout == 0`, `missed == 0`), а allowlist считает ненулевой код
+//! поломкой инструмента. Проброс этого кода сделал бы честный FAIL неотличимым от
+//! сломанного cargo-mutants. Поэтому `mutation-run` кодирует одно: состоялось ли
+//! измерение, а вердикт остаётся содержимым артефакта.
+
 use std::io::Write;
 use std::process::{Command, ExitCode};
 
@@ -183,6 +192,12 @@ const NO_MEASUREMENT: u8 = 6;
 /// Код cargo-mutants при упавшем baseline (`exit_code.rs`, 27.1.0): зелёного дерева
 /// не было, поэтому измеренные исходы не значат ничего.
 const BASELINE_FAILED: i32 = 4;
+
+/// Порог владельца — в коде, а не в аргументе: значение из `argv` меняло бы гейт,
+/// не оставив следа в репозитории, и приёмка перестала бы быть повторяемой.
+const MUTATION_THRESHOLD: u64 = 80;
+/// Отказ «ниже порога». Отличается от кода 6: измерение состоялось, но гейт не пройден.
+const BELOW_THRESHOLD: u8 = 7;
 
 /// Крейты под гейтом, поимённо: префикс выбрал бы и будущие, а список закрыт здесь.
 const MUTATION_CRATES: [&str; 2] = ["stellwerk-task", "stellwerk-gateway"];
@@ -499,6 +514,43 @@ mod tests {
         );
     }
 }
+/// Измерение одного крейта и, если измерение состоялось, вердикт по порогу. Единственное
+/// различие между тремя задачами — кодируется ли вердикт в код возврата: `mutation-run`
+/// не кодирует, потому что вердикт это содержимое артефакта, а аттестуется факт измерения.
+fn mutation_task(crate_name: &str, verdict_is_exit_code: bool) -> ExitCode {
+    let Some(counts) = (match measure(crate_name) {
+        Err(reason) => return refused(crate_name, reason),
+        Ok(None) => None,
+        Ok(Some(counts)) => Some(counts),
+    }) else {
+        eprintln!("{crate_name}: N/A — ни одного viable мутанта; вердикта нет");
+        return ExitCode::from(0);
+    };
+    let viable = counts.caught + counts.missed + counts.timeout;
+    // Сравнение целочисленное: «ровно на пороге» обязано быть PASS, а 4/5*100 в f64 —
+    // это 80.00000000000001, и проверка ушла бы в FAIL на самом пороге.
+    let passed = counts.caught * 100 >= MUTATION_THRESHOLD * viable;
+    // Сотые округляются, а не отбрасываются: инструмент печатает 28.63%, и расхождение
+    // в сотых выглядело бы как ошибка разбора, а не как округление.
+    let hundredths = (counts.caught * 10_000 + viable / 2) / viable;
+    eprintln!(
+        "{crate_name}: {} — {}.{:02}% при пороге {MUTATION_THRESHOLD}% \
+         (caught={}, missed={}, timeout={}, unviable={}, total={})",
+        if passed { "PASS" } else { "FAIL" },
+        hundredths / 100,
+        hundredths % 100,
+        counts.caught,
+        counts.missed,
+        counts.timeout,
+        counts.unviable,
+        counts.total
+    );
+    if passed || !verdict_is_exit_code {
+        ExitCode::from(0)
+    } else {
+        ExitCode::from(BELOW_THRESHOLD)
+    }
+}
 
 fn main() -> ExitCode {
     // Берём только имя задачи. Всё остальное намеренно игнорируется, а не
@@ -513,6 +565,8 @@ fn main() -> ExitCode {
     // Мутационные задачи — литералами в `match`: имя задачи не переносится в строку
     // команды, а набор крейтов лежит в коде (INFRA/packet-01:36).
     match name {
+        "mutation-task" => return mutation_task("stellwerk-task", true),
+        "mutation-gateway" => return mutation_task("stellwerk-gateway", true),
         "mutation-run" => return mutation_run(),
         _ => {}
     }

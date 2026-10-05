@@ -357,3 +357,55 @@ fn mutation_run_refuses_unfinished_measurement() {
     assert_ne!(code_of(&out), 0, "{stderr}");
     assert!(stderr.contains("нет outcomes.json"), "{stderr}");
 }
+/// Ровно на пороге — PASS: сравнение целочисленное, а «ровно 80%» не должно
+/// превращаться в FAIL из-за 80.00000000000001 в f64.
+#[test]
+fn mutation_tasks_pass_exactly_at_threshold() {
+    let dir = sandbox();
+    let out = run_with_stub(&["mutation-task"], &dir, &outcomes(5, 4, 1, 0, 0), 2);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(code_of(&out), 0, "{stderr}");
+    assert!(stderr.contains("PASS"), "PASS не назван: {stderr}");
+    let argv = std::fs::read_to_string(dir.join("argv")).expect("argv пишет заглушка");
+    assert!(
+        argv.contains("stellwerk-task"),
+        "измерен чужой крейт: {argv}"
+    );
+}
+
+/// Ниже порога вердикт кодируется ненулевым кодом — в отличие от `mutation-run`, где
+/// то же измерение с FAIL даёт 0.
+#[test]
+fn mutation_tasks_fail_below_threshold() {
+    let dir = sandbox();
+    let out = run_with_stub(&["mutation-task"], &dir, &outcomes(100, 79, 21, 0, 0), 2);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(code_of(&out), 0, "79% ниже порога 80: {stderr}");
+    assert!(stderr.contains("FAIL"), "отказ не назван FAIL: {stderr}");
+}
+
+/// Ноль viable — отдельное состояние: код 0 и вердикт N/A, а не PASS. «Нет ловимых
+/// мутантов» и «тесты ничего не ловят» — не одно и то же.
+#[test]
+fn mutation_tasks_report_not_applicable() {
+    let dir = sandbox();
+    let out = run_with_stub(&["mutation-gateway"], &dir, &outcomes(5, 0, 0, 0, 5), 2);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(code_of(&out), 0, "{stderr}");
+    assert!(stderr.contains("N/A"), "N/A не назван: {stderr}");
+    assert!(!stderr.contains("PASS"), "N/A выдан за PASS: {stderr}");
+}
+
+/// Лишний флаг не должен доходить до инструмента: имя задачи — литерал в `match`,
+/// а из `argv` в дочерний процесс не уходит ничего.
+#[test]
+fn mutation_tasks_do_not_forward_arguments() {
+    let dir = sandbox();
+    let args = ["mutation-task", "--exec=/bin/false"];
+    let out = run_with_stub(&args, &dir, &outcomes(5, 4, 1, 0, 0), 2);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(code_of(&out), 0, "лишний флаг ломает задачу: {stderr}");
+    let argv = std::fs::read_to_string(dir.join("argv")).expect("argv пишет заглушка");
+    let want = "mutants --package stellwerk-task --output target/mutants/stellwerk-task";
+    assert_eq!(argv.trim(), want, "в дочерний процесс ушло лишнее: {argv}");
+}
