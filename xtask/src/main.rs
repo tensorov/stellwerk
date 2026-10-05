@@ -246,6 +246,179 @@ fn red_gate(name: &str, args: &[&str]) -> ExitCode {
     }
 }
 
+/// Поля верхнего уровня `outcomes.json`, нужные гейту, в фиксированном порядке.
+const COUNTER_KEYS: [&str; 5] = ["total_mutants", "caught", "missed", "timeout", "unviable"];
+
+/// Четыре счётчика и `total_mutants` верхнего уровня `outcomes.json`. Берутся с
+/// верхнего уровня, а не из `summary`: текст между версиями меняется, числа — нет.
+struct Counters {
+    total: u64,
+    caught: u64,
+    missed: u64,
+    timeout: u64,
+    unviable: u64,
+}
+
+impl Counters {
+    /// `Err` — измерения не состоялось. `Ok(None)` — ни одного viable мутанта: это
+    /// отдельное состояние (N/A), а не ноль процентов, потому что ноль означал бы
+    /// провал тестов, а не отсутствие измерения.
+    fn check(self) -> Result<Option<Self>, &'static str> {
+        if self.caught + self.missed + self.timeout + self.unviable != self.total {
+            return Err("сумма счётчиков не сошла с total_mutants");
+        }
+        // Позитивный контроль: ловимые мутанты есть, а поймано ноль — значит
+        // непонятно, тесты не убивают мутанты или инструмент не собрал их в scratch.
+        if self.caught == 0 && self.missed + self.timeout > 0 {
+            return Err("позитивный контроль не пройден: viable есть, поймано 0");
+        }
+        Ok((self.caught + self.missed + self.timeout > 0).then_some(self))
+    }
+}
+
+/// Счётчики верхнего уровня `outcomes.json`. Вложенные значения пропускаются насквозь,
+/// поэтому счётчик из вложенного объекта в счёт верхнего уровня не попадёт. Зависимостей
+/// у xtask нет намеренно, а контракт — пять целых полей, поэтому разбор минимальный;
+/// `None` значит «поля нет или оно не число», и оба случая — «файл не распарсился».
+fn counters(text: &str) -> [Option<u64>; 5] {
+    let bytes = text.as_bytes();
+    let mut found = [None; 5];
+    let (mut depth, mut i) = (0i32, 0usize);
+    let mut key: Option<&[u8]> = None;
+    while let Some(&byte) = bytes.get(i) {
+        i += 1;
+        match byte {
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' if depth > 0 => depth -= 1,
+            b'"' => {
+                let end = string_end(bytes, i - 1);
+                // Ключ — только строка, за которой стоит `:`. Без этой проверки
+                // строковое ЗНАЧЕНИЕ (например cargo_mutants_version: "27.1.0")
+                // принималось за имя ключа, и следующий за ним счётчик терял имя.
+                let mut after = end;
+                while matches!(bytes.get(after), Some(w) if w.is_ascii_whitespace()) {
+                    after += 1;
+                }
+                if depth == 1 && key.is_none() && bytes.get(after) == Some(&b':') {
+                    key = Some(&bytes[i..end - 1]);
+                }
+                i = end;
+            }
+            b':' if depth == 1 => {
+                while matches!(bytes.get(i), Some(w) if w.is_ascii_whitespace()) {
+                    i += 1;
+                }
+                if let Some(k) = key.take() {
+                    if let Some(at) = COUNTER_KEYS.iter().position(|c| c.as_bytes() == k) {
+                        found[at] = number(&bytes[i..]);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// Неотрицательное целое в начале среза. Дробное и `null` счётчиком не являются:
+/// принять их за число значило бы превратить неизвестное в значение.
+fn number(bytes: &[u8]) -> Option<u64> {
+    let digits = bytes.iter().take_while(|c| c.is_ascii_digit()).count();
+    if digits == 0 || matches!(bytes.get(digits), Some(b'.' | b'e' | b'E')) {
+        return None;
+    }
+    std::str::from_utf8(&bytes[..digits]).ok()?.parse().ok()
+}
+
+/// Конец строкового литерала: индекс за закрывающей кавычкой, со счётом escape.
+fn string_end(bytes: &[u8], mut i: usize) -> usize {
+    i += 1;
+    while let Some(&byte) = bytes.get(i) {
+        i += 1;
+        match byte {
+            b'\\' => i += 1,
+            b'"' => return i,
+            _ => {}
+        }
+    }
+    bytes.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GOOD: &str = concat!(
+        r#"{"cargo_mutants_version":"27.1.0","total_mutants":5,"caught":4,"#,
+        r#""missed":1,"timeout":0,"unviable":0,"success":true}"#
+    );
+
+    fn counts(caught: u64, missed: u64, timeout: u64, unviable: u64) -> Counters {
+        Counters {
+            total: caught + missed + timeout + unviable,
+            caught,
+            missed,
+            timeout,
+            unviable,
+        }
+    }
+
+    #[test]
+    fn top_level_counters_are_read_in_declared_order() {
+        assert_eq!(
+            counters(GOOD),
+            [Some(5), Some(4), Some(1), Some(0), Some(0)]
+        );
+    }
+
+    #[test]
+    fn nested_counter_is_not_counted_as_top_level() {
+        let text = r#"{"summary":{"caught":999},"total_mutants":2,"caught":1,"missed":1,"timeout":0,"unviable":0}"#;
+        assert_eq!(
+            counters(text),
+            [Some(2), Some(1), Some(1), Some(0), Some(0)]
+        );
+    }
+
+    #[test]
+    fn missing_and_non_integer_are_absent_not_zero() {
+        let text = r#"{"total_mutants":1,"caught":null,"missed":1.5,"timeout":0}"#;
+        let [total, caught, missed, _, _] = counters(text);
+        assert_eq!((total, caught, missed), (Some(1), None, None));
+    }
+
+    #[test]
+    fn sum_mismatch_is_refusal() {
+        let wrong = Counters {
+            total: 9,
+            caught: 4,
+            missed: 1,
+            timeout: 0,
+            unviable: 0,
+        };
+        assert_eq!(
+            wrong.check().err(),
+            Some("сумма счётчиков не сошла с total_mutants")
+        );
+    }
+
+    #[test]
+    fn viable_without_caught_is_refusal() {
+        assert_eq!(
+            counts(0, 3, 0, 0).check().err(),
+            Some("позитивный контроль не пройден: viable есть, поймано 0")
+        );
+    }
+
+    #[test]
+    fn zero_viable_is_its_own_state_not_zero_percent() {
+        assert_eq!(
+            counts(0, 0, 0, 4).check().map(|got| got.is_none()),
+            Ok(true)
+        );
+    }
+}
+
 fn main() -> ExitCode {
     // Берём только имя задачи. Всё остальное намеренно игнорируется, а не
     // перенаправляется: иначе лишний флаг стал бы путём к произвольной команде.
