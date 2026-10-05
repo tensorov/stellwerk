@@ -7,7 +7,7 @@ max_diff_lines: 200
 test: cargo test -p stellwerk-gateway
 acceptance: функция civil_from_days проверена на эпохе, вековых переносах 1900 и 2100, границах 400-летней эры, отрицательных днях до эпохи и месячных переходах; для каждого такого дня round-trip unix_secs → rfc3339_utc → unix_secs_from_rfc3339 возвращает исходное значение; после пакета перезамер показывает, что ни одно из 78 мест session.rs больше не missed.
 forbidden: [расширять видимость функций до pub ради теста, подменять SystemTime глобально, тест только на типичном дне, приёмка по факту роста счёта без перезамера, ослабление существующих тестов, правка корневого Cargo.toml]
-depends_on: [18a]
+depends_on: [18a2]
 mutation_threshold: 80
 data_class: private
 lane: foundations
