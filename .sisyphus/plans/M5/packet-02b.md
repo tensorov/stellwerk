@@ -7,7 +7,7 @@ max_diff_lines: 200
 test: cargo test -p stellwerk-task --test engine_pi
 acceptance: ты спрашиваешь доступность настоящего Pi и видишь имя движка, версию и `available=true` при совпадении версии с запиненной; при расхождении версий видишь `available=false` с обеими версиями в причине.
 forbidden: [shell=True, eval, bash -c, использование механизмов субагентов Pi, worktree, in-process MCP, запуск Pi в тестах, правка корневого Cargo.toml]
-depends_on: [02a, 03, 07, 08, 09, 12, 13, 14, 16, 17, 18, 19]
+depends_on: [02a, 03, 07, 08, 09, 12, 13, 14, 16, 17, 18a, 18b, 19]
 mutation_threshold: 80
 data_class: public
 lane: plugin
