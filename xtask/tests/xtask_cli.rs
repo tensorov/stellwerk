@@ -8,7 +8,7 @@
 //! отказ опознаётся по маркеру из stderr, взятому дословно из ветки отказа
 //! `main.rs`, и не зависит от того, какое число `cargo` выбрал на этой неделе.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 /// Строка таблицы, на которой держится весь позитивный смысл сьютки.
@@ -260,4 +260,100 @@ fn ledger_encoding_task_is_known_and_passes() {
         "задача обязана заканчиваться успехом: {}",
         String::from_utf8_lossy(&out.stdout)
     );
+}
+
+/// Измерение целиком подменять нечем, а настоящий `cargo mutants` в тесте — минуты замера.
+/// Подменяется ТОЛЬКО инструмент: разбор артефакта, путь и код возврата — настоящие.
+const STUB: &str = r#"#!/bin/sh
+out=
+prev=
+for a in "$@"; do
+  if [ "$prev" = "--output" ]; then out=$a; fi
+  prev=$a
+done
+printf '%s\n' "$*" > "$STUB_DIR/argv"
+if [ -f "$STUB_DIR/outcomes.json" ]; then
+  mkdir -p "$out/mutants.out"
+  cp "$STUB_DIR/outcomes.json" "$out/mutants.out/outcomes.json"
+fi
+echo "mutants: строка дочернего процесса в stdout"
+echo "mutants: строка дочернего процесса в stderr" >&2
+exit CODETAIL
+"#;
+
+/// Временный каталог фикстуры: он же рабочий каталог xtask, поэтому артефакт пишется
+/// внутрь песочницы. Счётчик обязателен: тесты идут параллельно и стёрли бы артефакты.
+fn sandbox() -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("xtask-mutation-{}-{n}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("каталог фикстуры создаётся");
+    dir
+}
+
+/// Фикстура артефакта cargo-mutants 27.1.0: пять счётчиков верхнего уровня плюс вложенный
+/// объект внутри `outcomes`, чтобы разбор верхнего уровня был проверен на чужом поле.
+fn outcomes(total: u64, caught: u64, missed: u64, timeout: u64, unviable: u64) -> String {
+    format!(
+        r#"{{"outcomes": [{{"scenario": {{"Build": {{"process_status": "Success"}}}},
+             "summary": "Unviable"}}],
+             "total_mutants": {total}, "caught": {caught}, "missed": {missed},
+             "timeout": {timeout}, "unviable": {unviable}, "success": 0,
+             "cargo_mutants_version": "27.1.0"}}"#
+    )
+}
+
+fn run_with_stub(args: &[&str], dir: &Path, artifact: &str, tool_exit: i32) -> Output {
+    use std::os::unix::fs::PermissionsExt;
+    // Заглушка зовётся `cargo-mutants`, а не `cargo`: имя программы ищется по PATH
+    // процесса xtask, который не наследует подменённый PATH, а вот `cargo`, получив
+    // его в своём окружении, ищет подкоманду `cargo-mutants` уже в нём.
+    let stub = dir.join("cargo-mutants");
+    let body = STUB.replace("CODETAIL", &tool_exit.to_string());
+    std::fs::write(&stub, body).expect("заглушка пишется");
+    let mode = std::fs::Permissions::from_mode(0o755);
+    std::fs::set_permissions(&stub, mode).expect("заглушка исполняемая");
+    if !artifact.is_empty() {
+        let fixture = dir.join("outcomes.json");
+        std::fs::write(fixture, artifact).expect("фикстура пишется");
+    }
+    let host = std::env::var("PATH").unwrap_or_default();
+    let path = format!("{}:{host}", dir.display());
+    Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(args)
+        .current_dir(dir)
+        .env("PATH", path)
+        .env("STUB_DIR", dir)
+        .output()
+        .unwrap_or_else(|err| panic!("не удалось запустить xtask {args:?}: {err}"))
+}
+
+/// Код возврата. Отсутствие кода означало бы, что процесс убит сигналом, и это не гейт.
+fn code_of(out: &Output) -> i32 {
+    out.status.code().expect("xtask не убит сигналом")
+}
+
+/// Измерение состоялось, даже когда инструмент вернул 1: это вердикт, а не поломка.
+/// Числа — замер 2026-10-04 по stellwerk-gateway (269 / 71 / 177 / 0 / 21 = 28.63%),
+/// то есть заведомо ниже порога 80.
+#[test]
+fn mutation_run_exits_zero_on_fail_verdict() {
+    let dir = sandbox();
+    let artifact = outcomes(269, 71, 177, 0, 21);
+    let out = run_with_stub(&["mutation-run"], &dir, &artifact, 1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(code_of(&out), 0, "{stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.is_empty(), "stdout обёртки пуст: {stdout}");
+}
+
+/// Нет артефакта — измерения не было: код 0 означал бы запись о невыполненной работе.
+#[test]
+fn mutation_run_refuses_unfinished_measurement() {
+    let dir = sandbox();
+    let out = run_with_stub(&["mutation-run"], &dir, "", 1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(code_of(&out), 0, "{stderr}");
+    assert!(stderr.contains("нет outcomes.json"), "{stderr}");
 }

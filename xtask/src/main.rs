@@ -178,6 +178,27 @@ const BUILD_FAILED: u8 = 3;
 const NOT_RED: u8 = 4;
 const CRASHED: u8 = 5;
 
+/// Коды задач измерения начинаются с 6: `2` — неизвестная задача, `3`–`5` — инвертированный гейт.
+const NO_MEASUREMENT: u8 = 6;
+/// Код cargo-mutants при упавшем baseline (`exit_code.rs`, 27.1.0): зелёного дерева
+/// не было, поэтому измеренные исходы не значат ничего.
+const BASELINE_FAILED: i32 = 4;
+
+/// Крейты под гейтом, поимённо: префикс выбрал бы и будущие, а список закрыт здесь.
+const MUTATION_CRATES: [&str; 2] = ["stellwerk-task", "stellwerk-gateway"];
+/// Имена задач измерения — только для подсказки: в `match` они перечислены снова (INFRA-01).
+
+const MUTATION_TASKS: [&str; 1] = ["mutation-run"];
+
+/// Каталог артефакта. Не на tmpfs: `/tmp/store.out` не пережил перезагрузку. Имя пакета
+/// в пути обязательно — инструмент переименовывает прежний `mutants.out`. Путь
+/// относительный: это же позволяет тесту подставить фикстуру, не залезая в замер.
+const MUTATION_OUT: &str = "target/mutants";
+/// Слой `mutants.out` под каталогом `--output` добавляет сам инструмент.
+const OUTCOMES: &str = "mutants.out/outcomes.json";
+/// `cargo mutants` копирует корень workspace во временный каталог, а `/tmp` здесь tmpfs.
+const MUTATION_SCRATCH: &str = "/var/tmp/mutants-scratch";
+
 /// Что сделал дочерний `cargo`. Код `None` — убит сигналом: падение из-за SIGSEGV
 /// не подтверждает RED-спецификацию, и принять его за RED хуже, чем отказать.
 enum Outcome {
@@ -193,6 +214,7 @@ fn task_names() -> Vec<&'static str> {
         .iter()
         .map(|(name, _)| *name)
         .chain(RED_GATES.iter().map(|(name, _)| *name))
+        .chain(MUTATION_TASKS.iter().copied())
         .collect()
 }
 
@@ -204,15 +226,26 @@ fn usage() {
     eprintln!("внимание: аргументы задачи не перенаправляются в наборы");
 }
 
-/// Один шаг гейта: `cargo` с вектором строки таблицы плюс `extra`. Вывод
-/// дочернего процесса уходит в stderr целиком — stdout обёртки обязан остаться
-/// пустым, потому что аттестуется код возврата, а не текст.
-fn step(args: &[&str], extra: &[&str]) -> Result<Outcome, std::io::Error> {
-    let out = Command::new("cargo").args(args).args(extra).output()?;
+/// Один запуск `cargo` с вектором аргументов и переменными окружения. Вывод дочернего
+/// процесса уходит в stderr целиком — stdout обёртки обязан остаться пустым, потому
+/// что аттестуется код возврата, а не текст. `Ok(None)` — убит сигналом: это не
+/// результат, и выдавать его за пройденную проверку нельзя.
+fn run_cargo(args: &[&str], env: &[(&str, &str)]) -> Result<Option<i32>, std::io::Error> {
+    let out = Command::new("cargo")
+        .args(args)
+        .envs(env.iter().copied())
+        .output()?;
     let mut err = std::io::stderr().lock();
     let _ = err.write_all(&out.stdout);
     let _ = err.write_all(&out.stderr);
-    Ok(match out.status.code() {
+    Ok(out.status.code())
+}
+
+/// Один шаг гейта: `cargo` с вектором строки таблицы плюс `extra`.
+fn step(args: &[&str], extra: &[&str]) -> Result<Outcome, std::io::Error> {
+    let mut argv = args.to_vec();
+    argv.extend_from_slice(extra);
+    Ok(match run_cargo(&argv, &[])? {
         Some(0) => Outcome::Passed,
         Some(_) => Outcome::Failed,
         None => Outcome::Crashed,
@@ -344,6 +377,54 @@ fn string_end(bytes: &[u8], mut i: usize) -> usize {
     bytes.len()
 }
 
+/// Отказ измерения: код 6 означает ровно «не состоялось», причина названа в stderr.
+fn refused(crate_name: &str, reason: &str) -> ExitCode {
+    eprintln!("{crate_name}: измерение не состоялось — {reason}");
+    ExitCode::from(NO_MEASUREMENT)
+}
+
+/// Замер по фиксированному вектору и чтение артефакта по пути из кода. `Err` — измерения
+/// не состоялось, `Ok(None)` — состоялось, но viable-мутантов нет (вердикт — packet-24c).
+fn measure(crate_name: &str) -> Result<Option<Counters>, &'static str> {
+    let dir = format!("{MUTATION_OUT}/{crate_name}");
+    let args = ["mutants", "--package", crate_name, "--output", dir.as_str()];
+    // Код инструмента наружу не идёт (см. шапку модуля): `2` и `3` — это вердикт, а не
+    // поломка, и единственный код, означающий «измерять нечего», — это baseline.
+    match run_cargo(&args, &[("TMPDIR", MUTATION_SCRATCH)]) {
+        Ok(Some(BASELINE_FAILED)) => return Err("baseline упал"),
+        Ok(Some(_)) => {}
+        Ok(None) => return Err("cargo mutants прерван сигналом"),
+        Err(_) => return Err("не удалось запустить cargo mutants"),
+    }
+    let Ok(text) = std::fs::read_to_string(format!("{dir}/{OUTCOMES}")) else {
+        return Err("нет outcomes.json");
+    };
+    let [Some(total), Some(caught), Some(missed), Some(timeout), Some(unviable)] = counters(&text)
+    else {
+        return Err("файл не распарсился: нет счётчика верхнего уровня");
+    };
+    Counters {
+        total,
+        caught,
+        missed,
+        timeout,
+        unviable,
+    }
+    .check()
+}
+
+/// Измерение без вердикта, по всему набору крейтов: берётся весь набор, иначе в allowlist
+/// попадала бы запись о половине работы. Прогон не прерывается на первом отказе: остальные
+/// крейты дают полную картину, а код 6 означает «не состоялось хотя бы для одного».
+fn mutation_run() -> ExitCode {
+    let mut code = ExitCode::from(0);
+    for crate_name in MUTATION_CRATES {
+        if let Err(reason) = measure(crate_name) {
+            code = refused(crate_name, reason);
+        }
+    }
+    code
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,6 +509,13 @@ fn main() -> ExitCode {
         usage();
         return ExitCode::from(2);
     };
+
+    // Мутационные задачи — литералами в `match`: имя задачи не переносится в строку
+    // команды, а набор крейтов лежит в коде (INFRA/packet-01:36).
+    match name {
+        "mutation-run" => return mutation_run(),
+        _ => {}
+    }
 
     // Имя задачи — литерал, выбирающий строку; в строку команды оно не
     // подставляется, поэтому подмена пути или аргументов невозможна.
