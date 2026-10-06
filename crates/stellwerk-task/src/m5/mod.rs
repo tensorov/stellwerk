@@ -11,6 +11,8 @@
 pub mod sandbox_bwrap;
 // Идентичность сессии: каталог, ЯВНЫЙ набор инструментов, лимит, идентификатор.
 pub mod session_identity;
+// Секреты: окружение агента, аргументы команды и прокси — три места, где токен не появляется.
+pub mod secrets;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
