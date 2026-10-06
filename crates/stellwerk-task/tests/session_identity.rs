@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use stellwerk_task::m5::session_identity::{
-    CodemodeState, IdentityError, SessionDescription, ToolSet,
+    CallSource, CodemodeState, IdentityError, SessionDescription, ToolSet,
 };
 
 /// Лимит времени в описании — данные описания, а не бюджет исполнения: его считает
@@ -162,5 +162,49 @@ fn codemode_is_not_in_the_set_and_its_absence_counts_only_after_the_config_load(
     match SessionDescription::new(" ", &work, tools, LIMIT, unnamed) {
         Err(IdentityError::Unnamed) => {}
         other => panic!("без идентификатора — именно отказ об имени, а не {other:?}"),
+    }
+}
+
+/// П. 6 и п. 9: вложенный вызов помечен `parentToolCallId` (проба (a): те же хуки
+/// `tool_call`, то же поле), опознаётся и проходит проверку ЗАНОВО, с исходными правами.
+/// Происхождение не даёт ничего: то же решение, что и у прямого вызова.
+#[test]
+fn a_nested_call_is_checked_afresh_while_an_unrecognised_source_is_refused() {
+    let session = session_in(&work_root("nested"), &listed(&["read"]));
+
+    let direct = session.adjudicate("read", None).expect("прямой вызов");
+    let nested = session
+        .adjudicate("read", Some("toolu_parent"))
+        .expect("вложенный вызов");
+    // Права те же, источник виден, и ни одно поле решения не пришло от родителя.
+    assert_eq!(
+        (direct.session, &direct.tool),
+        (nested.session, &nested.tool)
+    );
+    assert_eq!(direct.source, CallSource::Direct);
+    assert_eq!(
+        nested.source,
+        CallSource::Nested {
+            parent_tool_call_id: "toolu_parent".to_owned(),
+        }
+    );
+    // Отсутствие инструмента у родителя отменяет и вложенный вызов: знание происхождения
+    // ничего не наследует, поэтому проверка вложенного ЗАНОВО отказывает.
+    for source in [None, Some("toolu_parent")] {
+        let refused = session.adjudicate("write", source);
+        assert!(
+            matches!(refused, Err(IdentityError::NoSuchTool { .. })),
+            "{source:?}"
+        );
+    }
+    // Пустой идентификатор происхождения — это НЕ прямой вызов: источник не опознан, и
+    // молчаливое «ну значит без родителя» выдало бы отказ за разрешение.
+    match session.adjudicate("read", Some("   ")) {
+        Err(IdentityError::UnrecognisedSource {
+            parent_tool_call_id,
+        }) => {
+            assert_eq!(parent_tool_call_id, "   ");
+        }
+        other => panic!("неопознанный источник — отказ, а не {other:?}"),
     }
 }

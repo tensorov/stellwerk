@@ -50,6 +50,13 @@ pub enum IdentityError {
         requested: Vec<String>,
         absent: Vec<String>,
     },
+    /// Инструмента нет в наборе. Не «запрещён» — именно недоступен: список исчерпывающий.
+    #[error("`{tool}` is not in the tool set {held:?}: absence is the default, not permission")]
+    NoSuchTool { tool: String, held: Vec<String> },
+    /// Источник вызова помечен, но не опознан. Молчаливое «ну значит без родителя» выдало бы
+    /// вложенный вызов за прямой.
+    #[error("call source is unrecognised: `parentToolCallId` = {parent_tool_call_id:?} identifies no parent")]
+    UnrecognisedSource { parent_tool_call_id: String },
 }
 
 /// Явный набор инструментов. Не «список запрещённых», а исчерпывающий перечень того, что
@@ -119,6 +126,18 @@ pub fn grant(parent: &ToolSet, request: &[&str]) -> Result<ToolSet, IdentityErro
             absent,
         })
     }
+}
+
+/// Источник вызова. Проба Pi 1.0.2 (п. a) измерена: вложенные вызовы проходят через те же
+/// хуки `tool_call` и помечаются полем `parentToolCallId`. Значит прямой и вложенный
+/// различаются на входе, а не разными проверками: происхождение не даёт прав.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallSource {
+    /// Поле не проставлено: вызов сделала сама сессия.
+    Direct,
+    /// Поле проставлено: вызов сделал другой инструмент. Идентификатор обязателен — пустой
+    /// не опознан, а молчаливый «значит прямой» стёр бы различие между вызовами.
+    Nested { parent_tool_call_id: String },
 }
 
 /// Состояние codemode ПОСЛЕ загрузки конфигурации. Три состояния вместо флага — потому что
@@ -215,4 +234,57 @@ impl SessionDescription {
             self.tools.names().join(","),
         )
     }
+
+    /// Проверка политики по СЫРОМУ полю `parentToolCallId` из хука `tool_call`. Один вход и
+    /// для прямого, и для вложенного вызова: вложенный проходит её заново, с ИСХОДНЫМИ
+    /// правами, и не наследует ничего — поэтому строже здесь может быть только требование
+    /// «источник опознан», а не сама проверка. Решение одно и то же, и различие видно в
+    /// единственном поле `source`.
+    pub fn adjudicate(
+        &self,
+        tool: &str,
+        parent_tool_call_id: Option<&str>,
+    ) -> Result<Adjudication, IdentityError> {
+        let source = CallSource::of(parent_tool_call_id)?;
+        if !self.tools.holds(tool) {
+            return Err(IdentityError::NoSuchTool {
+                tool: tool.to_owned(),
+                held: self.tools.names().to_vec(),
+            });
+        }
+        Ok(Adjudication {
+            session: self.id.clone(),
+            tool: tool.to_owned(),
+            source,
+        })
+    }
+}
+
+impl CallSource {
+    /// Источник опознаётся из поля, пришедшего извне, а значит может быть и мусором. Пустой
+    /// идентификатор происхождения — это НЕ прямой вызов: источник не опознан, и тихое «ну
+    /// значит без родителя» стёрло бы различие, ради которого поле и помечается.
+    pub fn of(parent_tool_call_id: Option<&str>) -> Result<Self, IdentityError> {
+        match parent_tool_call_id {
+            None => Ok(Self::Direct),
+            Some(id) if id.trim().is_empty() => Err(IdentityError::UnrecognisedSource {
+                parent_tool_call_id: id.to_owned(),
+            }),
+            Some(id) => Ok(Self::Nested {
+                parent_tool_call_id: id.to_owned(),
+            }),
+        }
+    }
+}
+
+/// Решение по вызову. Происхождение записывается, но в права не превращается: оно нужно для
+/// разбора («откуда пришёл вызов»), а не для разрешения («знаю, откуда — можно»).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Adjudication {
+    /// Сессия, чьими правами проверялось.
+    pub session: String,
+    /// Инструмент, которому разрешено.
+    pub tool: String,
+    /// Откуда пришёл вызов — как в `SessionDescription::adjudicate`.
+    pub source: CallSource,
 }
