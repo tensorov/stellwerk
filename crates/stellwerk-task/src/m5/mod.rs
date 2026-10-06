@@ -9,6 +9,8 @@
 
 // Песочница живёт отдельным подмодулем: собирает и отвергает, но не запускает.
 pub mod sandbox_bwrap;
+// Идентичность сессии: каталог, ЯВНЫЙ набор инструментов, лимит, идентификатор.
+pub mod session_identity;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
