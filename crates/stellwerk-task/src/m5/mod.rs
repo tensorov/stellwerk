@@ -7,7 +7,7 @@
 //! Бюджеты, песочница и одобрение сюда НЕ входят: иначе проверка доступности задела бы
 //! политику, которой ещё нет, и фикстура начала бы её выдумывать.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use thiserror::Error;
@@ -114,4 +114,73 @@ pub struct SessionOutcome {
     /// stdout и stderr порознь: слияние теряет виновника.
     pub stdout: String,
     pub stderr: String,
+}
+
+/// Фикстура обязана называть себя фикстурой: движок, ведущий себя как настоящий, но
+/// отчитавшийся настоящим, даёт ложный зелёный результат.
+pub const FIXTURE_ENGINE: &str = "fixture-engine";
+
+/// Фикстурный движок: контракт целиком, включая таймаут и недоступность, потому что
+/// проверка границ доверия не должна зависеть от наличия настоящего Pi.
+#[derive(Debug, Clone)]
+pub struct FixtureEngine {
+    program: PathBuf,
+}
+
+impl FixtureEngine {
+    /// Конструктор НИЧЕГО не запускает, не пишет и не меняет окружения: собрав список
+    /// движков, нельзя ни потребовать создать файл, ни поднять процесс — иначе список
+    /// был бы «запустить всех, чтобы узнать, кто жив».
+    pub fn new(program: impl Into<PathBuf>) -> Self {
+        Self {
+            program: program.into(),
+        }
+    }
+}
+
+impl EngineAdapter for FixtureEngine {
+    // `session` приходит в 02a3. Объявленная заглушка, а не `unimplemented!()`:
+    // падение здесь было бы проверкой отсутствующего контракта, а не поведения.
+    fn session(
+        &self,
+        _argv: &[String],
+        _cwd: &Path,
+        _timeout: Duration,
+    ) -> Result<SessionOutcome, EngineError> {
+        Err(EngineError::Io {
+            source: std::io::Error::other("session is not part of packet-02a2"),
+        })
+    }
+
+    fn probe(&self) -> Result<ProbeReport, EngineError> {
+        let program = self.program.display();
+        match executable(&self.program) {
+            Ok(()) => {
+                let why = format!("{FIXTURE_ENGINE}: `{program}` is an executable file");
+                ProbeReport::available(FIXTURE_ENGINE, &why)
+            }
+            Err(why) => {
+                let why = format!("{FIXTURE_ENGINE}: `{program}` is unusable: {why}");
+                ProbeReport::unavailable(FIXTURE_ENGINE, &why)
+            }
+        }
+    }
+}
+
+/// Доступность пути — это чтение МЕТАДАННЫХ, а не запуск: `probe()` не вправе поднимать
+/// процесс. Право выполнения — часть доступности: неисполняемый файл запустить нельзя,
+/// а каталог исполнить нельзя вовсе.
+fn executable(program: &Path) -> Result<(), String> {
+    let meta = std::fs::metadata(program).map_err(|why| format!("metadata: {why}"))?;
+    if !meta.is_file() {
+        return Err(format!("not a file: `{}`", program.display()));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o111 == 0 {
+            return Err(format!("not executable: `{}`", program.display()));
+        }
+    }
+    Ok(())
 }
