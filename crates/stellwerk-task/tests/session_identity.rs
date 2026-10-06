@@ -5,8 +5,9 @@
 //! доказанным только после загрузки конфигурации. Фикстура ничего не создаёт и не запускает,
 //! поэтому отказ здесь не может выдать сама фикстура — как и в `sandbox_bwrap.rs`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+
 use stellwerk_task::m5::session_identity::{
     CodemodeState, IdentityError, SessionDescription, ToolSet,
 };
@@ -36,6 +37,13 @@ fn work_root(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("sw-p08-{tag}"))
 }
 
+/// Сессия с проверенным «codemode выключен ПОСЛЕ загрузки конфигурации»: иначе отказ был бы
+/// не про инструменты, а про непроверенное выключение (п. 8).
+fn session_in(work: &Path, tools: &ToolSet) -> SessionDescription {
+    let off = CodemodeState::AbsentAfterConfigLoad;
+    SessionDescription::new("m5-p08", work, tools.clone(), LIMIT, off).expect("описание собрано")
+}
+
 /// П. 4: обещанное число инструментов и переданный список обязаны совпасть. Расхождение —
 /// отказ, а не тихая обрезка: обрезанный набор выглядит как успешный запуск с другими
 /// правами, и этого диагностировать нельзя.
@@ -59,6 +67,66 @@ fn a_truncated_tool_list_is_an_error_and_never_a_shorter_one() {
     // Совпадение проходит — иначе «усечение запрещено» читалось бы как «список запрещён».
     let exact = ToolSet::exactly(2, &["read", "grep"]).expect("обещание выполнено");
     assert_eq!(names_of(&exact), "read,grep");
+}
+
+/// П. 1, п. 2 и п. 5: движку уходит РОВНО рабочий каталог и перечисленные инструменты,
+/// идентификатор попадает и в журнал, и в отчёт. Контроль обязателен: каталог сессии не
+/// совпадает с каталогом процесса, поэтому равенство доказывает, что значение пришло из
+/// описания, а не подтянулось из окружения — и секрету в окружении нет места.
+#[test]
+fn the_engine_is_given_exactly_the_working_directory_and_the_listed_tools() {
+    let work = work_root("engine");
+    let tools = listed(&["read", "grep"]);
+    let session = session_in(&work, &tools);
+
+    assert_ne!(
+        work,
+        std::env::current_dir().expect("каталог процесса"),
+        "каталог сессии обязан отличаться от каталога процесса"
+    );
+    assert_eq!(session.cwd(), work.as_path());
+    assert_eq!(session.limit(), LIMIT);
+    // Явный список: инструмента нет в списке — он недоступен, а не «разрешён, если не
+    // запрещён». И пустой список не значит «разрешено всё, чего не запрещено».
+    assert_eq!(names_of(session.tools()), "read,grep");
+    assert!(!session.tools().holds("write"));
+    assert!(!session.tools().holds(CODEMODE));
+    let empty = listed(&[]);
+    assert_eq!(names_of(&empty), "");
+    assert!(!empty.holds("read"));
+    // П. 5: по идентификатору восстанавливается, кто с какими правами работал. Журнал и
+    // отчёт — разные документы, и идентификатор обязан быть в обоих. Сверка ИДЕНТИФИФИКАТОРА
+    // КОНСТАНТОЙ, а не вызовом `id()`: `contains(id())` сравнивал бы текст с ним же, и
+    // «`id()` вернул пустую строку» прошло бы незаметно — это поймал `cargo mutants`.
+    let (journal, report) = (session.journal_line("start"), session.report());
+    for text in [&journal, &report] {
+        assert!(text.contains("m5-p08"), "{text}");
+    }
+    assert_eq!(session.id(), "m5-p08");
+    assert!(report.contains(&names_of(&tools)), "{report}");
+    assert!(report.contains("30s"), "лимит времени — в отчёте: {report}");
+}
+
+/// П. 3: запрос шире родителя отклоняется ЦЕЛИКОМ. Частичной выдачи нет — и это не вопрос
+/// вежливости: обрезанный по родителю набор и есть утечка остатка.
+#[test]
+fn a_subagent_asking_beyond_its_parent_is_refused_whole_and_leaks_no_remainder() {
+    let parent = listed(&["read", "grep"]);
+    // Контроль: ровно те инструменты, что есть у родителя, — разрешение, иначе отказ ниже
+    // мог бы дать сама фикстура, отказавшая бы всему подряд.
+    let exact = stellwerk_task::m5::session_identity::grant(&parent, &["read"]);
+    assert_eq!(names_of(&exact.expect("родительское — разрешено")), "read");
+
+    let asked = ["read", "write", "net"];
+    match stellwerk_task::m5::session_identity::grant(&parent, &asked) {
+        Err(IdentityError::Escalation { requested, absent }) => {
+            assert_eq!(requested, ["read", "write", "net"]);
+            // Виновник назван целиком: «не хватило write и net», а не «не хватило всего».
+            assert_eq!(absent, ["write", "net"]);
+        }
+        // Укороченный список здесь был бы УСПЕХОМ с другими правами — и это не отказ.
+        other => panic!("запрос шире родителя — отказ, а не {other:?}"),
+    }
 }
 
 /// П. 7 и п. 8: codemode в рабочих и операторских сессиях не включается — он не входит в

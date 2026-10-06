@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use thiserror::Error;
-
 /// Codemode не встроен в ядро Pi, а включается перечислением
 /// (`docs/PI_1_0_2_PROBE.md`, п. a), поэтому «включён по умолчанию» быть не может. Имя
 /// приведено константой: проверка «а нет ли его в наборе» обязана искать ровно то же самое,
@@ -44,6 +43,13 @@ pub enum IdentityError {
     /// обрезка выглядит как успешный запуск с другими правами.
     #[error("tool set was truncated: {promised} promised, {given} distinct given")]
     Truncated { promised: usize, given: usize },
+    /// Запрос шире родителя. Отклоняется ЦЕЛИКОМ: частичная выдача превратила бы отказ в
+    /// утечку остатка набора.
+    #[error("subagent asked for tools its parent does not hold: {absent:?} out of {requested:?}")]
+    Escalation {
+        requested: Vec<String>,
+        absent: Vec<String>,
+    },
 }
 
 /// Явный набор инструментов. Не «список запрещённых», а исчерпывающий перечень того, что
@@ -92,6 +98,29 @@ impl ToolSet {
         &self.0
     }
 }
+
+/// Выдача субагента прав субагента: либо ВЕСЬ набор, либо отказ. Частичной выдачи нет и
+/// быть не может — пересечение с родительским набором здесь не вычисляется вовсе, а тип
+/// возврата не даёт вернуть укороченный список. Обрезанный по родителю набор и есть
+/// утечка остатка, поэтому отказ назван виновником целиком.
+pub fn grant(parent: &ToolSet, request: &[&str]) -> Result<ToolSet, IdentityError> {
+    let asked = ToolSet::listed(request)?;
+    let absent: Vec<String> = asked
+        .names()
+        .iter()
+        .filter(|t| !parent.holds(t))
+        .cloned()
+        .collect();
+    if absent.is_empty() {
+        Ok(asked)
+    } else {
+        Err(IdentityError::Escalation {
+            requested: asked.names().to_vec(),
+            absent,
+        })
+    }
+}
+
 /// Состояние codemode ПОСЛЕ загрузки конфигурации. Три состояния вместо флага — потому что
 /// «выключено по флагу запуска» не доказывает «выключено»: codemode подключается сам через
 /// MCP, и непроверенное выключение равно непроверенному включению.
@@ -116,7 +145,6 @@ pub struct SessionDescription {
     limit: Duration,
     id: String,
 }
-
 impl SessionDescription {
     /// Собирает описание и отказывает ДО чтения ФС: отказ по составу сессии не должен
     /// зависеть от того, что каталог лежит на диске. Порядок отказов — по тяжести: сначала
@@ -149,5 +177,42 @@ impl SessionDescription {
     /// Набор инструментов сессии — исчерпывающий.
     pub fn tools(&self) -> &ToolSet {
         &self.tools
+    }
+
+    /// Рабочий каталог: ровно он уходит движку, и он приходит из описания, а не из
+    /// окружения процесса.
+    pub fn cwd(&self) -> &Path {
+        &self.work
+    }
+
+    /// Лимит времени из описания. Бюджет исполнения считает вызывающий (`m5::EngineAdapter`),
+    /// и подмена одного другим сделала бы два разных инцидента одним.
+    pub fn limit(&self) -> Duration {
+        self.limit
+    }
+
+    /// Идентификатор: по нему восстанавливается, кто с какими правами работал.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Строка журнала. Идентификатор обязателен здесь по той же причине, что и в отчёте:
+    /// запись без него при разборе не отличить от «сессии не было».
+    pub fn journal_line(&self, event: &str) -> String {
+        let tools = self.tools.names().join(",");
+        format!("session={} event={} tools={}", self.id, event, tools)
+    }
+
+    /// Отчёт о сессии: идентификатор, каталог, лимит и перечень инструментов — то есть всё
+    /// описание целиком. Строится здесь, а не вызывающим: вызывающий идентификатор забыть
+    /// может, и забытое неотличимо от «работал никто».
+    pub fn report(&self) -> String {
+        format!(
+            "session={} cwd={} limit={:?} tools={}",
+            self.id,
+            self.work.display(),
+            self.limit,
+            self.tools.names().join(","),
+        )
     }
 }
