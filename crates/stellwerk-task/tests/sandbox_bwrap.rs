@@ -1,20 +1,19 @@
-//! Спецификация M5/packet-07a и M5/packet-07b: вектор аргументов `bwrap` и отказ до запуска.
+//! Спецификация M5/packet-07a–07c: песочница `bwrap` и её границы.
 //!
-//! Проверяется то, что обязано быть выражено ДО запуска чего бы то ни было. Вектор: сеть
-//! выключена ровно одним флагом, системные каталоги только на чтение, на запись — ровно два
-//! своих каталога, и у каждого bind'а `SRC` совпадает с `DEST` (пропуск адресата не
-//! диагностируется — `bwrap` съедает следующий флаг и падает уже внутри песочницы).
-//! Отказ: путь записи, ушедший за рабочую копию после нормализации `..`, отвергается с
-//! названным нормализованным путём, и маркер, который создал бы процесс, не появляется —
-//! значит отказ пришёл до `spawn`, а не после. Настоящий `bwrap` здесь не запускается:
-//! доказательство изоляции ядром — приёмка 07c.
+//! Проверяет не код, а ядро: команда внутри пишет, команда с внешним путём получает отказ
+//! ОТ ЯДРА, а путь для записи наружу отвергается ДО запуска — и о том, что процесса не
+//! было, говорит отсутствие маркера, который он создал бы. Отсутствие `bwrap` — падение,
+//! а не пропуск: нет движка, значит границы не проверены.
 
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 use std::time::Duration;
 
 use stellwerk_task::m5::sandbox_bwrap::{Sandbox, SandboxError};
 
-/// Окно песочницы — верхняя граница сессии.
+/// Окно песочницы больше бюджета: иначе «окно кончилось» и «бюджет кончился» были бы
+/// одним и тем же словом про одно и то же.
 const WINDOW: Duration = Duration::from_secs(60);
 /// Бюджет одного запуска: столько ждём конкретную команду.
 const BUDGET: Duration = Duration::from_secs(30);
@@ -154,4 +153,110 @@ fn an_execution_budget_that_does_not_fit_the_window_is_refused_and_loses_nothing
         other => panic!("бюджет не в окне — отказ, а не {other:?}"),
     }
     assert!(!marker.exists());
+}
+
+/// Настоящий запуск: `bwrap` обязан быть в системе, и его отсутствие — падение теста, а не
+/// повод объявить границы проверенными.
+fn launch(sandbox: &Sandbox, write: &Path, args: &[&str]) -> Output {
+    let cmd = sandbox.command(write, &in_system(&TOUCH), args, BUDGET);
+    let mut cmd = cmd.expect("внутри рабочей копии запуск разрешён");
+    cmd.output()
+        .expect("нет движка — нет и проверенной границы")
+}
+
+/// Песочница и её фикстуры рядом, но порознь: рабочая копия, каталог временных файлов и
+/// ВНЕШНЯЯ цель, лежащая не под их корнем. Под корнем она была бы создана как родитель
+/// bind'а, и её недостижимость доказывала бы ровно ничего.
+struct Fixture {
+    root: PathBuf,
+    work: PathBuf,
+    outside: PathBuf,
+}
+
+impl Fixture {
+    fn new(tag: &str) -> Self {
+        let root = fixture_root(tag);
+        let out_dir = fixture_root(&format!("{tag}-outside"));
+        let (work, tmp) = (root.join("work"), root.join("tmp"));
+        fs::create_dir_all(&work).expect("рабочая копия создана");
+        fs::create_dir_all(&tmp).expect("каталог временных файлов создан");
+        fs::create_dir_all(&out_dir).expect("каталог внешней фикстуры создан");
+        fs::write(work.join("state.txt"), "выгрузка").expect("выгрузка записана");
+        Self {
+            root,
+            work,
+            outside: out_dir.join("fixture.txt"),
+        }
+    }
+
+    fn sandbox(&self) -> Sandbox {
+        sandbox_at(&self.root)
+    }
+}
+
+/// п. 1: команда внутри рабочей копии пишет, и написанное читается после прогона.
+#[test]
+fn a_command_inside_the_working_copy_writes_what_it_was_allowed_to_write() {
+    let f = Fixture::new("inside");
+    let out = launch(&f.sandbox(), &f.work, &["written.txt"]);
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(f.work.join("written.txt").is_file());
+}
+
+/// п. 6: изоляцию доказывает ядро, а не наш валидатор. Контроль БЕЗ песочницы обязан
+/// сработать — иначе «отказ» могла бы дать сама фикстура; в песочнице тот же вызов обязан
+/// провалиться, и на хосте ничего не появиться.
+#[test]
+fn a_sandboxed_process_is_denied_by_the_kernel_where_a_plain_process_is_not() {
+    let f = Fixture::new("kernel");
+    let touch = in_system(&TOUCH);
+    let plain = Command::new(&touch).arg(&f.outside).output();
+    let plain = plain.expect("контроль запускается");
+    // Без песочницы внешний путь доступен — иначе «отказ» дала бы сама фикстура.
+    assert!(plain.status.success(), "{plain:?}");
+    let gone = fs::remove_file(&f.outside);
+    gone.expect("фикстура убрана, иначе отказ не отличить от «уже есть»");
+
+    let args = [str_of(&f.outside)];
+    let cmd = f.sandbox().command(&f.work, &touch, &args, BUDGET);
+    let out = cmd.expect("запуск разрешён").output().expect("`bwrap`");
+    // Отказ ОТ ЯДРА: пути нет в namespace, а не «наш валидатор сказал нет».
+    assert!(!out.status.success(), "{out:?}");
+    assert!(!f.outside.exists());
+}
+
+/// п. 3: внутри нет ни истории, ни файлов репозитория, а копия с `.git` отвергается —
+/// «пустой каталог `.git`» и «нет `.git`» суть разные вещи.
+#[test]
+fn a_working_copy_holds_neither_history_nor_repository_files() {
+    let f = Fixture::new("history");
+    let out = launch(&f.sandbox(), &f.work, &["written.txt"]);
+    assert!(out.status.success());
+
+    let dir = fs::read_dir(&f.work).expect("рабочая копия читается");
+    let mut names: Vec<String> = dir
+        .map(|e| {
+            e.expect("запись читается")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    assert_eq!(names, ["state.txt", "written.txt"]);
+    assert!(!f.work.join(".git").exists());
+    assert!(!f.work.join("Cargo.toml").exists());
+
+    let cloner = Fixture::new("cloner");
+    fs::create_dir_all(cloner.work.join(".git")).expect("клон создан");
+    let cloned = cloner
+        .sandbox()
+        .command(&cloner.work, &in_system(&TOUCH), &[], BUDGET);
+    match cloned {
+        // Виновник назван: внутри `.git` — это клон, а не выгрузка состояния.
+        Err(SandboxError::History { path }) => assert!(path.ends_with(".git"), "{path:?}"),
+        other => panic!("`.git` внутри — клон, а не {other:?}"),
+    }
 }

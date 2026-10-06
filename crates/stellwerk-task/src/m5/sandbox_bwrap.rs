@@ -17,14 +17,17 @@ use std::time::Duration;
 
 use thiserror::Error;
 
-/// Отказ песочницы, и оба варианта — ДО запуска. «Не прошла проверка» и «бюджет не помещается
-/// в окно» не имеют ничего общего с «движок не поднялся»: чинятся они по-разному, и молчаливое
-/// слияние отдало бы «нет данных» под видом отказа.
+/// Отказ песочницы, и все три варианта — ДО запуска. «Не прошла проверка», «это клон» и
+/// «бюджет не помещается в окно» не имеют ничего общего с «движок не поднялся»: чинятся
+/// они по-разному, и молчаливое слияние отдало бы «нет данных» под видом отказа.
 #[derive(Debug, Error)]
 pub enum SandboxError {
     /// Путь ушёл из рабочей копии после нормализации `..`.
     #[error("`{path}` leaves the working copy `{root}`: refused before launch")]
     Outside { root: PathBuf, path: PathBuf },
+    /// `.git` физически внутри: копия с историей — это клон, а не выгрузка состояния.
+    #[error("`{path}` sits inside the working copy: history is not a state export")]
+    History { path: PathBuf },
     /// Бюджет исполнения не помещается в окно песочницы: команда заведомо переживёт
     /// песочницу, и убивать её пришлось бы уже с потерей частичных данных.
     #[error("execution budget {budget:?} does not fit the sandbox window {window:?}: refused before launch")]
@@ -107,9 +110,14 @@ impl Sandbox {
         Ok(command)
     }
 
-    /// Оба отказа — до запуска, и оба — про саму песочницу. Их порядок не важен: каждый
+    /// Все отказы — до запуска, и все три — про саму песочницу. Их порядок не важен: каждый
     /// отказ называет свой виновник, и ни один не значит «запуск не удался».
     fn preflight(&self, write: &Path, budget: Duration) -> Result<(), SandboxError> {
+        // `exists()` идёт по ссылке: `.git` файлом (как в worktree) историю тоже несёт.
+        let history = self.work.join(".git");
+        if history.exists() {
+            return Err(SandboxError::History { path: history });
+        }
         if budget > self.window {
             return Err(SandboxError::Unfit {
                 window: self.window,
