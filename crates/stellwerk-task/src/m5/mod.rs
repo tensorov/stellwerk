@@ -8,7 +8,8 @@
 //! политику, которой ещё нет, и фикстура начала бы её выдумывать.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::process::{Child, Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
@@ -139,19 +140,6 @@ impl FixtureEngine {
 }
 
 impl EngineAdapter for FixtureEngine {
-    // `session` приходит в 02a3. Объявленная заглушка, а не `unimplemented!()`:
-    // падение здесь было бы проверкой отсутствующего контракта, а не поведения.
-    fn session(
-        &self,
-        _argv: &[String],
-        _cwd: &Path,
-        _timeout: Duration,
-    ) -> Result<SessionOutcome, EngineError> {
-        Err(EngineError::Io {
-            source: std::io::Error::other("session is not part of packet-02a2"),
-        })
-    }
-
     fn probe(&self) -> Result<ProbeReport, EngineError> {
         let program = self.program.display();
         match executable(&self.program) {
@@ -165,6 +153,63 @@ impl EngineAdapter for FixtureEngine {
             }
         }
     }
+
+    fn session(
+        &self,
+        argv: &[String],
+        cwd: &Path,
+        timeout: Duration,
+    ) -> Result<SessionOutcome, EngineError> {
+        // Пустой argv — «запускать нечего», а не «сессия не удалась»: инциденты разные.
+        let Some((program, args)) = argv.split_first() else {
+            return Err(EngineError::EmptyArgv);
+        };
+        let mut child = Command::new(program)
+            .args(args)
+            .current_dir(cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|source| EngineError::Spawn {
+                program: program.clone(),
+                source,
+            })?;
+        // Бюджет держим опросом `try_wait`, а не `wait`: `wait` блокнулся бы навсегда.
+        let deadline = Instant::now() + timeout;
+        while !finished(&mut child)? && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        if !finished(&mut child)? {
+            // Убиваем: иначе «бюджет исчерпан» означало бы «мы перестали смотреть».
+            let _ = child.kill();
+            return Err(EngineError::TimedOut {
+                program: program.clone(),
+                timeout,
+            });
+        }
+        let Output {
+            status,
+            stdout,
+            stderr,
+        } = child
+            .wait_with_output()
+            .map_err(|source| EngineError::Io { source })?;
+        Ok(SessionOutcome {
+            code: status.code(),
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        })
+    }
+}
+
+/// Ещё жив ли процесс. «Не знаю» и «мертв» — не одно: ошибка чтения идёт своим отказом,
+/// а не тихим `false`, который читался бы как «процесса нет».
+fn finished(child: &mut Child) -> Result<bool, EngineError> {
+    Ok(child
+        .try_wait()
+        .map_err(|source| EngineError::Io { source })?
+        .is_some())
 }
 
 /// Доступность пути — это чтение МЕТАДАННЫХ, а не запуск: `probe()` не вправе поднимать

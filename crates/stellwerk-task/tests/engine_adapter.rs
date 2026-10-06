@@ -9,9 +9,12 @@
 //! программы, которые в системе есть по определению. `sh -c` нет намеренно: shell-строкой
 //! нельзя ни доказать отсутствие интерпретации, ни отличить её от самой программы.
 
+use std::time::{Duration, Instant};
+
 use stellwerk_task::m5::{EngineAdapter, EngineError, FixtureEngine, ProbeReport, FIXTURE_ENGINE};
 
-/// Путь, которого нет. Имя выбрано несуществующим, а не «каталогом, где может не/// оказаться»: тест не должен зависеть от содержимого машины.
+/// Путь, которого нет. Имя выбрано несуществующим, а не «каталогом, где может не
+/// оказаться»: тест не должен зависеть от содержимого машины.
 const MISSING: &str = "/var/tmp/stellwerk-packet-02a/no-such-engine";
 
 #[test]
@@ -67,5 +70,71 @@ fn a_report_without_a_reason_is_refused_instead_of_claiming_anything_quietly() {
             }
             other => panic!("отчёт без причины — это отказ, а не {other:?}"),
         }
+    }
+}
+
+#[test]
+fn a_session_runs_in_the_given_directory_and_passes_arguments_verbatim() {
+    let cwd = std::env::temp_dir();
+    let fixture = FixtureEngine::new("/bin/true");
+
+    let spoke = fixture.session(&["/bin/pwd".to_owned()], &cwd, Duration::from_secs(5));
+    let printed = spoke.expect("сессия").stdout;
+    assert_eq!(
+        std::fs::canonicalize(printed.trim()).expect("pwd напечатал каталог"),
+        std::fs::canonicalize(&cwd).expect("каталог существует"),
+        "программа должна была печатать переданный каталог"
+    );
+
+    let argv = [
+        "/bin/echo".to_owned(),
+        "alpha beta".to_owned(),
+        "$HOME".to_owned(),
+    ];
+    let spoke = fixture
+        .session(&argv, &cwd, Duration::from_secs(5))
+        .expect("сессия");
+    // `$HOME` осталось строкой: shell, который её развернул бы, не запускался.
+    assert_eq!(
+        spoke.stdout, "alpha beta $HOME\n",
+        "аргументы дословно; stderr: {:?}",
+        spoke.stderr
+    );
+    assert_eq!(spoke.code, Some(0), "код завержения");
+}
+
+#[test]
+fn a_session_that_outlives_its_budget_is_a_timeout_that_stopped_the_process() {
+    let argv = ["/bin/sleep".to_owned(), "30".to_owned()];
+    let budget = Duration::from_millis(200);
+    let started = Instant::now();
+    let outcome = FixtureEngine::new("/bin/true").session(&argv, &std::env::temp_dir(), budget);
+
+    match outcome {
+        Err(EngineError::TimedOut { program, timeout }) => {
+            assert_eq!(program, "/bin/sleep", "виновник назван");
+            assert_eq!(timeout, budget, "бюджет назван");
+        }
+        other => panic!("`sleep 30` при бюджете 200мс — таймаут, а не {other:?}"),
+    }
+    // Расхождение с бюджетом и есть смысл таймаута: 30с ожидания никто не выдержал бы.
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "ждали {:?} при бюджете 200мс",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn an_empty_argv_is_refused_before_anything_is_launched() {
+    let outcome = FixtureEngine::new("/bin/true").session(
+        &[],
+        &std::env::temp_dir(),
+        Duration::from_millis(200),
+    );
+
+    match outcome {
+        Err(EngineError::EmptyArgv) => {}
+        other => panic!("пустой argv — «запускать нечего», а не {other:?}"),
     }
 }
