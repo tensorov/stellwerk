@@ -9,10 +9,11 @@
 //! Отсюда и отказ целиком, и запрет усечения — обе вещи нужны для одного: чтобы укороченный
 //! набор нельзя было принять за успешный запуск с другими правами.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use thiserror::Error;
+
 /// Codemode не встроен в ядро Pi, а включается перечислением
 /// (`docs/PI_1_0_2_PROBE.md`, п. a), поэтому «включён по умолчанию» быть не может. Имя
 /// приведено константой: проверка «а нет ли его в наборе» обязана искать ровно то же самое,
@@ -57,6 +58,11 @@ pub enum IdentityError {
     /// вложенный вызов за прямой.
     #[error("call source is unrecognised: `parentToolCallId` = {parent_tool_call_id:?} identifies no parent")]
     UnrecognisedSource { parent_tool_call_id: String },
+    /// Путь ушёл из рабочего каталога после нормализации `..`.
+    #[error(
+        "`{path}` leaves the working directory `{root}`: refused before it reaches the engine"
+    )]
+    Outside { root: PathBuf, path: PathBuf },
 }
 
 /// Явный набор инструментов. Не «список запрещённых», а исчерпывающий перечень того, что
@@ -164,6 +170,7 @@ pub struct SessionDescription {
     limit: Duration,
     id: String,
 }
+
 impl SessionDescription {
     /// Собирает описание и отказывает ДО чтения ФС: отказ по составу сессии не должен
     /// зависеть от того, что каталог лежит на диске. Порядок отказов — по тяжести: сначала
@@ -193,15 +200,15 @@ impl SessionDescription {
         })
     }
 
-    /// Набор инструментов сессии — исчерпывающий.
-    pub fn tools(&self) -> &ToolSet {
-        &self.tools
-    }
-
     /// Рабочий каталог: ровно он уходит движку, и он приходит из описания, а не из
     /// окружения процесса.
     pub fn cwd(&self) -> &Path {
         &self.work
+    }
+
+    /// Набор инструментов сессии — исчерпывающий.
+    pub fn tools(&self) -> &ToolSet {
+        &self.tools
     }
 
     /// Лимит времени из описания. Бюджет исполнения считает вызывающий (`m5::EngineAdapter`),
@@ -233,6 +240,19 @@ impl SessionDescription {
             self.limit,
             self.tools.names().join(","),
         )
+    }
+
+    /// Путь, который движку можно передать. Выход за рабочий каталог запрещён, и проверка
+    /// лексическая: `canonicalize` уронил бы ещё не существующий путь, а решить «по
+    /// существованию» нельзя — тогда граница врала бы ровно там, где опасно.
+    pub fn inside<'p>(&self, path: &'p Path) -> Result<&'p Path, IdentityError> {
+        let root = lexical(&self.work);
+        let asked = lexical(path);
+        if asked.starts_with(&root) {
+            Ok(path)
+        } else {
+            Err(IdentityError::Outside { root, path: asked })
+        }
     }
 
     /// Проверка политики по СЫРОМУ полю `parentToolCallId` из хука `tool_call`. Один вход и
@@ -287,4 +307,21 @@ pub struct Adjudication {
     pub tool: String,
     /// Откуда пришёл вызов — как в `SessionDescription::adjudicate`.
     pub source: CallSource,
+}
+
+/// Нормализация лексическая: `..` и `.` разложены руками, без ФС. Вверх за `/` не
+/// поднимаемся: нечего отдавать. Отдельная от `sandbox_bwrap::normalize` — та приватна, а
+/// тот файл вне этого пакета; идея не дублируется, дублируется шесть строк арифметики.
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }

@@ -44,31 +44,6 @@ fn session_in(work: &Path, tools: &ToolSet) -> SessionDescription {
     SessionDescription::new("m5-p08", work, tools.clone(), LIMIT, off).expect("описание собрано")
 }
 
-/// П. 4: обещанное число инструментов и переданный список обязаны совпасть. Расхождение —
-/// отказ, а не тихая обрезка: обрезанный набор выглядит как успешный запуск с другими
-/// правами, и этого диагностировать нельзя.
-#[test]
-fn a_truncated_tool_list_is_an_error_and_never_a_shorter_one() {
-    // Обещано три, передано один: список потерял хвост по дороге.
-    match ToolSet::exactly(3, &["read"]) {
-        Err(IdentityError::Truncated { promised, given }) => {
-            assert_eq!((promised, given), (3, 1));
-        }
-        other => panic!("усечение — ошибка, а не {other:?}"),
-    }
-    // Повтор тоже усечение: два места под один инструмент — это один инструмент, и обещание
-    // о двух не выполнено. Тихая дедупликация выдала бы набор с правами, которых не просили.
-    match ToolSet::exactly(2, &["read", "read"]) {
-        Err(IdentityError::Truncated { promised, given }) => {
-            assert_eq!((promised, given), (2, 1));
-        }
-        other => panic!("повтор — тоже усечение, а не {other:?}"),
-    }
-    // Совпадение проходит — иначе «усечение запрещено» читалось бы как «список запрещён».
-    let exact = ToolSet::exactly(2, &["read", "grep"]).expect("обещание выполнено");
-    assert_eq!(names_of(&exact), "read,grep");
-}
-
 /// П. 1, п. 2 и п. 5: движку уходит РОВНО рабочий каталог и перечисленные инструменты,
 /// идентификатор попадает и в журнал, и в отчёт. Контроль обязателен: каталог сессии не
 /// совпадает с каталогом процесса, поэтому равенство доказывает, что значение пришло из
@@ -129,40 +104,29 @@ fn a_subagent_asking_beyond_its_parent_is_refused_whole_and_leaks_no_remainder()
     }
 }
 
-/// П. 7 и п. 8: codemode в рабочих и операторских сессиях не включается — он не входит в
-/// набор, а «выключено по флагу запуска» не считается доказательством, потому что codemode
-/// подключается сам через MCP. Отсюда три состояния, а не флаг: непроверенное выключение
-/// равно непроверенному включению.
+/// П. 4: обещанное число инструментов и переданный список обязаны совпасть. Расхождение —
+/// отказ, а не тихая обрезка: обрезанный набор выглядит как успешный запуск с другими
+/// правами, и этого диагностировать нельзя.
 #[test]
-fn codemode_is_not_in_the_set_and_its_absence_counts_only_after_the_config_load() {
-    // В наборе его быть не может вовсе — даже если перечисление его попросило.
-    match ToolSet::listed(&[CODEMODE, "read"]) {
-        Err(IdentityError::CodemodeInSet { tool }) => assert_eq!(tool, CODEMODE),
-        other => panic!("codemode в наборе — отказ, а не {other:?}"),
+fn a_truncated_tool_list_is_an_error_and_never_a_shorter_one() {
+    // Обещано три, передано один: список потерял хвост по дороге.
+    match ToolSet::exactly(3, &["read"]) {
+        Err(IdentityError::Truncated { promised, given }) => {
+            assert_eq!((promised, given), (3, 1));
+        }
+        other => panic!("усечение — ошибка, а не {other:?}"),
     }
-    let work = work_root("codemode");
-    let tools = listed(&["read"]);
-    let new = |state| SessionDescription::new("m5-p08", &work, tools.clone(), LIMIT, state);
-    // Не проверено после загрузки конфигурации — это отсутствие данных, а не «выключено».
-    match new(CodemodeState::Unverified) {
-        Err(IdentityError::CodemodeUnverified) => {}
-        other => panic!("непроверенное выключение — отказ, а не {other:?}"),
+    // Повтор тоже усечение: два места под один инструмент — это один инструмент, и обещание
+    // о двух не выполнено. Тихая дедупликация выдала бы набор с правами, которых не просили.
+    match ToolSet::exactly(2, &["read", "read"]) {
+        Err(IdentityError::Truncated { promised, given }) => {
+            assert_eq!((promised, given), (2, 1));
+        }
+        other => panic!("повтор — тоже усечение, а не {other:?}"),
     }
-    // Подключился сам (MCP): виновник назван, иначе «выключено» и «подключилось» совпали бы.
-    match new(CodemodeState::Attached { via: "mcp" }) {
-        Err(IdentityError::CodemodeAttached { via }) => assert_eq!(via, "mcp"),
-        other => panic!("codemode после конфигурации — отказ, а не {other:?}"),
-    }
-    // Проверенное выключение — единственный путь, и в сессии codemode действительно нет.
-    let session = new(CodemodeState::AbsentAfterConfigLoad).expect("выключено проверено");
-    assert!(!session.tools().holds(CODEMODE));
-    // Без идентификатора сессию не собрать: «работал кто-то без имени» при разборе не
-    // отличить от «не работал никто» (закон 6).
-    let unnamed = CodemodeState::AbsentAfterConfigLoad;
-    match SessionDescription::new(" ", &work, tools, LIMIT, unnamed) {
-        Err(IdentityError::Unnamed) => {}
-        other => panic!("без идентификатора — именно отказ об имени, а не {other:?}"),
-    }
+    // Совпадение проходит — иначе «усечение запрещено» читалось бы как «список запрещён».
+    let exact = ToolSet::exactly(2, &["read", "grep"]).expect("обещание выполнено");
+    assert_eq!(names_of(&exact), "read,grep");
 }
 
 /// П. 6 и п. 9: вложенный вызов помечен `parentToolCallId` (проба (a): те же хуки
@@ -206,5 +170,82 @@ fn a_nested_call_is_checked_afresh_while_an_unrecognised_source_is_refused() {
             assert_eq!(parent_tool_call_id, "   ");
         }
         other => panic!("неопознанный источник — отказ, а не {other:?}"),
+    }
+}
+
+/// П. 7 и п. 8: codemode в рабочих и операторских сессиях не включается — он не входит в
+/// набор, а «выключено по флагу запуска» не считается доказательством, потому что codemode
+/// подключается сам через MCP. Отсюда три состояния, а не флаг: непроверенное выключение
+/// равно непроверенному включению.
+#[test]
+fn codemode_is_not_in_the_set_and_its_absence_counts_only_after_the_config_load() {
+    // В наборе его быть не может вовсе — даже если перечисление его попросило.
+    match ToolSet::listed(&[CODEMODE, "read"]) {
+        Err(IdentityError::CodemodeInSet { tool }) => assert_eq!(tool, CODEMODE),
+        other => panic!("codemode в наборе — отказ, а не {other:?}"),
+    }
+    let work = work_root("codemode");
+    let tools = listed(&["read"]);
+    let new = |state| SessionDescription::new("m5-p08", &work, tools.clone(), LIMIT, state);
+    // Не проверено после загрузки конфигурации — это отсутствие данных, а не «выключено».
+    match new(CodemodeState::Unverified) {
+        Err(IdentityError::CodemodeUnverified) => {}
+        other => panic!("непроверенное выключение — отказ, а не {other:?}"),
+    }
+    // Подключился сам (MCP): виновник назван, иначе «выключено» и «подключилось» совпали бы.
+    match new(CodemodeState::Attached { via: "mcp" }) {
+        Err(IdentityError::CodemodeAttached { via }) => assert_eq!(via, "mcp"),
+        other => panic!("codemode после конфигурации — отказ, а не {other:?}"),
+    }
+    // Проверенное выключение — единственный путь, и в сессии codemode действительно нет.
+    let session = new(CodemodeState::AbsentAfterConfigLoad).expect("выключено проверено");
+    assert!(!session.tools().holds(CODEMODE));
+    // Без идентификатора сессию не собрать: «работал кто-то без имени» при разборе не
+    // отличить от «не работал никто» (закон 6).
+    let unnamed = CodemodeState::AbsentAfterConfigLoad;
+    match SessionDescription::new(" ", &work, tools, LIMIT, unnamed) {
+        Err(IdentityError::Unnamed) => {}
+        other => panic!("без идентификатора — именно отказ об имени, а не {other:?}"),
+    }
+}
+
+/// forbidden: путь вне рабочего каталога не проходит — после нормализации `..`, лексически
+/// и без ФС. Контроль обязателен: путь ВНУТРИ проходит, иначе «отказ» выдала бы фикстура,
+/// отказавшая бы вообще всему.
+#[test]
+fn a_path_that_leaves_the_working_directory_does_not_pass_while_one_inside_does() {
+    let work = work_root("inside");
+    let session = session_in(&work, &listed(&["read"]));
+    let inside = work.join("nested/state.txt");
+    assert_eq!(session.inside(&inside).expect("внутри"), inside.as_path());
+
+    // Назван нормализованный путь, а не подставленный на вход: `..` уже разложен.
+    let outside = work.parent().expect("корень").join("outside.txt");
+    // Ожидание ВЫВОДИТСЯ из каталога фикстуры, а не записано константой: глубина
+    // `temp_dir` — свойство машины, и замер `cargo mutants` подменяет `TMPDIR`. Константа
+    // «/stray» упала бы там на НЕВЕРНОМ ожидании, и отказ выдала бы фикстура.
+    let up = work
+        .parent()
+        .and_then(Path::parent)
+        .expect("два уровня вверх")
+        .join("stray");
+    let escapes = [
+        (work.join("../outside.txt"), outside.clone()),
+        (work.join("nested/../../outside.txt"), outside),
+        (
+            Path::new("/etc/shadow").to_path_buf(),
+            PathBuf::from("/etc/shadow"),
+        ),
+        // `..` вверх за корень песочницы не поднимается, и выход всё равно запрещён.
+        (work.join("..").join("..").join("stray"), up),
+    ];
+    for (escape, normalised) in escapes {
+        match session.inside(&escape) {
+            Err(IdentityError::Outside { root, path }) => {
+                assert_eq!(root, work, "корень назван, а не подставлен заново");
+                assert_eq!(path, normalised, "виновник назван ПОСЛЕ `..`");
+            }
+            other => panic!("путь снаружи — отказ, а не {other:?}"),
+        }
     }
 }
