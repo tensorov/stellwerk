@@ -11,8 +11,25 @@
 //! сделала бы один и тот же запуск разным в разных терминалах.
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
+
+use thiserror::Error;
+
+/// Отказ песочницы, и оба варианта — ДО запуска. «Не прошла проверка» и «бюджет не помещается
+/// в окно» не имеют ничего общего с «движок не поднялся»: чинятся они по-разному, и молчаливое
+/// слияние отдало бы «нет данных» под видом отказа.
+#[derive(Debug, Error)]
+pub enum SandboxError {
+    /// Путь ушёл из рабочей копии после нормализации `..`.
+    #[error("`{path}` leaves the working copy `{root}`: refused before launch")]
+    Outside { root: PathBuf, path: PathBuf },
+    /// Бюджет исполнения не помещается в окно песочницы: команда заведомо переживёт
+    /// песочницу, и убивать её пришлось бы уже с потерей частичных данных.
+    #[error("execution budget {budget:?} does not fit the sandbox window {window:?}: refused before launch")]
+    Unfit { window: Duration, budget: Duration },
+}
 
 /// Песочница целиком в руках вызывающего: корень рабочей копии, отдельный каталог временных
 /// файлов, системные каталоги на чтение и окно жизни. Ни одна переменная окружения тут не
@@ -74,4 +91,53 @@ impl Sandbox {
         argv.push(dir.into());
         argv.push(dir.into());
     }
+
+    /// Команда для запуска внутри песочницы. `write` — каталог, которому команда адресована
+    /// для записи; `budget` — бюджет исполнения, который обязан помещаться в окно.
+    pub fn command(
+        &self,
+        write: &Path,
+        program: &Path,
+        args: &[&str],
+        budget: Duration,
+    ) -> Result<Command, SandboxError> {
+        self.preflight(write, budget)?;
+        let mut command = Command::new("bwrap");
+        command.args(self.argv(program, args));
+        Ok(command)
+    }
+
+    /// Оба отказа — до запуска, и оба — про саму песочницу. Их порядок не важен: каждый
+    /// отказ называет свой виновник, и ни один не значит «запуск не удался».
+    fn preflight(&self, write: &Path, budget: Duration) -> Result<(), SandboxError> {
+        if budget > self.window {
+            return Err(SandboxError::Unfit {
+                window: self.window,
+                budget,
+            });
+        }
+        let (root, path) = (normalize(&self.work), normalize(write));
+        if path.starts_with(&root) {
+            Ok(())
+        } else {
+            Err(SandboxError::Outside { root, path })
+        }
+    }
+}
+
+/// Нормализация лексическая: `..` и `.` решаются руками, без ФС. `canonicalize` уронил бы
+/// несуществующий путь, а решить «по существованию» нельзя — тогда проверка границы врала
+/// бы ровно там, где опасно. Вверх за `/` не поднимаемся: нечего отдавать.
+fn normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
