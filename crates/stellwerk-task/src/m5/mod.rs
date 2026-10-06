@@ -1,0 +1,117 @@
+//! # Единый интерфейс запуска сессии агента
+//!
+//! Движок — единственное место, где stellwerk говорит с внешней программой агента.
+//! Песочница и границы доверия проверяются настоящим `bwrap`, а не наличием Pi, поэтому
+//! контракт и фикстура строятся так, чтобы проверка границ доверия не требовала Pi.
+//!
+//! Бюджеты, песочница и одобрение сюда НЕ входят: иначе проверка доступности задела бы
+//! политику, которой ещё нет, и фикстура начала бы её выдумывать.
+
+use std::path::Path;
+use std::time::Duration;
+
+use thiserror::Error;
+
+/// Отчёт о доступности движка. Причина — поле, а не украшение: «недоступен» без причины
+/// при разборе инцидента бесполезен. Поля закрыты — отчёт собирается только через
+/// конструкторы, и оба требуют непустой причины.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProbeReport {
+    engine: String,
+    available: bool,
+    reason: String,
+}
+
+impl ProbeReport {
+    /// Доступен — и вот почему: «работает» без объяснения приглушает тот самый случай.
+    pub fn available(engine: &str, reason: &str) -> Result<Self, EngineError> {
+        Self::build(engine, true, reason)
+    }
+
+    /// Недоступен — и вот почему: «нет файла» и «нет права выполнения» суть разные
+    /// инциденты, а молчаливый `false` схлопывает их в один.
+    pub fn unavailable(engine: &str, reason: &str) -> Result<Self, EngineError> {
+        Self::build(engine, false, reason)
+    }
+
+    /// Общая дверь: пустая причина — отсутствие данных, а не вердикт, поэтому `Err`.
+    fn build(engine: &str, available: bool, reason: &str) -> Result<Self, EngineError> {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return Err(EngineError::NoReason {
+                engine: engine.to_owned(),
+            });
+        }
+        Ok(Self {
+            engine: engine.to_owned(),
+            available,
+            reason: reason.to_owned(),
+        })
+    }
+
+    /// Имя движка на отчёте: по нему его и ищут в логах, а не по пути к программе.
+    pub fn engine(&self) -> &str {
+        &self.engine
+    }
+
+    /// Вердикт `probe()`.
+    pub fn is_available(&self) -> bool {
+        self.available
+    }
+
+    /// Почему вердикт такой; непустая строка гарантирована построением.
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+}
+
+/// Отказ движка. «Нет данных» и «отказ» обязаны быть разными вариантами, иначе
+/// отсутствие причины читается как решение (закон 6).
+#[derive(Debug, Error)]
+pub enum EngineError {
+    /// Причину не дали: пустая строка — это отсутствие данных, а не вердикт.
+    #[error("probe report for `{engine}` was built without a reason")]
+    NoReason { engine: String },
+    /// Запускать нечего. Не «сессия не удалась»: её и не было.
+    #[error("session argv is empty: there is no program to run")]
+    EmptyArgv,
+    /// Процесс не поднялся — движка не было. Это не отказ движка.
+    #[error("`{program}` did not start: {source}")]
+    Spawn {
+        program: String,
+        source: std::io::Error,
+    },
+    /// Бюджет исчерпан и процесс убит: «не успел» и «не запустился» чинятся по-разному.
+    #[error("`{program}` exceeded its budget {timeout:?}")]
+    TimedOut { program: String, timeout: Duration },
+    /// Статус или вывод потеряны: сессия шла, а её слова не прочитаны.
+    #[error("session output lost: {source}")]
+    Io { source: std::io::Error },
+}
+
+/// Единый интерфейс запуска сессии: сказать, доступен ли движок, и провести одну сессию.
+/// Бюджеты сверх `timeout`, песочница и одобрение — забота вызывающего (см. шапку модуля).
+pub trait EngineAdapter {
+    /// Доступность вместе с причиной, и ничего не запуская: список движков собирают, не
+    /// поднимая их все, иначе нельзя ни показать отчёт, ни узнать, что Pi не установлен.
+    fn probe(&self) -> Result<ProbeReport, EngineError>;
+
+    /// Одна сессия: `argv[0]` — программа, остальное — её аргументы, запуск строго по
+    /// имени файла без shell-строки. Исчерпание бюджета — отдельный отказ.
+    fn session(
+        &self,
+        argv: &[String],
+        cwd: &Path,
+        timeout: Duration,
+    ) -> Result<SessionOutcome, EngineError>;
+}
+
+/// Итог сессии. Ненулевой код — данные, а не отказ: агент сказал и ушёл.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionOutcome {
+    /// Код завершения; `None` — процесс убит сигналом, и кода у него нет.
+    pub code: Option<i32>,
+    /// stdout и stderr порознь: слияние теряет виновника.
+    pub stdout: String,
+    pub stderr: String,
+}

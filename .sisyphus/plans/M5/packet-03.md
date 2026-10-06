@@ -7,7 +7,7 @@ max_diff_lines: 200
 test: cargo test -p xtask --test plugin_manifest
 acceptance: ты открываешь extension и видишь зарегистрированный tool `stellwerk_subagent`; вызов с описанием задачи возвращает результат, в котором детали содержат имя движка, код завершения, признак таймаута и потраченные токены, а не только текст для модели.
 forbidden: [shell=True, eval, bash -c, --mode rpc, запуск субагента вне песочницы, вложенный запуск субагента из субагента без явной блокировки]
-depends_on: [01, 02a]
+depends_on: [01, 02a3]
 data_class: public
 lane: plugin
 

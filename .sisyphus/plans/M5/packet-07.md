@@ -7,7 +7,7 @@ max_diff_lines: 200
 test: cargo test -p stellwerk-task --test sandbox_bwrap
 acceptance: ты даёшь команде путь для записи за пределами рабочего каталога и получаешь отказ до запуска с названным путём; команда внутри каталога проходит; каталог после прогона не содержит ни файлов репозитория, ни истории.
 forbidden: [root, setuid, podman, docker, shell=True, bwrap --bind в путь вне песочницы, доступ в сеть по умолчанию, правка корневого Cargo.toml]
-depends_on: [02a, M2-11, M2-13, M4-07]
+depends_on: [02a3, M2-11, M2-13, M4-07]
 mutation_threshold: 80
 data_class: private
 lane: runtime
