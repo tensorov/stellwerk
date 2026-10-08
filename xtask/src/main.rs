@@ -221,7 +221,6 @@ const BELOW_THRESHOLD: u8 = 7;
 /// Крейты под гейтом, поимённо: префикс выбрал бы и будущие, а список закрыт здесь.
 const MUTATION_CRATES: [&str; 2] = ["stellwerk-task", "stellwerk-gateway"];
 /// Имена задач измерения — только для подсказки: в `match` они перечислены снова (INFRA-01).
-
 const MUTATION_TASKS: [&str; 1] = ["mutation-run"];
 
 /// Каталог артефакта. Не на tmpfs: `/tmp/store.out` не пережил перезагрузку. Имя пакета
@@ -459,80 +458,6 @@ fn mutation_run() -> ExitCode {
     }
     code
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const GOOD: &str = concat!(
-        r#"{"cargo_mutants_version":"27.1.0","total_mutants":5,"caught":4,"#,
-        r#""missed":1,"timeout":0,"unviable":0,"success":true}"#
-    );
-
-    fn counts(caught: u64, missed: u64, timeout: u64, unviable: u64) -> Counters {
-        Counters {
-            total: caught + missed + timeout + unviable,
-            caught,
-            missed,
-            timeout,
-            unviable,
-        }
-    }
-
-    #[test]
-    fn top_level_counters_are_read_in_declared_order() {
-        assert_eq!(
-            counters(GOOD),
-            [Some(5), Some(4), Some(1), Some(0), Some(0)]
-        );
-    }
-
-    #[test]
-    fn nested_counter_is_not_counted_as_top_level() {
-        let text = r#"{"summary":{"caught":999},"total_mutants":2,"caught":1,"missed":1,"timeout":0,"unviable":0}"#;
-        assert_eq!(
-            counters(text),
-            [Some(2), Some(1), Some(1), Some(0), Some(0)]
-        );
-    }
-
-    #[test]
-    fn missing_and_non_integer_are_absent_not_zero() {
-        let text = r#"{"total_mutants":1,"caught":null,"missed":1.5,"timeout":0}"#;
-        let [total, caught, missed, _, _] = counters(text);
-        assert_eq!((total, caught, missed), (Some(1), None, None));
-    }
-
-    #[test]
-    fn sum_mismatch_is_refusal() {
-        let wrong = Counters {
-            total: 9,
-            caught: 4,
-            missed: 1,
-            timeout: 0,
-            unviable: 0,
-        };
-        assert_eq!(
-            wrong.check().err(),
-            Some("сумма счётчиков не сошла с total_mutants")
-        );
-    }
-
-    #[test]
-    fn viable_without_caught_is_refusal() {
-        assert_eq!(
-            counts(0, 3, 0, 0).check().err(),
-            Some("позитивный контроль не пройден: viable есть, поймано 0")
-        );
-    }
-
-    #[test]
-    fn zero_viable_is_its_own_state_not_zero_percent() {
-        assert_eq!(
-            counts(0, 0, 0, 4).check().map(|got| got.is_none()),
-            Ok(true)
-        );
-    }
-}
 /// Измерение одного крейта и, если измерение состоялось, вердикт по порогу. Единственное
 /// различие между тремя задачами — кодируется ли вердикт в код возврата: `mutation-run`
 /// не кодирует, потому что вердикт это содержимое артефакта, а аттестуется факт измерения.
@@ -620,4 +545,78 @@ fn main() -> ExitCode {
     eprintln!("неизвестная задача: {name:?}");
     eprintln!("доступные задачи: {}", task_names().join(", "));
     ExitCode::from(2)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GOOD: &str = concat!(
+        r#"{"cargo_mutants_version":"27.1.0","total_mutants":5,"caught":4,"#,
+        r#""missed":1,"timeout":0,"unviable":0,"success":true}"#
+    );
+
+    fn counts(caught: u64, missed: u64, timeout: u64, unviable: u64) -> Counters {
+        Counters {
+            total: caught + missed + timeout + unviable,
+            caught,
+            missed,
+            timeout,
+            unviable,
+        }
+    }
+
+    #[test]
+    fn top_level_counters_are_read_in_declared_order() {
+        assert_eq!(
+            counters(GOOD),
+            [Some(5), Some(4), Some(1), Some(0), Some(0)]
+        );
+    }
+
+    #[test]
+    fn nested_counter_is_not_counted_as_top_level() {
+        let text = r#"{"summary":{"caught":999},"total_mutants":2,"caught":1,"missed":1,"timeout":0,"unviable":0}"#;
+        assert_eq!(
+            counters(text),
+            [Some(2), Some(1), Some(1), Some(0), Some(0)]
+        );
+    }
+
+    #[test]
+    fn missing_and_non_integer_are_absent_not_zero() {
+        let text = r#"{"total_mutants":1,"caught":null,"missed":1.5,"timeout":0}"#;
+        let [total, caught, missed, _, _] = counters(text);
+        assert_eq!((total, caught, missed), (Some(1), None, None));
+    }
+
+    #[test]
+    fn sum_mismatch_is_refusal() {
+        let wrong = Counters {
+            total: 9,
+            caught: 4,
+            missed: 1,
+            timeout: 0,
+            unviable: 0,
+        };
+        assert_eq!(
+            wrong.check().err(),
+            Some("сумма счётчиков не сошла с total_mutants")
+        );
+    }
+
+    #[test]
+    fn viable_without_caught_is_refusal() {
+        assert_eq!(
+            counts(0, 3, 0, 0).check().err(),
+            Some("позитивный контроль не пройден: viable есть, поймано 0")
+        );
+    }
+
+    #[test]
+    fn zero_viable_is_its_own_state_not_zero_percent() {
+        assert_eq!(
+            counts(0, 0, 0, 4).check().map(|got| got.is_none()),
+            Ok(true)
+        );
+    }
 }
