@@ -39,8 +39,8 @@ M6 закрывает то, что исполнимо без runtime. M7 зак�
 | --- | --- | --- |
 | packet-01a | `Call` несёт аргументы; приёмка — вся сьютка крейта | ждёт M6-01 |
 | packet-01b | Подключение runtime; удаление подключения валит тест | ждёт packet-01a |
-| packet-02 | Личность одобрившего (contract-change, ADR-0006) | ждёт prerequisite |
-| packet-03 | Связывание аргументов с одобрением (ADR-0007) | ждёт prerequisite |
+| packet-02 | Личность одобрившего (contract-change, ADR-0007) | ждёт prerequisite |
+| packet-03 | Связывание аргументов с одобрением (ADR-0008) | ждёт prerequisite |
 | packet-04 | R5 не suspend'ится; исчерпание ≠ отказ по политике | ждёт prerequisite |
 | packet-05 | Проектные Pi-ресурсы не становятся policy сессии | ждёт prerequisite |
 | packet-06 | parentToolCallId не даёт полномочий; Codemode после загрузки | ждёт packet-05 |

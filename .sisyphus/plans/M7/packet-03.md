@@ -2,7 +2,7 @@
 plan_id: M7
 status: предложен
 goal: RED — подмена аргументов после одобрения инвалидирует approval.
-files_allowed: [crates/stellwerk-task/src/approval.rs, crates/stellwerk-task/tests/approval_binding.rs, docs/adr/ADR-0007-args-binding.md]
+files_allowed: [crates/stellwerk-task/src/approval.rs, crates/stellwerk-task/tests/approval_binding.rs, docs/adr/0008-args-binding.md]
 max_diff_lines: 200
 test: cargo test -p stellwerk-task --test approval_binding
 acceptance: approval, выданное на одни аргументы, не проходит на другие; digest считается на доверенной границе из КАНОНИЧЕСКОГО представления аргументов. До появления защит приведённая проверка падает; после — проходит, и перечень остаётся тем же: ни одна проверка не удалена и не ослаблена.

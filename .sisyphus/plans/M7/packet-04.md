@@ -2,7 +2,7 @@
 plan_id: M7
 status: предложен
 goal: RED — «никто не ответил» и «запрещено политикой» дают РАЗНЫЕ причины перехода при ОДИНАКОВОМ статусе.
-files_allowed: [crates/stellwerk-task/src/approval.rs, crates/stellwerk-task/tests/exhaustion_reason.rs, docs/adr/ADR-0008-exhaustion-vs-deny.md]
+files_allowed: [crates/stellwerk-task/src/approval.rs, crates/stellwerk-task/tests/exhaustion_reason.rs, docs/adr/0009-exhaustion-vs-deny.md]
 max_diff_lines: 200
 test: cargo test -p stellwerk-task --test exhaustion_reason
 acceptance: ДО ПРАВКИ обе ситуации дают одну и ту же причину при одном `TaskStatus`, и проверка различения падает; ПОСЛЕ — проходит, и перечень пунктов не меняется. переход записывает НЕПУСТУЮ причину, и две ситуации — исчерпание окна и запрет политикой — дают РАЗНЫЕ причины при ОДИНАКОВОМ `TaskStatus`; `TaskStatus` НЕ расширяется; причина переживает сериализацию.
@@ -34,7 +34,7 @@ lane: runtime
 2. Исчерпание окна и запрет политикой дают разные значения этого поля.
 3. Причина обязана пережить сериализацию: иначе наверху снова видно «Failed» без причины,
    и неизвестное превращается в решение.
-4. ADR-0008 фиксирует, почему различение идёт через причину, а не через статус.
+4. ADR-0009 фиксирует, почему различение идёт через причину, а не через статус.
 
 ## Почему не через `TaskStatus`
 

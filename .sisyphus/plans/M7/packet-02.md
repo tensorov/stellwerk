@@ -2,7 +2,7 @@
 plan_id: M7
 status: предложен
 goal: RED — approval несёт.identity: кто одобрил, каким полномочием, на каком subject, на каких evidence.
-files_allowed: [crates/stellwerk-task/src/approval.rs, crates/stellwerk-task/tests/approval_identity.rs, docs/adr/ADR-0006-approval-identity.md]
+files_allowed: [crates/stellwerk-task/src/approval.rs, crates/stellwerk-task/tests/approval_identity.rs, docs/adr/0007-approval-identity.md]
 max_diff_lines: 200
 test: cargo test -p stellwerk-task --test approval_identity
 acceptance: агент не может одобрить собственный запрос НИ ОДНИМ доступным инструментом; «кто ответил» записывается всегда и различает L4-агента и L5-владельца. До появления защит приведённая проверка падает; после — проходит, и перечень остаётся тем же: ни одна проверка не удалена и не ослаблена.
@@ -25,7 +25,7 @@ F-79: типа `SelfApproval` нет нигде, и — что важнее — 
    identity — отдельное состояние, а не «никто».
 3. Отказ и пропуск (таймаут) различимы в типе и в статусе: Deny по политике и Deny
    по таймауту не сливаются.
-4. ADR-0006 фиксирует контракт: почему identity — поле, а не вывод из текста.
+4. ADR-0007 фиксирует контракт: почему identity — поле, а не вывод из текста.
 
 ## Проверка
 
