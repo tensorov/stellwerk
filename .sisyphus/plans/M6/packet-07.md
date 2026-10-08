@@ -7,7 +7,7 @@ max_diff_lines: 200
 test: ! grep -q 'не калибрована' docs/CONTEXT_BUDGET.md
 acceptance: строка xl в таблице `docs/CONTEXT_BUDGET.md` переводится из «не калибрована» в калиброванную с указанием порога 117303 и его происхождения; строка `qwen3.6-unlim-noreason` (46 112) сохраняется без изменений.
 forbidden: [удалять или переименовывать 46k-строку, править modules.lock (замер не требуется — модель не модуль), выдавать 138336 за измеренный факт, вписывать запись модели в modules.toml, трогать ~/.pi/agent/models.json]
-depends_on: []
+depends_on: [12]
 mutation_threshold: 0
 data_class: public
 lane: docs
