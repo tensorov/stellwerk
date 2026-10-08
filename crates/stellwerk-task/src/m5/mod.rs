@@ -13,6 +13,8 @@ pub mod sandbox_bwrap;
 pub mod session_identity;
 // Секреты: окружение агента, аргументы команды и прокси — три места, где токен не появляется.
 pub mod secrets;
+// Профиль интегратора: перечень видимых путей задан в коде, и пути к чужому секрету нет.
+pub mod integrator_profile;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
