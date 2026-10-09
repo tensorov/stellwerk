@@ -241,34 +241,24 @@ async fn deny_is_failed() {
     ));
 }
 
-/// Отсутствие переменной и её пустое значение — разные случаи: пустое обязано быть
-/// ошибкой, иначе опечатка в окружении молча пишет вопросы в рабочий каталог.
+/// Отсутствие значения и его пустое значение — разные случаи: пустое обязано быть
+/// ошибкой, иначе опечатка молча пишет вопросы в рабочий каталог. Env-переменную
+/// читает точка входа; сюда попадает уже разрешённое значение, заданное параметром,
+/// поэтому глобальное окружение тест не трогает.
 #[test]
 fn empty_inbox_env_is_an_error_not_a_silent_default() {
-    let previous = std::env::var("STELLWERK_INBOX").ok();
-    std::env::set_var("STELLWERK_INBOX", "");
-    let outcome = inbox_dir();
-    match previous {
-        Some(v) => std::env::set_var("STELLWERK_INBOX", v),
-        None => std::env::remove_var("STELLWERK_INBOX"),
-    }
+    let outcome = inbox_dir(Some(""));
     assert!(
         outcome.is_err(),
-        "пустое значение переменной обязано давать ошибку, а не умолчание"
+        "пустое значение обязано давать ошибку, а не умолчание"
     );
 }
 
 #[test]
 fn missing_inbox_env_falls_back_to_workspace_path() {
-    let previous = std::env::var("STELLWERK_INBOX").ok();
-    std::env::remove_var("STELLWERK_INBOX");
-    let outcome = inbox_dir();
-    match previous {
-        Some(v) => std::env::set_var("STELLWERK_INBOX", v),
-        None => std::env::remove_var("STELLWERK_INBOX"),
-    }
+    let outcome = inbox_dir(None);
     assert_eq!(
-        outcome.expect("unset must fall back"),
+        outcome.expect("отсутствие значения обязано давать умолчание"),
         PathBuf::from(".stellwerk/inbox"),
         "умолчание — путь внутри рабочего каталога"
     );
