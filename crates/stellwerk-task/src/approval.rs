@@ -120,12 +120,18 @@ pub fn next_status(verdict: &CallVerdict, risk: ToolRisk) -> StatusEffect {
     }
 }
 
-/// Каталог вопросов. Отсутствие переменной и её пустое значение — разные случаи.
-pub fn inbox_dir() -> Result<PathBuf, ApprovalError> {
-    match std::env::var(INBOX_ENV) {
-        Ok(value) if value.trim().is_empty() => Err(ApprovalError::EmptyInboxEnv),
-        Ok(value) => Ok(PathBuf::from(value)),
-        Err(_) => Ok(PathBuf::from(DEFAULT_INBOX)),
+/// Каталог вопросов. Отсутствие значения и его пустое значение — разные случаи, и
+/// разница обязана сохраняться: пустая строка почти всегда опечатка, а молчаливый
+/// откат на путь по умолчанию отправил бы вопросы в рабочий каталог.
+///
+/// Глобальное окружение функция не читает: значение передаёт вызывающий (точка
+/// входа приложения). Чтение `std::env` из библиотеки сделало бы поведение
+/// зависящим от общего состояния процесса, а это источник гонок.
+pub fn inbox_dir(configured: Option<&str>) -> Result<PathBuf, ApprovalError> {
+    match configured {
+        Some(value) if value.trim().is_empty() => Err(ApprovalError::EmptyInboxEnv),
+        Some(value) => Ok(PathBuf::from(value)),
+        None => Ok(PathBuf::from(DEFAULT_INBOX)),
     }
 }
 

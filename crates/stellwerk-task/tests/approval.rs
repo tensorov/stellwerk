@@ -18,7 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use stellwerk_core::contract::RiskClass;
 use stellwerk_gateway::permission::ToolRisk;
-use stellwerk_task::approval::{inbox_dir, park, request, INBOX_ENV};
+use stellwerk_task::approval::{inbox_dir, park, request};
 
 /// Секунды epoch до вызова. Внутренний `unix_secs` обязан попасть в интервал
 /// между двумя отметками — на этом и держится точность проверки окна.
@@ -118,22 +118,18 @@ fn empty_args_digest_is_the_sha256_of_an_empty_body() {
     );
 }
 
-/// Непустое значение переменной обязано приниматься как есть. Мутация
-/// «guard -> true» превращает любой непустой путь в `EmptyInboxEnv`; в
-/// `tests/inbox.rs` её не видно, потому что там проверяется только ПУСТОЕ.
-/// Переменная трогается в одном тесте намеренно: `set_var` глобален, и два
-/// теста в одном бинарнике делили бы его гонкой.
+/// Непустое значение обязано приниматься как есть. Мутация «guard -> true»
+/// превращает любой непустой путь в `EmptyInboxEnv`; в `tests/inbox.rs` её не
+/// видно, потому что там проверяется только ПУСТОЕ. Путь берётся из tempdir, а
+/// значение передаётся параметром: глобальное окружение тест не трогает, поэтому
+/// гонки с соседними тестами в том же бинарнике нет.
 #[test]
 fn non_empty_inbox_env_is_taken_verbatim() {
-    let previous = std::env::var(INBOX_ENV).ok();
-    std::env::set_var(INBOX_ENV, "/var/tmp/stellwerk-packet-23-inbox");
-    let outcome = inbox_dir();
-    match previous {
-        Some(v) => std::env::set_var(INBOX_ENV, v),
-        None => std::env::remove_var(INBOX_ENV),
-    }
+    let inbox = scratch("verbatim");
+    let raw = inbox.to_str().expect("tempdir path must be UTF-8");
+    let outcome = inbox_dir(Some(raw));
     assert_eq!(
         outcome.expect("непустое значение — не опечатка и обязано приниматься"),
-        PathBuf::from("/var/tmp/stellwerk-packet-23-inbox"),
+        inbox,
     );
 }
