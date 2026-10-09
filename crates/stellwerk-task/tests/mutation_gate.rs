@@ -55,6 +55,8 @@ struct Gate {
     decision: Decision,
     /// Сотые процента; `None` это N/A.
     hundredths: Option<u32>,
+    /// Доля unviable в сотых процента по всему крейту; `None` это N/A.
+    unviable_share: Option<u32>,
     message: String,
 }
 
@@ -74,6 +76,16 @@ fn score_hundredths(c: Counts) -> Option<u32> {
     }
     let scaled = (c.caught * 10_000 + denom / 2) / denom;
     debug_assert!(scaled <= 10_000, "доля не превышает 100%");
+    Some(scaled as u32)
+}
+
+/// Доля unviable во всём крейте в сотых: знаменатель — `total` (все мутанты), а не
+/// выжившие. Наблюдение размера явления, порог не задан, вердикт не участвует.
+fn unviable_share_hundredths(c: Counts) -> Option<u32> {
+    if c.total == 0 {
+        return None;
+    }
+    let scaled = (c.unviable * 10_000 + c.total / 2) / c.total;
     Some(scaled as u32)
 }
 
@@ -139,8 +151,10 @@ fn gate(run: &Run<'_>, crate_name: &str, percent: u32) -> Result<Gate, GateError
         .map_err(|e| GateError::NoArtifact(e.to_string()))?;
     let counts = parse_outcomes(&raw)?;
     let hundredths = score_hundredths(counts);
+    let unviable_share = unviable_share_hundredths(counts);
     let decision = decide(hundredths, threshold);
     let reached = hundredths.map_or_else(|| "N/A (измерения нет)".to_owned(), show_percent);
+    let unviable_reached = unviable_share.map_or_else(|| "N/A".to_owned(), show_percent);
     let label = match decision {
         Decision::Pass => "PASS",
         Decision::Fail => "FAIL",
@@ -148,7 +162,8 @@ fn gate(run: &Run<'_>, crate_name: &str, percent: u32) -> Result<Gate, GateError
     };
     let message = format!(
         "{label} {crate_name}: {reached} против порога {}; caught {}, missed {}, timeout {}, \
-         unviable {} вне знаменателя; код cargo-mutants {} в решении не участвует",
+         unviable {} вне знаменателя, доля {unviable_reached}; код cargo-mutants {} в решении \
+         не участвует",
         show_percent(threshold * 100),
         counts.caught,
         counts.missed,
@@ -159,6 +174,7 @@ fn gate(run: &Run<'_>, crate_name: &str, percent: u32) -> Result<Gate, GateError
     Ok(Gate {
         decision,
         hundredths,
+        unviable_share,
         message,
     })
 }
@@ -244,13 +260,54 @@ fn score_is_rounded_integer_timeout_is_not_caught_unviable_excluded() {
     }
 }
 
+/// clause 10: доля unviable — наблюдаемая метрика по всему крейту, а не по выжившим;
+/// знаменатель — `total`, и округление целочисленное. Столбец — (caught, missed,
+/// timeout, unviable) → сотые доли.
+#[test]
+fn unviable_share_is_measured_over_total() {
+    let cases = [
+        ((5, 0, 0, 0), Some(0)),        // нет unviable → 0.00%
+        ((0, 0, 0, 7), Some(10_000)),   // все unviable → 100.00%
+        ((5, 0, 0, 1), Some(1667)),     // округление, а не усечение
+        ((234, 14, 0, 21), Some(781)),  // замер gateway: 21/269 = 7.81%
+        ((309, 40, 3, 42), Some(1066)), // замер task: 42/394 = 10.66%
+    ];
+    for ((c, m, t, u), want) in cases {
+        let g = scored("us", c, m, t, u).expect("гейт отработал");
+        assert_eq!(g.unviable_share, want, "{c}/{m}/{t}/{u}");
+    }
+}
+
+/// clause 11: нулевой total это N/A, а не 0% и не 100% — измерения нет.
+#[test]
+fn unviable_share_zero_total_is_na() {
+    let g = scored("us0", 0, 0, 0, 0).expect("гейт отработал");
+    assert_eq!(g.unviable_share, None);
+}
+
+/// clause 12: доля unviable печатается рядом с raw-счётом, но вердикт не двигает:
+/// 40 missed и 10.66% unviable при 87.78% остаются PASS.
+#[test]
+fn unviable_share_is_printed_but_verdict_untouched() {
+    let g = scored("usv", 309, 40, 3, 42).expect("гейт отработал");
+    assert_eq!((g.hundredths, g.decision), (Some(8778), Decision::Pass));
+    assert_eq!(g.unviable_share, Some(1066));
+    assert!(
+        g.message.contains("unviable 42") && g.message.contains("10.66%"),
+        "{}",
+        g.message
+    );
+}
+
 /// clause 5: нулевой знаменатель даёт N/A, а не 100% и не 0% — состояния разные.
 #[test]
 fn clause_5_zero_denominator_is_na_not_100() {
     let g = scored("c5", 0, 0, 0, 19).expect("гейт отработал");
     assert_eq!((g.decision, g.hundredths), (Decision::NotApplicable, None));
+    // Доля unviable здесь честно 100.00% (19 из 19), поэтому отсутствие 100% проверяем
+    // по строке score: достигнутое — N/A, а не 100%.
     assert!(
-        g.message.contains("N/A") && !g.message.contains("100.00%"),
+        g.message.contains("N/A (измерения нет) против порога"),
         "{}",
         g.message
     );
