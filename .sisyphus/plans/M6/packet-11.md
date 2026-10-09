@@ -1,6 +1,6 @@
 # packet-11 — убрать глобальный env из пути inbox (и sandbox)
 plan_id: M6
-status: предложен
+status: выполнен
 goal: RED — `inbox_dir()` принимает путь параметром; env-чтение убрано из библиотечного кода.
 files_allowed: [crates/stellwerk-task/src/approval.rs, crates/stellwerk-task/tests/inbox.rs, crates/stellwerk-task/tests/approval.rs]
 max_diff_lines: 200
@@ -98,3 +98,43 @@ FAIL.
 (параллельный запуск бинарников, иной раннер) должен быть назван владельцем или получен
 на RED. Если пакет не может показать RED, он обязан это сказать, а не объявить себя
 зелёным по построению.
+
+## Приёмка
+
+**Коммит реализации:** `e5ecf6b82de7e012f5dc7a4c6c4b3861698ee887`
+**Merge:** `6cd17b1` (`--no-ff`), аттестация на main
+**PolyForge:** claim seq=222 → ToolAttestation seq=223 **Verified**, `exit 0`,
+chain tail `af4a6c3f05623d9a82b0df114916eb5f99c6575f97a8a42ea5e11ef2e1dfa798`,
+`gate_evaluate: passed=true, verified=1, missing=[]`
+**Команда аттестации:** `cargo test -p stellwerk-task --test inbox --test approval`
+
+**RED получен честно и перепроверен независимо.** Воркер сообщил 7 падений из 500;
+владелец гонял **базовый** бинарник (подтверждено побайтово: в нём есть удалённая
+в правке строка `unset must fall back` и нет новой) 500 раз с `--test-threads=16` и
+получил **9 FAILED** — `missing_inbox_env_falls_back_to_workspace_path`,
+`tests/inbox.rs:271:17`. Тот же тест и та же строка. Гонка реальна и флакающая.
+
+**Сверка против `acceptance` (по диску, не по отчёту воркера):**
+
+| требование | подтверждение |
+| --- | --- |
+| `inbox_dir()` принимает путь параметром | `inbox_dir(configured: Option<&str>) -> Result<PathBuf, ApprovalError>` (`approval.rs:130`) |
+| env-чтение убрано из библиотечного кода | `std::env::var` в `approval.rs` отсутствует; упоминание осталось только в doc-комментарии `:128` |
+| тесты создают путь через tempdir и не трогают `std::env` | `inbox_dir(Some(""))` и `inbox_dir(None)`; `set_var`/`remove_var` — ноль во всех трёх файлах. `std::env::temp_dir()` в helpers `scratch()` — **был в базе** (проверено по `d4ffdce`), это чтение, не мутация |
+| перечень пунктов не меняется | оба имени тестов (`empty_inbox_env_is_an_error_not_a_silent_default`, `missing_inbox_env_falls_back_to_workspace_path`) присутствуют и в базе, и сейчас |
+| 50 прогонов `--test inbox` без FAIL | перепроверено владельцем: `RUNS=50 FAILS=0` |
+| границы | ровно 3 файла из `files_allowed`, 68 строк при лимите 200, `#[allow]` — 0, `#[ignore]` — 0 |
+
+**Различие «пусто» и «отсутствует» сохранено (закон 6):** `Some("")` →
+`Err(ApprovalError::EmptyInboxEnv)`, `None` → `Ok(DEFAULT_INBOX)`. Тип ошибки
+отделён от умолчания, молчаливого подмена нет.
+
+**Мутации — model claim, не аттестация.** `cargo mutants --in-diff`: диф побайтово
+равен диффу коммита, 3 мутанта / 3 caught / 0 missed / 0 timeout → 100% на изменённой
+поверхности. Порог 80 выполнен **в объёме in-diff, не на уровне крейта**;
+`cargo mutants` не в allowlist. Крейт-базлайн M5 = 88.01%, патк почти чисто удаляющий.
+
+**Запреты соблюдены:** `sandbox.rs`, `cli.rs`, `main.rs` не тронуты; F-79b вынесен
+отдельным пакетом (четвёртый файл нарушил бы лимит ADR-0003).
+
+**Расхождений нет.**
