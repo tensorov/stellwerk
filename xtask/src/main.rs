@@ -231,6 +231,10 @@ const MUTATION_OUT: &str = "target/mutants";
 const OUTCOMES: &str = "mutants.out/outcomes.json";
 /// `cargo mutants` копирует корень workspace во временный каталог, а `/tmp` здесь tmpfs.
 const MUTATION_SCRATCH: &str = "/var/tmp/mutants-scratch";
+/// Тулчейн мутационного пути. Пин `rust-toolchain.toml` (1.99.0) остаётся
+/// воспроизводимым для всего остального; nightly задаётся явно и только здесь,
+/// иначе дочерний `cargo mutants` наследует stable-пин (F-91).
+const MUTATION_TOOLCHAIN: &str = "nightly-2026-10-01";
 
 /// Что сделал дочерний `cargo`. Код `None` — убит сигналом: падение из-за SIGSEGV
 /// не подтверждает RED-спецификацию, и принять его за RED хуже, чем отказать.
@@ -259,6 +263,22 @@ fn usage() {
     eprintln!("внимание: аргументы задачи не перенаправляются в наборы");
 }
 
+/// Окружение мутационного пути: scratch-каталог и явный nightly-тулчейн. Возвращает
+/// список пар, а не применяет их само, — тест зовёт функцию напрямую и не порождает
+/// процессов.
+pub fn mutation_env() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("TMPDIR", MUTATION_SCRATCH),
+        ("RUSTUP_TOOLCHAIN", MUTATION_TOOLCHAIN),
+    ]
+}
+
+/// Окружение общего пути гейта: пустое. Ночной тулчейн сюда не протекает — он
+/// остаётся принадлежностью мутации, а не гейта.
+pub fn gate_env() -> &'static [(&'static str, &'static str)] {
+    &[]
+}
+
 /// Один запуск `cargo` с вектором аргументов и переменными окружения. Вывод дочернего
 /// процесса уходит в stderr целиком — stdout обёртки обязан остаться пустым, потому
 /// что аттестуется код возврата, а не текст. `Ok(None)` — убит сигналом: это не
@@ -278,7 +298,7 @@ fn run_cargo(args: &[&str], env: &[(&str, &str)]) -> Result<Option<i32>, std::io
 fn step(args: &[&str], extra: &[&str]) -> Result<Outcome, std::io::Error> {
     let mut argv = args.to_vec();
     argv.extend_from_slice(extra);
-    Ok(match run_cargo(&argv, &[])? {
+    Ok(match run_cargo(&argv, gate_env())? {
         Some(0) => Outcome::Passed,
         Some(_) => Outcome::Failed,
         None => Outcome::Crashed,
@@ -423,7 +443,7 @@ fn measure(crate_name: &str) -> Result<Option<Counters>, &'static str> {
     let args = ["mutants", "--package", crate_name, "--output", dir.as_str()];
     // Код инструмента наружу не идёт (см. шапку модуля): `2` и `3` — это вердикт, а не
     // поломка, и единственный код, означающий «измерять нечего», — это baseline.
-    match run_cargo(&args, &[("TMPDIR", MUTATION_SCRATCH)]) {
+    match run_cargo(&args, &mutation_env()) {
         Ok(Some(BASELINE_FAILED)) => return Err("baseline упал"),
         Ok(Some(_)) => {}
         Ok(None) => return Err("cargo mutants прерван сигналом"),
@@ -496,7 +516,9 @@ fn mutation_task(crate_name: &str, verdict_is_exit_code: bool) -> ExitCode {
     }
 }
 
-fn main() -> ExitCode {
+/// `pub`, а не приватная: интеграционный тест включает этот файл как модуль через
+/// `#[path]`, и включённый модуль даёт `dead_code` на `main`, пока та приватна.
+pub fn main() -> ExitCode {
     // Берём только имя задачи. Всё остальное намеренно игнорируется, а не
     // перенаправляется: иначе лишний флаг стал бы путём к произвольной команде.
     let requested = std::env::args().nth(1);
