@@ -1,6 +1,6 @@
 # packet-10 — overlap_waiver в пакетах M5/21, M5/22, M5/23
 plan_id: M6
-status: предложен
+status: выполнен
 goal: GREEN — правило C9 смонтировано в тела пакетов, а не только описано в AGENTS.md.
 files_allowed: [.sisyphus/plans/M5/packet-21.md, .sisyphus/plans/M5/packet-22.md, .sisyphus/plans/M5/packet-23.md]
 max_diff_lines: 200
@@ -38,3 +38,11 @@ lane: docs
 Три `grep` в `test:` дают exit 0 только когда строки на месте во всех трёх пакетах.
 `just plan-lint` как тест здесь не годится: он никогда не даёт 0 из-за исторического
 долга C1/C8/C9 в M0/M3/INFRA, поэтому пакет с ним не завершился бы никогда.
+
+## Приёмка
+
+**Коммит реализации:** `0143b09`
+**Тест пакета:** `grep -q overlap_waiver .sisyphus/plans/M5/packet-21.md && grep -q overlap_waiver .sisyphus/plans/M5/packet-22.md && grep -q overlap_waiver .sisyphus/plans/M5/packet-23.md` → exit 0 (ВЫПОЛНЕН)
+**В main:** да, слит до 5512378.
+**Примечание:** `just check` на main → exit 0 после освобождения `/tmp`.
+До очистки `/tmp` прогон падал с ENOSPC — следствие F-99, а не пакета.

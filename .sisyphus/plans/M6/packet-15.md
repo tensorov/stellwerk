@@ -1,6 +1,6 @@
 # packet-15 — исключение аттестации Трека B объявлено ADR, а не оставлено молчанием (F-90)
 plan_id: M6
-status: предложен
+status: выполнен
 label: contract-change
 goal: ADR-0006 фиксирует, что PolyForge, поднятый внутри Stellwerk, не может аттестовать Riegel, и называет, чем вместо ToolAttestation проверяются пакеты Трека B.
 files_allowed: [docs/adr/0006-riegel-attestation-exception.md]
@@ -28,3 +28,11 @@ lane: governance
 Не превращает `ModelClaimed` в нечто среднее и не создаёт «слабый Verified».
 `RIEGEL/packet-01` остаётся `ModelClaimed` с честной пометкой; ADR объясняет, почему
 иначе нельзя, и называет цену этого ограничения.
+
+## Приёмка
+
+**Коммит реализации:** `b2d5b24`
+**Тест пакета:** `test -f docs/adr/0006-riegel-attestation-exception.md && grep -q 'ToolAttestation' docs/adr/0006-riegel-attestation-exception.md` → exit 0 (ВЫПОЛНЕН)
+**В main:** да, слит до 5512378.
+**Примечание:** `just check` на main → exit 0 после освобождения `/tmp`.
+До очистки `/tmp` прогон падал с ENOSPC — следствие F-99, а не пакета.

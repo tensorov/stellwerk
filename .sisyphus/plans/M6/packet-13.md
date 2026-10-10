@@ -1,6 +1,6 @@
 # packet-13 — скрипт извлечения XL попадает в репозиторий в пределах бюджета C2
 plan_id: M6
-status: предложен
+status: выполнен
 goal: RED — `python3 scripts/worker/calibrate_xl.py --self-test` падает, потому что файла нет; GREEN — печатает OK.
 files_allowed: [scripts/worker/calibrate_xl.py]
 max_diff_lines: 200
@@ -71,3 +71,11 @@ lane: hygiene
 файл не отслеживается git, документ ссылается на то, чего в репозитории нет, — а
 это ровно тот класс дефекта, который закрывал packet-07 (документация, опережающая
 реальность).
+
+## Приёмка
+
+**Коммит реализации:** `d223e09`
+**Тест пакета:** `python3 scripts/worker/calibrate_xl.py --self-test` → exit 0 (ВЫПОЛНЕН)
+**В main:** да, слит до 5512378.
+**Примечание:** `just check` на main → exit 0 после освобождения `/tmp`.
+До очистки `/tmp` прогон падал с ENOSPC — следствие F-99, а не пакета.

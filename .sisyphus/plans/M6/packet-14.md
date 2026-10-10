@@ -1,6 +1,6 @@
 # packet-14 — путь мутации получает nightly явно (F-91)
 plan_id: M6
-status: предложен
+status: выполнен
 goal: RED — сборка окружения для `cargo mutants` содержит RUSTUP_TOOLCHAIN=nightly-2026-10-01; на HEAD её нет, и путь наследует пин 1.99.0 из rust-toolchain.toml.
 files_allowed: [xtask/src/main.rs, xtask/tests/mutation_toolchain.rs]
 max_diff_lines: 200
@@ -72,3 +72,11 @@ grep'ом), поэтому дочерний `cargo` наследует `rust-too
 устаревшая база не может оказаться причиной отказа. Порядок между INFRA, M5 и M6
 в этом репозитории не объявлен — здесь это лишь зафиксировано, а не решено (F-92),
 и править `plan-lint.py` в этом пакете нельзя.
+
+## Приёмка
+
+**Коммит реализации:** `a640856`
+**Тест пакета:** `cargo test -p xtask --test mutation_toolchain` → exit 0 (ВЫПОЛНЕН)
+**В main:** да, слит до 5512378.
+**Примечание:** `just check` на main → exit 0 после освобождения `/tmp`.
+До очистки `/tmp` прогон падал с ENOSPC — следствие F-99, а не пакета.

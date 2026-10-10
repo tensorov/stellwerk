@@ -1,6 +1,6 @@
 # packet-16 — правило счёта C2 и условие waiver C9 записаны в AGENTS.md
 plan_id: M6
-status: предложен
+status: выполнен
 goal: Две секции constitution-файла, которые до сих пор жили только в устной договорённости, становятся текстом репозитория.
 files_allowed: [AGENTS.md]
 max_diff_lines: 200
@@ -38,3 +38,11 @@ lane: governance
 живут в `.omo/pending/AGENTS-MD-I12-clarification.md` и ждут `/start-work`.
 Смешивать их с пакетом о счёте строк — ровно «рефакторинг заодно», который запрещён.
 Отдельным пакетом, когда дойдёт очередь.
+
+## Приёмка
+
+**Коммит реализации:** `cc3387b`
+**Тест пакета:** `grep -q 'Счёт строк: ADR-0003' AGENTS.md && grep -q 'wc -l' AGENTS.md && grep -q 'tests-250' AGENTS.md && grep -q 'overlap_waiver: C9' AGENTS.md` → exit 0 (ВЫПОЛНЕН)
+**В main:** да, слит до 5512378.
+**Примечание:** `just check` на main → exit 0 после освобождения `/tmp`.
+До очистки `/tmp` прогон падал с ENOSPC — следствие F-99, а не пакета.
