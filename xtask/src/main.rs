@@ -46,6 +46,18 @@
 //! поломкой инструмента. Проброс этого кода сделал бы честный FAIL неотличимым от
 //! сломанного cargo-mutants. Поэтому `mutation-run` кодирует одно: состоялось ли
 //! измерение, а вердикт остаётся содержимым артефакта.
+//!
+//! # Второй clause вердикта: `missed > 0` блокирует независимо от порога
+//!
+//! Порог 80 отвечает на вопрос «какую долю ловимых мутантов убили тесты», и при
+//! `missed > 0` он проходим: 4 пойманных из 5 viable — это ровно 80%. Недобитый
+//! мутант — это пропущенный тестами дефект, и проходить по среднему он не должен.
+//! Поэтому `missed > 0` — отдельный clause, независимый от процента. Провал
+//! называет обе причины, когда обе сработали: «ниже 80%» и «missed>0» различимы
+//! в вердикте. Код отказа у него свой (`HAS_MISSED`), потому что причина иная,
+//! чем у «ниже порога», и общий код слил бы их в один неотличимый сигнал.
+//! `unviable` этот clause не трогает: он остаётся вне знаменателя `score` и без
+//! порога (ADR-0012).
 
 use std::io::Write;
 use std::process::{Command, ExitCode};
@@ -217,6 +229,9 @@ const BASELINE_FAILED: i32 = 4;
 const MUTATION_THRESHOLD: u64 = 80;
 /// Отказ «ниже порога». Отличается от кода 6: измерение состоялось, но гейт не пройден.
 const BELOW_THRESHOLD: u8 = 7;
+/// Отказ «есть недобитые мутанты»: второй clause, независимый от порога. Код отдельный,
+/// а не переиспользование 7, иначе «ниже 80%» и «missed>0» неотличимы в статусе (закон 6).
+const HAS_MISSED: u8 = 8;
 
 /// Крейты под гейтом, поимённо: префикс выбрал бы и будущие, а список закрыт здесь.
 const MUTATION_CRATES: [&str; 2] = ["stellwerk-task", "stellwerk-gateway"];
@@ -478,9 +493,10 @@ fn mutation_run() -> ExitCode {
     }
     code
 }
-/// Измерение одного крейта и, если измерение состоялось, вердикт по порогу. Единственное
-/// различие между тремя задачами — кодируется ли вердикт в код возврата: `mutation-run`
-/// не кодирует, потому что вердикт это содержимое артефакта, а аттестуется факт измерения.
+/// Измерение одного крейта и, если измерение состоялось, вердикт по двум clause: порогу
+/// 80 и `missed > 0`. Единственное различие между тремя задачами — кодируется ли вердикт
+/// в код возврата: `mutation-run` не кодирует, потому что вердикт это содержимое
+/// артефакта, а аттестуется факт измерения.
 fn mutation_task(crate_name: &str, verdict_is_exit_code: bool) -> ExitCode {
     let Some(counts) = (match measure(crate_name) {
         Err(reason) => return refused(crate_name, reason),
@@ -493,14 +509,31 @@ fn mutation_task(crate_name: &str, verdict_is_exit_code: bool) -> ExitCode {
     let viable = counts.caught + counts.missed + counts.timeout;
     // Сравнение целочисленное: «ровно на пороге» обязано быть PASS, а 4/5*100 в f64 —
     // это 80.00000000000001, и проверка ушла бы в FAIL на самом пороге.
-    let passed = counts.caught * 100 >= MUTATION_THRESHOLD * viable;
+    let threshold_ok = counts.caught * 100 >= MUTATION_THRESHOLD * viable;
+    // Второй clause независим от порога: недобитый мутант блокирует всегда, даже при
+    // 100% пойманных ловимых. Порог 80 при этом остаётся ровно тем же.
+    let has_missed = counts.missed > 0;
+    let passed = threshold_ok && !has_missed;
     // Сотые округляются, а не отбрасываются: инструмент печатает 28.63%, и расхождение
     // в сотых выглядело бы как ошибка разбора, а не как округление.
     let hundredths = (counts.caught * 10_000 + viable / 2) / viable;
+    // Обе причины называются, когда провал двойной: без этого «ниже 80%» и «missed>0»
+    // неотличимы в вердикте, а различение причин и есть смысл второго clause.
+    let mut reasons = Vec::new();
+    if !threshold_ok {
+        reasons.push(format!("ниже порога {MUTATION_THRESHOLD}%"));
+    }
+    if has_missed {
+        reasons.push(format!("missed>0 ({} не поймано)", counts.missed));
+    }
+    let verdict = if passed {
+        "PASS".to_string()
+    } else {
+        format!("FAIL — {}", reasons.join("; "))
+    };
     eprintln!(
-        "{crate_name}: {} — {}.{:02}% при пороге {MUTATION_THRESHOLD}% \
+        "{crate_name}: {verdict} — {}.{:02}% при пороге {MUTATION_THRESHOLD}% \
          (caught={}, missed={}, timeout={}, unviable={}, total={})",
-        if passed { "PASS" } else { "FAIL" },
         hundredths / 100,
         hundredths % 100,
         counts.caught,
@@ -511,6 +544,8 @@ fn mutation_task(crate_name: &str, verdict_is_exit_code: bool) -> ExitCode {
     );
     if passed || !verdict_is_exit_code {
         ExitCode::from(0)
+    } else if threshold_ok {
+        ExitCode::from(HAS_MISSED)
     } else {
         ExitCode::from(BELOW_THRESHOLD)
     }

@@ -358,11 +358,12 @@ fn mutation_run_refuses_unfinished_measurement() {
     assert!(stderr.contains("нет outcomes.json"), "{stderr}");
 }
 /// Ровно на пороге — PASS: сравнение целочисленное, а «ровно 80%» не должно
-/// превращаться в FAIL из-за 80.00000000000001 в f64.
+/// превращаться в FAIL из-за 80.00000000000001 в f64. missed=0: при missed>0
+/// срабатывает второй clause, и 80% уже не проходит.
 #[test]
 fn mutation_tasks_pass_exactly_at_threshold() {
     let dir = sandbox();
-    let out = run_with_stub(&["mutation-task"], &dir, &outcomes(5, 4, 1, 0, 0), 2);
+    let out = run_with_stub(&["mutation-task"], &dir, &outcomes(5, 4, 0, 1, 0), 2);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(code_of(&out), 0, "{stderr}");
     assert!(stderr.contains("PASS"), "PASS не назван: {stderr}");
@@ -402,10 +403,68 @@ fn mutation_tasks_report_not_applicable() {
 fn mutation_tasks_do_not_forward_arguments() {
     let dir = sandbox();
     let args = ["mutation-task", "--exec=/bin/false"];
-    let out = run_with_stub(&args, &dir, &outcomes(5, 4, 1, 0, 0), 2);
+    // Проверяется пересылка argv, а не вердикт: нужен PASS, поэтому missed=0.
+    let out = run_with_stub(&args, &dir, &outcomes(5, 4, 0, 1, 0), 2);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(code_of(&out), 0, "лишний флаг ломает задачу: {stderr}");
     let argv = std::fs::read_to_string(dir.join("argv")).expect("argv пишет заглушка");
     let want = "mutants --package stellwerk-task --output target/mutants/stellwerk-task";
     assert_eq!(argv.trim(), want, "в дочерний процесс ушло лишнее: {argv}");
+}
+
+/// missed > 0 должен блокировать коммит — даже при 100% пойманных viable.
+#[test]
+fn mutation_tasks_fail_when_missed_gt_zero() {
+    let dir = sandbox();
+    // caught=4, missed=1, timeout=0, unviable=0, total=5: 100% viable поймано, но missed>0
+    let out = run_with_stub(&["mutation-task"], &dir, &outcomes(5, 4, 1, 0, 0), 2);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(code_of(&out), 0, "missed>0 должен блокировать: {stderr}");
+    assert!(stderr.contains("FAIL"), "отказ не назван FAIL: {stderr}");
+    assert!(
+        stderr.contains("missed>0"),
+        "должно упоминать missed>0: {stderr}"
+    );
+}
+
+/// missed == 0 — clause не блокирует; процентный порог остаётся решающим.
+#[test]
+fn mutation_tasks_missed_zero_does_not_block_by_itself() {
+    let dir = sandbox();
+    // 79% ниже порога 80, missed==0 — блокирует именно процентный порог
+    let out = run_with_stub(&["mutation-task"], &dir, &outcomes(100, 79, 0, 21, 0), 2);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(
+        code_of(&out),
+        0,
+        "должен блокировать по порогу 80: {stderr}"
+    );
+    assert!(stderr.contains("FAIL"), "отказ не назван FAIL: {stderr}");
+}
+
+/// missed == 0 и порог пройден — PASS.
+#[test]
+fn mutation_tasks_missed_zero_passes_when_threshold_ok() {
+    let dir = sandbox();
+    let out = run_with_stub(&["mutation-task"], &dir, &outcomes(5, 4, 0, 1, 0), 2);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(code_of(&out), 0, "{stderr}");
+    assert!(stderr.contains("PASS"), "PASS не назван: {stderr}");
+}
+
+/// Отсутствие данных — не ноль. Если missed отсутствует, измерение должно быть отвергнуто.
+#[test]
+fn mutation_tasks_refuse_when_missed_missing() {
+    let dir = sandbox();
+    let artifact = r#"{"outcomes": [],
+             "total_mutants": 5, "caught": 5, "timeout": 0, "unviable": 0, "success": 0,
+             "cargo_mutants_version": "27.1.0"}"#;
+    let out = run_with_stub(&["mutation-task"], &dir, artifact, 2);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(
+        code_of(&out),
+        0,
+        "отсутствующий missed должен отвергаться: {stderr}"
+    );
+    assert!(stderr.contains("не распарсился"), "{stderr}");
 }

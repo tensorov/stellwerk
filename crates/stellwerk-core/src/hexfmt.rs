@@ -75,7 +75,9 @@ mod tests {
         // Регистр: только строчные hex-цифры, длина ровно 64.
         let hex = sha256_hex(b"abc");
         assert_eq!(hex.len(), 64);
-        assert!(hex.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+        assert!(hex
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
     }
 
     /// Многобайтовый UTF-8: длина считается в байтах, а не в символах,
