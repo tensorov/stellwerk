@@ -46,9 +46,8 @@ check-gate: fmt lint test-registry test-core test-store
 # нарушений, и если бы они влияли на код возврата, гейт был бы всегда красным,
 # а сверка таблицы — никогда не выполнялась бы.
 check-risk-tables:
-    @python3 scripts/plan-lint.py --gating 2>&1 | grep -E '^(ГЕЙТ|  \[C7\])' || \
-        { echo "план-линтер недоступен"; exit 1; }
-    @python3 scripts/plan-lint.py --gating >/dev/null 2>&1
+    cargo test --locked -p stellwerk-core --test risk_level_policy
+    cargo test --locked -p stellwerk-gateway --test permission --test gate --test gate_ask
 
 test-status:
     @for c in stellwerk-task stellwerk-gateway; do \
