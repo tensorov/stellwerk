@@ -8,6 +8,7 @@
 mod roster;
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use roster::assert_named;
@@ -137,12 +138,14 @@ fn engine_unavailable() {
     let tmp = std::env::temp_dir();
     let tag = std::process::id();
     let shown = tmp.join(format!("sw-p10-shown-{tag}"));
-    let argv = ["/bin/touch".to_owned(), shown.display().to_string()];
-    let spoke = FixtureEngine::new("/bin/touch").session(&argv, &tmp, BUDGET);
+    let mut touch = Command::new("/bin/touch");
+    touch.arg(shown.display().to_string()).current_dir(&tmp);
+    let spoke = FixtureEngine::new("/bin/touch").session(touch, BUDGET);
     assert!(shown.exists(), "контроль обязан оставить метку: {spoke:?}");
     let marker = tmp.join(format!("sw-p10-gone-{tag}"));
-    let argv = [MISSING.to_owned(), marker.display().to_string()];
-    let started = engine.session(&argv, &tmp, BUDGET);
+    let mut missing = Command::new(MISSING);
+    missing.arg(marker.display().to_string()).current_dir(&tmp);
+    let started = engine.session(missing, BUDGET);
     let refused = started.unwrap_err();
     assert_named("engine_unavailable", &format!("{refused:?}"));
     assert!(!marker.exists(), "процесса не было — работа не начата");

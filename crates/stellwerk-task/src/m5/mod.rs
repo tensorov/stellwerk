@@ -82,8 +82,9 @@ pub enum EngineError {
     /// Причину не дали: пустая строка — это отсутствие данных, а не вердикт.
     #[error("probe report for `{engine}` was built without a reason")]
     NoReason { engine: String },
-    /// Запускать нечего. Не «сессия не удалась»: её и не было.
-    #[error("session argv is empty: there is no program to run")]
+    /// Запускать нечего: подготовленный launch не назвал программу. Не «сессия не
+    /// удалась»: её и не было.
+    #[error("launch names no program: there is nothing to run")]
     EmptyArgv,
     /// Процесс не поднялся — движка не было. Это не отказ движка.
     #[error("`{program}` did not start: {source}")]
@@ -106,14 +107,11 @@ pub trait EngineAdapter {
     /// поднимая их все, иначе нельзя ни показать отчёт, ни узнать, что Pi не установлен.
     fn probe(&self) -> Result<ProbeReport, EngineError>;
 
-    /// Одна сессия: `argv[0]` — программа, остальное — её аргументы, запуск строго по
-    /// имени файла без shell-строки. Исчерпание бюджета — отдельный отказ.
-    fn session(
-        &self,
-        argv: &[String],
-        cwd: &Path,
-        timeout: Duration,
-    ) -> Result<SessionOutcome, EngineError>;
+    /// Одна сессия: исполняет ПОДГОТОВЛЕННЫЙ запуск — команду, собранную вызывающим
+    /// (`Sandbox::command` + явный набор переменных), а не собранную здесь из `argv`.
+    /// Адаптер не собирает команду сам: иначе bwrap и `env_clear` остаются декорацией,
+    /// а не гарантией (ADR-0016). Исчерпание бюджета — отдельный отказ.
+    fn session(&self, launch: Command, timeout: Duration) -> Result<SessionOutcome, EngineError>;
 }
 
 /// Итог сессии. Ненулевой код — данные, а не отказ: агент сказал и ушёл.
@@ -165,17 +163,16 @@ impl EngineAdapter for FixtureEngine {
 
     fn session(
         &self,
-        argv: &[String],
-        cwd: &Path,
+        mut launch: Command,
         timeout: Duration,
     ) -> Result<SessionOutcome, EngineError> {
-        // Пустой argv — «запускать нечего», а не «сессия не удалась»: инциденты разные.
-        let Some((program, args)) = argv.split_first() else {
+        // Запуск без программы — «запускать нечего», а не «сессия не удалась»: инциденты
+        // разные. Программу называет подготовленный launch, а не адаптер.
+        let program = launch.get_program().to_string_lossy().into_owned();
+        if program.is_empty() {
             return Err(EngineError::EmptyArgv);
-        };
-        let mut child = Command::new(program)
-            .args(args)
-            .current_dir(cwd)
+        }
+        let mut child = launch
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

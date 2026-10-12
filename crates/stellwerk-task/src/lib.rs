@@ -5,6 +5,7 @@ pub mod evidence;
 pub mod execution;
 pub mod lifecycle;
 pub mod m5;
+pub mod orchestrator;
 pub mod runner;
 pub mod sandbox;
 pub mod taskfile;

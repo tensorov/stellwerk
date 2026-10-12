@@ -9,6 +9,7 @@
 //! программы, которые в системе есть по определению. `sh -c` нет намеренно: shell-строкой
 //! нельзя ни доказать отсутствие интерпретации, ни отличить её от самой программы.
 
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use stellwerk_task::m5::{EngineAdapter, EngineError, FixtureEngine, ProbeReport, FIXTURE_ENGINE};
@@ -78,7 +79,9 @@ fn a_session_runs_in_the_given_directory_and_passes_arguments_verbatim() {
     let cwd = std::env::temp_dir();
     let fixture = FixtureEngine::new("/bin/true");
 
-    let spoke = fixture.session(&["/bin/pwd".to_owned()], &cwd, Duration::from_secs(5));
+    let mut pwd = Command::new("/bin/pwd");
+    pwd.current_dir(&cwd);
+    let spoke = fixture.session(pwd, Duration::from_secs(5));
     let printed = spoke.expect("сессия").stdout;
     assert_eq!(
         std::fs::canonicalize(printed.trim()).expect("pwd напечатал каталог"),
@@ -86,13 +89,10 @@ fn a_session_runs_in_the_given_directory_and_passes_arguments_verbatim() {
         "программа должна была печатать переданный каталог"
     );
 
-    let argv = [
-        "/bin/echo".to_owned(),
-        "alpha beta".to_owned(),
-        "$HOME".to_owned(),
-    ];
+    let mut echo = Command::new("/bin/echo");
+    echo.args(["alpha beta", "$HOME"]).current_dir(&cwd);
     let spoke = fixture
-        .session(&argv, &cwd, Duration::from_secs(5))
+        .session(echo, Duration::from_secs(5))
         .expect("сессия");
     // `$HOME` осталось строкой: shell, который её развернул бы, не запускался.
     assert_eq!(
@@ -105,10 +105,11 @@ fn a_session_runs_in_the_given_directory_and_passes_arguments_verbatim() {
 
 #[test]
 fn a_session_that_outlives_its_budget_is_a_timeout_that_stopped_the_process() {
-    let argv = ["/bin/sleep".to_owned(), "30".to_owned()];
     let budget = Duration::from_millis(200);
     let started = Instant::now();
-    let outcome = FixtureEngine::new("/bin/true").session(&argv, &std::env::temp_dir(), budget);
+    let mut sleep = Command::new("/bin/sleep");
+    sleep.arg("30");
+    let outcome = FixtureEngine::new("/bin/true").session(sleep, budget);
 
     match outcome {
         Err(EngineError::TimedOut { program, timeout }) => {
@@ -126,15 +127,12 @@ fn a_session_that_outlives_its_budget_is_a_timeout_that_stopped_the_process() {
 }
 
 #[test]
-fn an_empty_argv_is_refused_before_anything_is_launched() {
-    let outcome = FixtureEngine::new("/bin/true").session(
-        &[],
-        &std::env::temp_dir(),
-        Duration::from_millis(200),
-    );
+fn a_launch_without_a_program_is_refused_before_anything_is_launched() {
+    let outcome =
+        FixtureEngine::new("/bin/true").session(Command::new(""), Duration::from_millis(200));
 
     match outcome {
         Err(EngineError::EmptyArgv) => {}
-        other => panic!("пустой argv — «запускать нечего», а не {other:?}"),
+        other => panic!("запуск без программы — «запускать нечего», а не {other:?}"),
     }
 }
