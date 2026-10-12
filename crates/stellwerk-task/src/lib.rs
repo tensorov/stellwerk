@@ -2,6 +2,7 @@ pub mod approval;
 pub mod cli;
 pub mod events;
 pub mod evidence;
+pub mod execution;
 pub mod lifecycle;
 pub mod m5;
 pub mod runner;
