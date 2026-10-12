@@ -18,6 +18,10 @@ toml            = { workspace = true }
 thiserror       = { workspace = true }
 clap            = { workspace = true }
 tokio           = { workspace = true }
+# N1-08: цепочка доказательств живёт в отдельной таблице SQLite. Крейт уже есть
+# в [workspace.dependencies] и подключён в stellwerk-store; здесь — только строка,
+# новая внешняя зависимость не появляется.
+rusqlite        = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

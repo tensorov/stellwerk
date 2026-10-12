@@ -3,6 +3,7 @@ pub mod cli;
 pub mod events;
 pub mod evidence;
 pub mod execution;
+pub mod ledger_sqlite;
 pub mod lifecycle;
 pub mod m5;
 pub mod orchestrator;
