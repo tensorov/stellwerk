@@ -17,12 +17,181 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use stellwerk_core::contract::{NetworkPolicy, RiskClass};
+use stellwerk_gateway::permission::{Permission, PermissionError, ToolRisk, RISK_PERMISSION};
+use thiserror::Error;
+
 use crate::m5::sandbox_bwrap::Sandbox;
 use crate::m5::EngineAdapter;
 use crate::runner::{
     stop_reason_from, verdict_for, Call, ExecOutcome, Progress, RunOutcome, StopFacts, Worker,
     WorkerError,
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Реестр риска: класс инструмента живёт в КОДЕ, а не в конфиге репозитория
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Запись реестра: какому модулю принадлежит инструмент и каков его класс риска.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolEntry {
+    /// Модуль — владелец инструмента.
+    pub module: &'static str,
+    /// Имя инструмента.
+    pub tool: &'static str,
+    /// Класс риска, назначенный операции.
+    pub class: RiskClass,
+}
+
+/// Реестр инструментов Stellwerk — единственный авторитет о классе риска.
+///
+/// Живёт в КОДЕ, а не в конфиге репозитория: конфиг правится тем же PR, что
+/// добавляет инструмент, и автор выдал бы разрешение сам себе (ADR-0017).
+/// Классы назначены по смыслу операции (класс принадлежит операции, не модулю),
+/// а не скопированы из конфига. Инструмент вне этого списка — не «R0 по
+/// умолчанию», а `Unclassified`: неизвестное не превращается в разрешённое
+/// чтение (закон 6).
+pub const TOOL_REGISTRY: &[ToolEntry] = &[
+    // gate_report — снимок для чтения, побочного эффекта нет.
+    ToolEntry {
+        module: "polyforge",
+        tool: "gate_report",
+        class: RiskClass::R0,
+    },
+    // gate_evaluate — считает вердикт и меняет состояние гейта в границах прогона.
+    ToolEntry {
+        module: "polyforge",
+        tool: "gate_evaluate",
+        class: RiskClass::R1,
+    },
+    // evidence_append — добавляет запись в журнал доказательств: локальная запись.
+    ToolEntry {
+        module: "polyforge",
+        tool: "evidence_append",
+        class: RiskClass::R1,
+    },
+    // evidence_verify — связывает ToolAttestation, то есть трогает корень доверия.
+    ToolEntry {
+        module: "polyforge",
+        tool: "evidence_verify",
+        class: RiskClass::R3,
+    },
+];
+
+/// Класс риска инструмента — из реестра Stellwerk.
+///
+/// Инструмент вне реестра даёт `Unclassified`, а не `R0`: иначе незнакомый
+/// инструмент неотличим от разрешённого чтения. Класс известного инструмента
+/// сверяется с таблицей вердиктов; отсутствие класса там — это `TableIncomplete`
+/// (дефект крейта), который здесь не глушится тихим отказом.
+///
+/// Конфигурация репозитория не читается вовсе — это видно по сигнатуре.
+pub fn risk_for(tool: &str, module: &str) -> Result<ToolRisk, PermissionError> {
+    let Some(entry) = TOOL_REGISTRY
+        .iter()
+        .find(|entry| entry.tool == tool && entry.module == module)
+    else {
+        return Ok(ToolRisk::Unclassified);
+    };
+    class_covered_in(entry.class, &RISK_PERMISSION).map(|()| ToolRisk::Classified(entry.class))
+}
+
+/// Покрыт ли класс таблицей вердиктов `table`.
+///
+/// Таблица передаётся явно, чтобы отсутствие класса было наблюдаемым: рабочий
+/// путь подставляет сюда ту же `RISK_PERMISSION`, что и gateway (копии нет), а
+/// тест — заведомо неполную таблицу. Производственная `RISK_PERMISSION` сегодня
+/// полна (R0..R5), поэтому без этой двери `TableIncomplete` был бы недостижим.
+pub fn class_covered_in(
+    class: RiskClass,
+    table: &[(RiskClass, Permission)],
+) -> Result<(), PermissionError> {
+    if table.iter().any(|(candidate, _)| *candidate == class) {
+        Ok(())
+    } else {
+        Err(PermissionError::TableIncomplete { risk: class })
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Входной сетевой гейт
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Отказ входного сетевого гейта. Причина обязательна: «отказано» без неё
+/// неотличимо от «не проверяли» (закон 6).
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("network input gate refused `{url}`: {reason}")]
+pub struct NetworkRefusal {
+    /// Адрес, который прогон пытался заявить.
+    pub url: String,
+    /// Почему политика его не пропустила.
+    pub reason: String,
+}
+
+/// Разрешено ли запуску ПОПЫТАТЬСЯ выйти по адресу — ДО старта процесса.
+///
+/// Это гейт по ВХОДУ, а не вторая блокировка egress: `Sandbox::argv` уже несёт
+/// `--unshare-net`, поэтому у песочницы сети нет вовсе, и блокировать дважды
+/// нечего. Здесь проверяется лишь то, что прогону РАЗРЕШЕНО попытаться. Разбор
+/// хоста не дублируется — он живёт в `NetworkPolicy::allows`; тот же вызов
+/// отвергает пустую строку при `Deny` (инвариант контракта).
+pub fn network_gate(policy: &NetworkPolicy, url: &str) -> Result<(), NetworkRefusal> {
+    if policy.allows(url) {
+        Ok(())
+    } else {
+        Err(NetworkRefusal {
+            url: url.to_owned(),
+            reason: format!("policy {policy:?} does not permit this url"),
+        })
+    }
+}
+
+/// Сетевой замысел запуска. «Не заявлен» — отдельное состояние, а не «разрешено
+/// всё»: если выхода не заявлено, гейтировать нечего (закон 6).
+#[derive(Debug, Clone)]
+enum NetworkIntent {
+    /// Прогон не заявлял сетевой выход.
+    NotRequested,
+    /// Прогон собирается попытаться выйти по адресу под данной политикой.
+    Attempt { policy: NetworkPolicy, url: String },
+}
+
+/// Вердикт сетевого гейта внутри записи. Три разных исхода, а не «ок/не ок».
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NetworkVerdict {
+    /// Сетевой выход не заявлен.
+    NotRequested,
+    /// Адрес разрешён политикой.
+    Allowed(String),
+    /// Адрес отвергнут политикой.
+    Refused(String),
+}
+
+/// Запись входного гейта, снятая один раз, до старта процесса.
+///
+/// Класс риска ЗАХВАЧЕН здесь: чтение не пересчитывает его по реестру, иначе
+/// запись показывала бы сегодняшний реестр, а не тот, которым гейтировали (тот
+/// же захват, что у `ResolvedExecution`, ADR-0015).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GateRecord {
+    /// Класс риска из реестра Stellwerk.
+    pub risk: ToolRisk,
+    /// Вердикт сетевого гейта.
+    pub network: NetworkVerdict,
+}
+
+/// Состояние гейта. «Ещё не гейтировали», «решено» и «отказано» — три РАЗНЫХ
+/// состояния, а не «есть/нет»: отказанный запуск не имеет записи, и это не то
+/// же самое, что запуск без гейта (закон 6).
+#[derive(Debug, Clone)]
+enum GateState {
+    /// `exec` ещё не начинался.
+    Pending,
+    /// Гейт снят и запись захвачена.
+    Decided(GateRecord),
+    /// Гейт отказал; причина сохранена.
+    Refused(String),
+}
 
 /// Воркер, запускающий движок ВНУТРИ песочницы через адаптер.
 ///
@@ -41,6 +210,10 @@ pub struct SandboxWorker<A> {
     /// текстом (сигнатура из M4 не переписывается), а `evaluate()` требует `RunOutcome`;
     /// поэтому измерение живёт здесь и выдаётся через `last_outcome`/`last_refusal`.
     measure: Arc<Mutex<Measure>>,
+    /// Сетевой замысел запуска, если он заявлен. Без заявления гейтировать нечего.
+    network: NetworkIntent,
+    /// Запись входного гейта. Захвачена в начале `exec`, до старта процесса.
+    gate: Arc<Mutex<GateState>>,
 }
 
 /// Состояние замера последнего запуска. Три РАЗНЫХ состояния, а не «есть/нет»: «замера
@@ -78,7 +251,63 @@ impl<A> SandboxWorker<A> {
             env,
             spawned: AtomicUsize::new(0),
             measure: Arc::new(Mutex::new(Measure::Pending)),
+            network: NetworkIntent::NotRequested,
+            gate: Arc::new(Mutex::new(GateState::Pending)),
         }
+    }
+
+    /// Заявить сетевой выход, который запуск СОБИРАЕТСЯ попробовать. Проверка —
+    /// в `exec`, до старта процесса. Без этого вызова гейтировать нечего, и это
+    /// отличается от «политика разрешила»: незаявленный выход даёт `NotRequested`.
+    pub fn with_network(mut self, policy: NetworkPolicy, url: impl Into<String>) -> Self {
+        self.network = NetworkIntent::Attempt {
+            policy,
+            url: url.into(),
+        };
+        self
+    }
+
+    /// Захваченная запись входного гейта, если он снят и не отказал. `None` —
+    /// гейта ещё не было ЛИБО он отказал; это не одно и то же, и отказанная
+    /// причина видна через `last_gate_refusal`.
+    pub fn last_gate(&self) -> Option<GateRecord> {
+        match &*self.lock_gate() {
+            GateState::Decided(record) => Some(record.clone()),
+            GateState::Pending | GateState::Refused(_) => None,
+        }
+    }
+
+    /// Почему входной гейт отказал. `None` — отказа не было.
+    pub fn last_gate_refusal(&self) -> Option<String> {
+        match &*self.lock_gate() {
+            GateState::Refused(reason) => Some(reason.clone()),
+            GateState::Pending | GateState::Decided(_) => None,
+        }
+    }
+
+    /// Достать замок гейта, переживший панику потока с ним: отравление — это
+    /// «другой поток упал», а не «гейта не было» (закон 6).
+    fn lock_gate(&self) -> std::sync::MutexGuard<'_, GateState> {
+        self.gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Снять входной гейт: класс из реестра и вердикт сети. Отказ означает, что
+    /// процесс не стартует. `Unclassified` отказом НЕ является: решение о нём
+    /// принимает слой разрешений (`permission_for`), а не воркер, иначе два
+    /// разных отказа слились бы в один.
+    fn preflight(&self, tool: &str, module: &str) -> Result<GateRecord, String> {
+        let risk =
+            risk_for(tool, module).map_err(|err| format!("risk registry is incomplete: {err}"))?;
+        let network = match &self.network {
+            NetworkIntent::NotRequested => NetworkVerdict::NotRequested,
+            NetworkIntent::Attempt { policy, url } => match network_gate(policy, url) {
+                Ok(()) => NetworkVerdict::Allowed(url.clone()),
+                Err(refusal) => return Err(refusal.to_string()),
+            },
+        };
+        Ok(GateRecord { risk, network })
     }
 
     /// Последний измеренный прогон. `None` — замер не состоялся (ещё не запускали или
@@ -141,9 +370,23 @@ impl<A: EngineAdapter + Sync> Worker for SandboxWorker<A> {
     fn exec(
         &self,
         _workspace_ref: &str,
-        _call: &Call,
+        call: &Call,
     ) -> Pin<Box<dyn Future<Output = Result<ExecOutcome, WorkerError>> + Send + '_>> {
+        // Идентичность вызова копируется ДО асинхронного блока: иначе его заимствование
+        // связало бы будущее с временем жизни `call`, а контракт `Worker::exec` привязывает
+        // его к `&self`.
+        let tool = call.tool.clone();
+        let module = call.module.clone();
         Box::pin(async move {
+            // Входной гейт — ДО `spawned`: отказанный запуск не стартует процесс и
+            // не считается попыткой запуска.
+            match self.preflight(&tool, &module) {
+                Ok(record) => *self.lock_gate() = GateState::Decided(record),
+                Err(reason) => {
+                    *self.lock_gate() = GateState::Refused(reason.clone());
+                    return Err(WorkerError(reason));
+                }
+            }
             self.spawned.fetch_add(1, Ordering::SeqCst);
             // Подготовленный запуск: `bwrap`-argv собирает песочница, а не адаптер.
             let args: Vec<&str> = self.args.iter().map(String::as_str).collect();
