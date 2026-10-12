@@ -1,124 +1,156 @@
-//! RED-спецификация песочницы: внутри да, `..`-выход нет, корень напечатан скриптом,
-//! программа и аргументы идут ВНУТРИ; отказ скрипта — `Failed` со своим кодом и `stderr`,
-//! отсутствие скрипта — `Spawn`, иначе «нет данных» станет «выдуманной причиной» (закон 6).
-//! `sandbox.sh` тянет `git archive` по всему репо, поэтому подмена идёт через
-//! `STELLWERK_SANDBOX` под `ENV_LOCK`, а импорт — публичный API, не `#[path]` (F-14).
+//! N1-04: `RunRequest` несёт НАСТОЯЩУЮ песочницу (`m5::sandbox_bwrap`), а не битый
+//! `ShellSandbox`, и эта песочница отвергает запуск ДО старта процесса.
+//!
+//! Прежняя версия подставляла подменную песочницу через переменную окружения и проверяла
+//! второй тип, чей `prepare` гарантированно падал: `scripts/worker/sandbox.sh` не имеет
+//! argv и печатал пустоту, а `parse_root` возвращал `None`. Подмена маскировала этот
+//! дефект. Здесь нет ни переменной окружения, ни скрипта — только настоящий тип поля и
+//! его настоящие отказы.
 
-use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use stellwerk_task::sandbox::{Sandbox, SandboxError};
+use stellwerk_core::contract::{DataClass, ModelBinding, RetentionClass, TaskLimits, TaskSpec};
+use stellwerk_task::m5::sandbox_bwrap::{Sandbox, SandboxError};
+use stellwerk_task::runner::RunRequest;
 
-static ENV_LOCK: Mutex<()> = Mutex::new(());
-static NEXT: AtomicU32 = AtomicU32::new(0);
+/// Окно больше бюджета: иначе отказ был бы про окно, а не про путь или историю.
+const WINDOW: Duration = Duration::from_secs(60);
+const BUDGET: Duration = Duration::from_secs(30);
+/// Программа запуска: до `spawn` дело не доходит, поэтому важен лишь её путь.
+const TRUE: &str = "/bin/true";
 
-#[test]
-fn boundary_holds_and_runs_inside_with_arguments() {
-    let fake = Fake::creating();
-    let sb = prepare(&fake, "deadbeef").expect("подделка обязана собрать песочницу");
-    let root = &fake.root;
-    let root_text = fake.root.to_string_lossy();
-    let escape = root.join("../выбрались");
+/// Временный каталог фикстуры: имя по тегу и pid, уборка на `Drop` — `temp` не засоряется.
+struct Scratch(PathBuf);
 
-    assert_eq!(sb.root(), root.as_path(), "корень напечатан скриптом");
-    assert!(sb.contains_path(&root.join("src/lib.rs")));
-    assert!(!sb.contains_path(&escape), "`..`-выход — false");
-    assert!(!sb.contains_path(root.parent().unwrap()), "каталог снаружи");
+impl Scratch {
+    fn new(tag: &str) -> Self {
+        let named = format!("sw-n1-04-{tag}-{}", std::process::id());
+        let dir = std::env::temp_dir().join(named);
+        std::fs::create_dir_all(&dir).expect("каталог фикстуры создан");
+        Self(dir)
+    }
 
-    let args = ["-c", r#"pwd; printf ' %s' "$1""#, "sh", "аргумент"];
-    let out = sb.command_in("sh", &args).output().expect("запуск");
-    let said = String::from_utf8_lossy(&out.stdout).trim().to_string();
-
-    assert!(out.status.success(), "программа отработала");
-    assert!(said.starts_with(&*root_text), "каталог программы: {said:?}");
-    assert!(said.ends_with(" аргумент"), "аргументы дойдут: {said:?}");
-}
-
-#[test]
-fn refusing_script_is_failed_with_its_own_words() {
-    let refused = prepare(&Fake::refusing(), "deadbeef").expect_err("exit 4 — это Err");
-
-    match refused {
-        SandboxError::Failed { status, stderr } => {
-            assert_eq!(status.code(), Some(4), "код дошёл");
-            assert!(stderr.contains("BLOCKED"), "причина: {stderr:?}");
-        }
-        other => panic!("отказавший скрипт — это Failed: {other:?}"),
+    fn root(&self) -> &Path {
+        &self.0
     }
 }
 
-#[test]
-fn missing_script_is_spawn_and_not_failure() {
-    let fake = Fake::missing();
-    let refused = prepare(&fake, "deadbeef").expect_err("нечего запускать — Err");
-
-    match refused {
-        SandboxError::Spawn { program, .. } => {
-            let named = fake.script.to_string_lossy();
-            assert_eq!(program, named, "назван непрошеный скрипт")
-        }
-        other => panic!("нет скрипта — это Spawn, а не Failed: {other:?}"),
-    }
-}
-
-/// Подделка `sandbox.sh`: скрипт сам создаёт `root` и печатает его — контракт `sandbox_create`.
-struct Fake {
-    dir: PathBuf,
-    script: PathBuf,
-    root: PathBuf,
-}
-
-impl Fake {
-    fn creating() -> Self {
-        Self::new("ok", "mkdir -p '{root}'; printf '%s' '{root}'")
-    }
-
-    fn refusing() -> Self {
-        Self::new("refused", "echo BLOCKED >&2; exit 4")
-    }
-
-    fn missing() -> Self {
-        let mut fake = Self::new("gone", "");
-        fake.script = fake.dir.join("нет-такого-скрипта.sh");
-        fake
-    }
-
-    /// Пишется через `sh -c` и делается исполняемой: её обязаны писать и запускать как
-    /// настоящий скрипт, иначе тест проверяет сам себя. `{root}` — каталог, который скрипт
-    /// создаёт; имя уникально на запуск: `tempfile` в крейте нет.
-    fn new(kind: &str, template: &str) -> Self {
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let pid = std::process::id();
-        let dir = std::env::temp_dir().join(format!("sw-{kind}-{pid}-{n}"));
-        fs::create_dir_all(&dir).expect("временный каталог создаётся");
-        let root = dir.join("box");
-        let script = dir.join("sandbox.sh");
-        let body = template.replace("{root}", &root.display().to_string());
-        let sh = ["-c", "printf '%s' \"$1\" > \"$2\"; chmod +x \"$2\"", "sh"];
-        let mut writer = Command::new("sh");
-        let written = writer.args(sh).arg(body).arg(&script).status();
-        assert!(written.expect("sh -c").success(), "подделка создана");
-        Self { dir, script, root }
-    }
-}
-
-impl Drop for Fake {
+impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.dir);
+        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
-fn prepare(fake: &Fake, base_commit: &str) -> Result<Sandbox, SandboxError> {
-    let _serialized = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let before = std::env::var_os("STELLWERK_SANDBOX");
-    std::env::set_var("STELLWERK_SANDBOX", &fake.script);
-    let prepared = Sandbox::prepare(base_commit);
-    match before {
-        Some(was) => std::env::set_var("STELLWERK_SANDBOX", was),
-        None => std::env::remove_var("STELLWERK_SANDBOX"),
+fn spec() -> TaskSpec {
+    TaskSpec {
+        id: "n1-04".to_owned(),
+        goal: "мигрировать RunRequest на настоящую песочницу".to_owned(),
+        workspace_ref: "ws-stellwerk".to_owned(),
+        model_ref: "n1-04".to_owned(),
+        packet: "RunRequest несёт m5::sandbox_bwrap::Sandbox".to_owned(),
+        limits: TaskLimits {
+            max_files: 3,
+            max_diff_lines: 200,
+            timeout_seconds: 900,
+            max_retries: 0,
+            context_budget_tokens: 40_000,
+            data_class: DataClass::Internal,
+        },
+        evidence_policy: "cargo test -p stellwerk-task --test sandbox".to_owned(),
     }
-    prepared
+}
+
+fn binding() -> ModelBinding {
+    ModelBinding {
+        id: "n1-04".to_owned(),
+        provider: "neuraldeep".to_owned(),
+        model_id: "m".to_owned(),
+        data_class: DataClass::Public,
+        retention: RetentionClass::FirstParty,
+        context_window: 200_000,
+        max_output: 8_000,
+        budget_tokens_per_task: 43_000,
+    }
+}
+
+/// `RunRequest` с настоящей песочницей над каталогом фикстуры: каталоги создаёт
+/// вызывающий, конструктор песочницы не пишет ничего.
+fn request_at(root: &Path) -> RunRequest {
+    let (work, tmp) = (root.join("work"), root.join("tmp"));
+    std::fs::create_dir_all(&work).expect("рабочая копия создана");
+    std::fs::create_dir_all(&tmp).expect("каталог временных файлов создан");
+    RunRequest {
+        spec: spec(),
+        model: binding(),
+        sandbox: Sandbox {
+            work,
+            tmp,
+            read_only: Vec::new(),
+            window: WINDOW,
+        },
+    }
+}
+
+/// Поле несёт настоящую песочницу: она собирает `bwrap`-команду, а не зовёт shell-скрипт.
+#[test]
+fn run_request_carries_the_real_sandbox_that_builds_a_bwrap_command_inside_the_working_copy() {
+    let scratch = Scratch::new("migrated");
+    let request = request_at(scratch.root());
+
+    assert_eq!(
+        request.sandbox.work,
+        scratch.root().join("work"),
+        "поле RunRequest — рабочая копия настоящей песочницы",
+    );
+
+    let built = request
+        .sandbox
+        .command(&request.sandbox.work, Path::new(TRUE), &[], BUDGET)
+        .expect("внутри рабочей копии запуск разрешён");
+    assert_eq!(
+        built.get_program().to_string_lossy(),
+        "bwrap",
+        "команда — настоящий bwrap, а не `sh scripts/worker/sandbox.sh`",
+    );
+}
+
+/// Настоящий отказ ДО запуска: `..` уводит путь записи за корень рабочей копии.
+#[test]
+fn run_request_sandbox_refuses_a_write_path_that_escapes_the_working_copy() {
+    let scratch = Scratch::new("outside");
+    let request = request_at(scratch.root());
+
+    let escape = request.sandbox.work.join("../outside.txt");
+    let refused = request
+        .sandbox
+        .command(&escape, Path::new(TRUE), &[], BUDGET)
+        .expect_err("путь снаружи обязан быть отвергнут до запуска");
+    match refused {
+        SandboxError::Outside { path, .. } => {
+            assert_eq!(
+                path,
+                scratch.root().join("outside.txt"),
+                "назван нормализованный путь"
+            );
+        }
+        other => panic!("ожидался Outside, а не {other:?}"),
+    }
+}
+
+/// `.git` внутри — это клон, а не выгрузка состояния: отказ до запуска.
+#[test]
+fn run_request_sandbox_refuses_a_working_copy_that_holds_history() {
+    let scratch = Scratch::new("history");
+    let request = request_at(scratch.root());
+    std::fs::create_dir_all(request.sandbox.work.join(".git")).expect("клон создан");
+
+    let refused = request
+        .sandbox
+        .command(&request.sandbox.work, Path::new(TRUE), &[], BUDGET)
+        .expect_err("копия с историей обязана быть отвергнута до запуска");
+    match refused {
+        SandboxError::History { path } => assert!(path.ends_with(".git"), "{path:?}"),
+        other => panic!("ожидался History, а не {other:?}"),
+    }
 }

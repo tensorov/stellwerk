@@ -1,7 +1,7 @@
 //! # Запуск воркера и разбор потока Pi
 //!
 //! Раннер — граница, где чужой процесс становится событиями федерации: Pi стартует
-//! ВНУТРИ песочницы (`command_in` отдаёт непрочитанную команду, чтобы отказ программы
+//! ВНУТРИ песочницы (`command` отдаёт непрочитанную команду, чтобы отказ программы
 //! не слился с отказом песочницы), а его stdout читается построчно.
 //!
 //! Поток — НЕдоверенный ввод, и строка может оказаться не-JSON. Молча пропустить её
@@ -15,7 +15,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::events::now_rfc3339;
-use crate::sandbox::Sandbox;
+use crate::m5::sandbox_bwrap::Sandbox;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use stellwerk_core::contract::{DataClass, Event, EventRisk, ModelBinding, PolicyLevel, TaskSpec};
