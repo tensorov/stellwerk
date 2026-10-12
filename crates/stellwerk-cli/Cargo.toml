@@ -5,11 +5,19 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+# N1-10: единственный бинарник `stellwerk` в workspace. Бинарник `stellwerk-task`
+# остаётся (авто-имя от имени пакета), а `stellwerk-registry` становится lib-only.
+[[bin]]
+name = "stellwerk"
+path = "src/main.rs"
+
 [dependencies]
 stellwerk-core = { path = "../stellwerk-core" }
 stellwerk-task = { path = "../stellwerk-task" }
 stellwerk-store = { path = "../stellwerk-store" }
 stellwerk-gateway = { path = "../stellwerk-gateway" }
+# N1-10: подкоманда `module` делегирует в registry — логика команд не дублируется.
+stellwerk-registry = { path = "../stellwerk-registry" }
 clap = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

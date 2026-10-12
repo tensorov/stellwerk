@@ -1,36 +1,32 @@
-//! `stellwerk-cli` — минимальный вход в федерацию: `run <task.toml>`.
+//! `stellwerk-cli` — единый вход в федерацию: `run <task.toml>` и `module ...`.
 //!
-//! N1-01: вертикальный срез. Читает task.toml, поднимает процесс ВНУТРИ bwrap с
-//! очищенным окружением, проводит его через `runner::run_once`, пишет чек в SQLite
-//! и печатает вердикт вместе с настоящим идентификатором чека.
-//!
-//! Движок захардкожен (`/bin/echo`): это smoke процесса, а не proof агентного
-//! успеха. Настоящий движок — N1-02/N1-05.
+//! N1-10: `run` собирает всю цепочку N1 на fixture-агенте: вердикт → receipt →
+//! Pi-`RunOutcome` → evidence-цепочка → статус «ждёт человека». `module`
+//! делегирует в `stellwerk_registry` — логика команд не дублируется.
 
-use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand};
 use stellwerk_core::contract::{ModelBinding, PolicyLevel, RetentionClass, RiskClass};
 use stellwerk_gateway::permission::ToolRisk;
 use stellwerk_store::{EventStore, SqliteStore};
+use stellwerk_task::evidence::{evidence_status, model_claim, tool_attestation, EvidenceLedger};
+use stellwerk_task::ledger_sqlite::SqliteEvidenceLedger;
 use stellwerk_task::m5::sandbox_bwrap::Sandbox;
-use stellwerk_task::runner::{
-    run_once, Call, CallAttempt, CallVerdict, ExecOutcome, Worker, WorkerError,
-};
+use stellwerk_task::m5::FixtureEngine;
+use stellwerk_task::orchestrator::SandboxWorker;
+use stellwerk_task::runner::{run_once, Call, CallAttempt, CallVerdict, Verdict};
 use stellwerk_task::taskfile::TaskFile;
 use tokio::runtime::Runtime;
 
 /// Системные каталоги, смонтированные в песочницу ТОЛЬКО НА ЧТЕНИЕ. bwrap стартует
-/// с пустым корнем, поэтому без них `/bin/echo` нечем запустить. Шире
-/// (`--ro-bind / /`) не берём: биндить весь хост-корень на чтение незачем, когда
-/// программе нужен ровно этот набор:
+/// с пустым корнем, поэтому без них `sh` нечем запустить. Шире (`--ro-bind / /`)
+/// не берём: биндить весь хост-корень на чтение незачем, когда программе нужен
+/// ровно этот набор:
 ///   * `/usr`  — сами бинарники (`usr/bin`) и разделяемые библиотеки (`usr/lib`), в т.ч. libc;
-///   * `/bin`  — точка входа `/bin/echo` (`/bin` — симлинк на `usr/bin` при usr-merge);
+///   * `/bin`  — точка входа `/bin/sh` (`/bin` — симлинк на `usr/bin` при usr-merge);
 ///   * `/lib`, `/lib64` — динамический загрузчик и libc (`ld-linux-x86-64.so.2`, симлинки в `usr/lib`);
 ///   * `/etc`  — системная конфигурация, которую может запросить libc (NSS, локаль).
 const SYSTEM_READ_ONLY: &[&str] = &["/usr", "/bin", "/lib", "/lib64", "/etc"];
@@ -40,7 +36,7 @@ const SYSTEM_READ_ONLY: &[&str] = &["/usr", "/bin", "/lib", "/lib64", "/etc"];
 static UNIQUE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Parser)]
-#[command(name = "stellwerk-cli")]
+#[command(name = "stellwerk")]
 struct Cli {
     #[command(subcommand)]
     cmd: Commands,
@@ -53,84 +49,12 @@ enum Commands {
         /// Path to the task.toml file
         path: PathBuf,
     },
-}
-
-type Exec<'a> = Pin<Box<dyn Future<Output = Result<ExecOutcome, WorkerError>> + Send + 'a>>;
-
-/// Воркер smoke-прогона: запускает `/bin/echo <goal>` внутри bwrap.
-struct EchoWorker {
-    goal: String,
-    window: Duration,
-    /// Сколько раз воркер ФАКТИЧЕСКИ запускали, включая упавшие запуски.
-    spawned: Arc<AtomicUsize>,
-}
-
-impl EchoWorker {
-    fn new(goal: String, window: Duration) -> Self {
-        Self {
-            goal,
-            window,
-            spawned: Arc::new(AtomicUsize::new(0)),
-        }
-    }
-}
-
-impl Worker for EchoWorker {
-    fn exec(&self, _workspace_ref: &str, _call: &Call) -> Exec<'_> {
-        Box::pin(async move {
-            self.spawned.fetch_add(1, Ordering::SeqCst);
-            let work = unique_temp_path("work", "").map_err(WorkerError)?;
-            // `tmp` — ОТДЕЛЬНЫЙ каталог: общий `/tmp` у двух песочниц — гонка за один файл.
-            let tmp = unique_temp_path("tmp", "").map_err(WorkerError)?;
-            std::fs::create_dir_all(&work).map_err(|e| WorkerError(e.to_string()))?;
-            std::fs::create_dir_all(&tmp).map_err(|e| WorkerError(e.to_string()))?;
-
-            let sandbox = Sandbox {
-                work: work.clone(),
-                tmp: tmp.clone(),
-                read_only: SYSTEM_READ_ONLY.iter().map(PathBuf::from).collect(),
-                window: self.window,
-            };
-
-            let mut command = sandbox
-                .command(
-                    &work,
-                    Path::new("/bin/echo"),
-                    &[self.goal.as_str()],
-                    self.window,
-                )
-                .map_err(|e| WorkerError(format!("sandbox refused the run: {e}")))?;
-            // N1: окружение порождённого процесса ОЧИЩЕНО. `command()` уже вернул
-            // готовый `Command`, поэтому `m5/*` здесь не трогается.
-            command.env_clear();
-
-            let output = tokio::process::Command::from(command)
-                .output()
-                .await
-                .map_err(|e| WorkerError(format!("process did not start: {e}")))?;
-
-            // Провал запуска НЕЛЬЗЯ вернуть как успех: иначе `run_once` запишет
-            // `Succeeded`, а CLI напечатает `verdict=Allow` при пустом выводе —
-            // «misleading success» с неработающей изоляцией.
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(WorkerError(format!(
-                    "process failed ({}): {}",
-                    output.status,
-                    stderr.trim()
-                )));
-            }
-
-            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-            let _ = std::fs::remove_dir_all(&work);
-            let _ = std::fs::remove_dir_all(&tmp);
-            Ok(ExecOutcome { output: stdout })
-        })
-    }
-
-    fn spawned(&self) -> usize {
-        self.spawned.load(Ordering::SeqCst)
-    }
+    /// Manage federation modules (delegated to stellwerk-registry)
+    Module {
+        /// Arguments forwarded to the registry CLI
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<std::ffi::OsString>,
+    },
 }
 
 fn main() {
@@ -142,6 +66,14 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Commands::Module { args } => {
+            let mut argv = vec![
+                std::ffi::OsString::from("stellwerk"),
+                std::ffi::OsString::from("module"),
+            ];
+            argv.extend(args);
+            std::process::exit(stellwerk_registry::cli::run(argv));
+        }
     }
 }
 
@@ -151,8 +83,23 @@ fn run_task(path: &Path) -> Result<(), String> {
         .into_spec()
         .map_err(|e| format!("task file `{}`: {e}", path.display()))?;
 
-    // Окно песочницы — из лимитов задачи, а не из константы.
+    // Фикстура лежит РЯДОМ с файлом задачи: `pi-smoke.toml` указывает на
+    // `pi-fixture.sh` своим расположением, а не полем в TOML (схема TaskFile
+    // программу не несёт).
+    let fixture_src = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("pi-fixture.sh");
+    if !fixture_src.is_file() {
+        return Err(format!(
+            "fixture `{}` not found next to the task file: N1 runs on the fixture agent",
+            fixture_src.display()
+        ));
+    }
+
+    // Окно песочницы — из лимитов задачи; бюджет исполнения обязан помещаться в окно.
     let window = Duration::from_secs(spec.limits.timeout_seconds);
+    let budget = window;
 
     // База чека — уникальный файл на прогон: последовательные прогоны одной задачи не
     // делят `events.id` (счётчик чека в раннере начинается с нуля на каждый процесс).
@@ -160,19 +107,51 @@ fn run_task(path: &Path) -> Result<(), String> {
     let store = SqliteStore::open(&db_path)
         .map_err(|e| format!("open store `{}`: {e}", db_path.display()))?;
 
-    let worker = EchoWorker::new(spec.goal.clone(), window);
+    // Цепочка доказательств — ОТДЕЛЬНАЯ база: отказ её хранилища не имеет права
+    // ронять event-лог (ledger_sqlite.rs).
+    let ledger_path = unique_temp_path("evidence", "db")?;
+    let mut ledger = SqliteEvidenceLedger::open(&ledger_path)
+        .map_err(|e| format!("open evidence ledger `{}`: {e}", ledger_path.display()))?;
+
+    // Рабочий каталог песочницы: фикстура копируется ВНУТРЬ, а не запускается с хоста.
+    let work = unique_temp_path("work", "")?;
+    let tmp = unique_temp_path("tmp", "")?;
+    std::fs::create_dir_all(&work).map_err(|e| format!("create work dir: {e}"))?;
+    std::fs::create_dir_all(&tmp).map_err(|e| format!("create tmp dir: {e}"))?;
+    std::fs::copy(&fixture_src, work.join("pi-fixture.sh"))
+        .map_err(|e| format!("copy fixture into sandbox: {e}"))?;
+
+    let sandbox = Sandbox {
+        work: work.clone(),
+        tmp: tmp.clone(),
+        read_only: SYSTEM_READ_ONLY.iter().map(PathBuf::from).collect(),
+        window,
+    };
+
+    let sh = in_system(&["/usr/bin/sh", "/bin/sh"])?;
+    let worker = SandboxWorker::new(
+        FixtureEngine::new("/bin/true"),
+        sandbox,
+        sh.clone(),
+        vec!["pi-fixture.sh".to_string()],
+        budget,
+        Vec::new(),
+    );
 
     let attempt = CallAttempt {
         task_id: spec.id.clone(),
         call: Call {
-            tool: "echo".to_string(),
+            tool: "fixture".to_string(),
             module: "stellwerk-cli".to_string(),
+            // Явный R0, как в N1-01: fixture-агент — локальное чтение без побочных
+            // эффектов. `risk_for` реестра его не знает и дал бы `Unclassified`, а
+            // неизвестное в неинтерактивном прогоне обязано стать отказом.
             risk: ToolRisk::Classified(RiskClass::R0),
             data: spec.limits.data_class,
             model: ModelBinding {
                 id: spec.model_ref.clone(),
                 provider: "local".to_string(),
-                model_id: "echo".to_string(),
+                model_id: "fixture".to_string(),
                 data_class: spec.limits.data_class,
                 retention: RetentionClass::FirstParty,
                 context_window: 1_000,
@@ -189,22 +168,66 @@ fn run_task(path: &Path) -> Result<(), String> {
     let outcome = runtime.block_on(run_once(&attempt, &worker, &store));
 
     // Чек читается ОБРАТНО из хранилища: печатать `task_id` под видом чека — подделка.
-    let receipt = runtime.block_on(receipt_id(&store, &attempt.task_id));
+    let receipt = runtime.block_on(receipt(&store, &attempt.task_id));
 
     match outcome {
         Ok(verdict) => {
-            let id = receipt?;
+            let (id, digest, ts) = receipt?;
+            // Pi-RunOutcome: замер обязан состояться, и вердикт прогона — Valid.
+            // Голый `ExecOutcome` результатом не является (N1-05).
+            let measured = worker.last_outcome().ok_or_else(|| {
+                format!(
+                    "run produced no measured outcome: {}",
+                    worker
+                        .last_refusal()
+                        .unwrap_or_else(|| "no refusal recorded".to_string())
+                )
+            })?;
+            if measured.verdict != Verdict::Valid {
+                return Err(format!(
+                    "run outcome is not Valid: {:?} (stop={:?}, steps={}, turns={})",
+                    measured.verdict, measured.stop_reason, measured.tool_steps, measured.turns
+                ));
+            }
+            // Evidence-цепочка: утверждение модели + удостоверение фактического
+            // запуска. Обе записи ссылаются на дайджест вывода из чека и несут
+            // метку времени самого прогона (чека), а не момент записи.
+            let command = format!("{} pi-fixture.sh", sh.display());
+            let chain = vec![
+                model_claim(
+                    &attempt.task_id,
+                    &format!("{}-claim", attempt.task_id),
+                    &digest,
+                    &ts,
+                ),
+                tool_attestation(
+                    &attempt.task_id,
+                    &format!("{}-attest", attempt.task_id),
+                    &command,
+                    &digest,
+                    &ts,
+                ),
+            ];
+            for entry in &chain {
+                ledger
+                    .append(entry)
+                    .map_err(|e| format!("evidence append: {e}"))?;
+            }
+            // Статус по цепочке: удостоверение есть, решения человека нет — «ждёт
+            // человека». `Done`/`gate PASS` не выводятся (решение 5).
+            let status = evidence_status(&chain).label();
             println!(
-                "verdict={} receipt={} store={}",
+                "verdict={} receipt={} store={} gate={}",
                 verdict_name(&verdict),
                 id,
-                db_path.display()
+                db_path.display(),
+                status
             );
             Ok(())
         }
         Err(err) => {
             match receipt {
-                Ok(id) => eprintln!("receipt={} store={}", id, db_path.display()),
+                Ok((id, _, _)) => eprintln!("receipt={} store={}", id, db_path.display()),
                 Err(receipt_err) => eprintln!("receipt_error={receipt_err}"),
             }
             Err(format!("run failed: {}", err.0))
@@ -212,19 +235,25 @@ fn run_task(path: &Path) -> Result<(), String> {
     }
 }
 
-/// Идентификатор чека `run.call` для задачи. Чек пишет `run_once`; отсутствие чека —
-/// состояние, а не пустая строка: прогон без следа неотличим от небывшего.
-async fn receipt_id(store: &SqliteStore, task_id: &str) -> Result<String, String> {
+/// Чек `run.call` для задачи: id, дайджест вывода и метка времени, прочитанные
+/// обратно из SQLite. Отсутствие чека — состояние, а не пустая строка: прогон
+/// без следа неотличим от небывшего.
+async fn receipt(store: &SqliteStore, task_id: &str) -> Result<(String, String, String), String> {
     let events = store
         .list_by_task(task_id)
         .await
         .map_err(|e| format!("read receipts for `{task_id}`: {e}"))?;
-    events
+    let event = events
         .iter()
         .rev()
         .find(|event| event.event_type == "run.call")
-        .map(|event| event.id.clone())
-        .ok_or_else(|| format!("no run.call receipt written for `{task_id}`"))
+        .ok_or_else(|| format!("no run.call receipt written for `{task_id}`"))?;
+    let digest = event
+        .payload
+        .get("output_sha256")
+        .cloned()
+        .ok_or_else(|| format!("run.call receipt for `{task_id}` has no output_sha256"))?;
+    Ok((event.id.clone(), digest, event.ts.clone()))
 }
 
 fn verdict_name(verdict: &CallVerdict) -> String {
@@ -234,6 +263,15 @@ fn verdict_name(verdict: &CallVerdict) -> String {
         CallVerdict::Suspended => "Suspended".to_string(),
         CallVerdict::Deny { reason } => format!("Deny reason={reason}"),
     }
+}
+
+/// Первый существующий путь из списка: `/usr/bin/sh` при usr-merge, иначе `/bin/sh`.
+fn in_system(names: &[&str]) -> Result<PathBuf, String> {
+    names
+        .iter()
+        .map(PathBuf::from)
+        .find(|p| p.is_file())
+        .ok_or_else(|| format!("none of {names:?} exists on this system"))
 }
 
 /// Уникальный путь под `temp_dir` с расширением (`""` — без расширения).

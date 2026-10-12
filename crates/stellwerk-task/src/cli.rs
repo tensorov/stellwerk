@@ -15,7 +15,6 @@ use crate::taskfile::TaskFile;
 
 /// Stellwerk task orchestrator
 #[derive(Debug, Parser)]
-#[command(name = "stellwerk")]
 pub struct Cli {
     #[command(subcommand)]
     pub task: TopLevelCommands,
@@ -128,8 +127,8 @@ fn run_with(cli: Cli, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 Ok(Some(_)) => watch_events(&store, &id, out, err).await,
                 Err(e) => fail(err, &format!("error: store: {e}")),
             },
-            TaskCommands::Cancel { .. } => stub("cancel", "packet-06", err),
-            TaskCommands::Logs { .. } => stub("logs", "packet-12", err),
+            TaskCommands::Cancel { .. } => stub("cancel", "N2+", err),
+            TaskCommands::Logs { .. } => stub("logs", "N2+", err),
         }
     })
 }
@@ -376,7 +375,7 @@ mod tests {
         // заменил на чтение событий, и проверка этого контракта живёт теперь в
         // `tests/cli_watch.rs` тремя случаями вместо одной заглушки. `cancel` и
         // `logs` остаются заглушками — их утверждения не тронуты.
-        for (command, packet) in [("cancel", "packet-06"), ("logs", "packet-12")] {
+        for (command, packet) in [("cancel", "N2+"), ("logs", "N2+")] {
             let (rc, out, err) = run_capture(&[command, "t-1"]);
             assert_eq!(rc, 1, "{command} обязан вернуть 1 (п.4)");
             assert_eq!(out, "", "{command} не должен печатать в stdout");

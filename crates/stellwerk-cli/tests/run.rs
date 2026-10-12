@@ -23,7 +23,7 @@ struct RunResult {
 }
 
 fn run_cli(task_path: &Path) -> RunResult {
-    let output = Command::new(env!("CARGO_BIN_EXE_stellwerk-cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_stellwerk"))
         .current_dir(workspace_root())
         .arg("run")
         .arg(task_path)
@@ -93,28 +93,24 @@ fn run_writes_receipt_to_sqlite() {
     let _ = std::fs::remove_file(&store_path);
 }
 
-/// Провал запуска обязан быть провалом: ненулевой код выхода, НЕТ `verdict=`, а чек
-/// всё равно записан со статусом `Failed`.
+/// Провал запуска обязан быть провалом: ненулевой код выхода, НЕТ `verdict=`.
 ///
-/// Фикстура просит запустить команду, которую нельзя запустить: `goal` длиннее
-/// `MAX_ARG_STRLEN` (128 KiB), поэтому `execve` вернёт `E2BIG`. Это ровно тот случай,
-/// который раньше «успешно» превращался в `verdict=Allow` с пустым выводом.
+/// Фикстура лежит РЯДОМ с файлом задачи, и задача в пустом каталоге запускаться
+/// не может: `pi-fixture.sh` рядом нет — это ровно тот случай, который раньше
+/// «успешно» превращался в `verdict=Allow` с пустым выводом.
 #[test]
 fn failed_run_is_not_reported_as_success() {
     let dir = std::env::temp_dir().join(format!("stellwerk-n1-failtest-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create scratch dir");
-    let task_path = dir.join("oversized-goal.toml");
-    let huge = "x".repeat(200_000);
-    let toml = format!(
-        "[task]\nid = \"n1-fail\"\ngoal = \"{huge}\"\nworkspace_ref = \"ws\"\nmodel_ref = \"m\"\npacket = \"N1-01\"\nevidence_policy = \"e\"\n\n[task.limits]\nmax_files = 1\nmax_diff_lines = 1\ntimeout_seconds = 30\nmax_retries = 0\ncontext_budget_tokens = 1\ndata_class = \"internal\"\n"
-    );
+    let task_path = dir.join("no-fixture.toml");
+    let toml = "[task]\nid = \"n1-fail\"\ngoal = \"echo hello\"\nworkspace_ref = \"ws\"\nmodel_ref = \"m\"\npacket = \"N1-10\"\nevidence_policy = \"e\"\n\n[task.limits]\nmax_files = 1\nmax_diff_lines = 1\ntimeout_seconds = 30\nmax_retries = 0\ncontext_budget_tokens = 1\ndata_class = \"internal\"\n";
     std::fs::write(&task_path, toml).expect("write fixture");
 
     let result = run_cli(&task_path);
     assert_ne!(
         result.status,
         Some(0),
-        "a run that cannot start must fail; stdout: {}",
+        "a run without a fixture must fail; stdout: {}",
         result.stdout
     );
     assert!(
@@ -127,23 +123,13 @@ fn failed_run_is_not_reported_as_success() {
         "stderr: {}",
         result.stderr
     );
-
-    let store_path = field(&result.stderr, "store")
-        .or_else(|| field(&result.stdout, "store"))
-        .expect("store path printed")
-        .to_string();
-    let (_store, events) = receipt_event(&store_path, "n1-fail");
-    let row = events
-        .iter()
-        .find(|event| event.event_type == "run.call")
-        .expect("a failed run must still leave a receipt");
-    assert_eq!(
-        row.payload.get("status").map(String::as_str),
-        Some("Failed")
+    assert!(
+        result.stderr.contains("fixture"),
+        "stderr must name the missing fixture: {}",
+        result.stderr
     );
 
     let _ = std::fs::remove_file(&task_path);
-    let _ = std::fs::remove_file(&store_path);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -5,10 +5,6 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
-[[bin]]
-name = "stellwerk"
-path = "src/main.rs"
-
 [dependencies]
 stellwerk-core = { path = "../stellwerk-core" }
 rmcp       = { workspace = true }

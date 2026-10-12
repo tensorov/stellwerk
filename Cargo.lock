@@ -698,6 +698,7 @@ dependencies = [
  "serde",
  "stellwerk-core",
  "stellwerk-gateway",
+ "stellwerk-registry",
  "stellwerk-store",
  "stellwerk-task",
  "tokio",
