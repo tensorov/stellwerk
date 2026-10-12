@@ -69,6 +69,118 @@ pub fn model_claim(task_id: &str, id: &str, result_hash: &str, ts: &str) -> Evid
     }
 }
 
+/// Запись `ToolAttestation` — доказательство того, что инструмент ДЕЙСТВИТЕЛЬНО
+/// запускался и его результат зафиксирован. В отличие от `model_claim`, команда
+/// здесь ПРИНИМАЕТСЯ: записанный запуск и есть доказательство, и без него
+/// удостоверения нет — пустая команда означала бы «инструмент не запускался», то
+/// есть утверждение модели, а не проверку (закон 1).
+///
+/// Конструктор authority НЕ является (решение 5): он не решает, была ли проверка
+/// релевантной, — это делает вызывающий (`orchestrator::execute`), и отвечает за
+/// это он же. Здесь фиксируется форма факта, а не право объявить результат годным.
+pub fn tool_attestation(
+    task_id: &str,
+    id: &str,
+    command: &str,
+    result_hash: &str,
+    ts: &str,
+) -> EvidenceEntry {
+    EvidenceEntry {
+        id: id.to_owned(),
+        task_id: task_id.to_owned(),
+        kind: EvidenceKind::ToolAttestation,
+        command: command.to_owned(),
+        result_hash: result_hash.to_owned(),
+        ts: ts.to_owned(),
+    }
+}
+
+/// Метка тестовой `Validation`. Именованная константа, а не пустая строка:
+/// фикстура, неотличимая от решения человека, выдавала бы тест за приёмку
+/// (решение 5). `evidence_status` по этой метке отличает фикстуру от человеческого
+/// решения, поэтому тестовая `Validation` допустима только с ней в `subject`.
+pub const FIXTURE_VALIDATION_LABEL: &str = "fixture: not a human decision";
+
+/// Запись `Validation` — ОТДЕЛЬНОЕ, ЯВНОЕ решение человека. `subject` — кто и как
+/// решил; он кладётся в `command`, потому что поля «кто проверял» у `EvidenceEntry`
+/// нет, а контракт (`contract.rs`) этот пакет не расширяет.
+///
+/// Тестовая `Validation` допустима только как явно помеченная фикстура — с
+/// `FIXTURE_VALIDATION_LABEL` в `subject`; `evidence_status` такую запись решением
+/// человека не считает.
+pub fn validation(
+    task_id: &str,
+    id: &str,
+    subject: &str,
+    result_hash: &str,
+    ts: &str,
+) -> EvidenceEntry {
+    EvidenceEntry {
+        id: id.to_owned(),
+        task_id: task_id.to_owned(),
+        kind: EvidenceKind::Validation,
+        command: subject.to_owned(),
+        result_hash: result_hash.to_owned(),
+        ts: ts.to_owned(),
+    }
+}
+
+/// Состояние результата по отношению к решению человека (решение 5).
+///
+/// Отдельный тип, а не `bool` и не пустая строка: отсутствие решения и сознательный
+/// ответ человека неотличимы, если свести их к флагу (закон 6). `Done` здесь не
+/// объявляется: пока человеческой `Validation` нет, результат ЖДЁТ человека, и ни
+/// `Done`, ни `gate PASS` не выводятся.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceStatus {
+    /// `ToolAttestation` в цепочке нет: предъявлять нечего — текст модели
+    /// доказательством не является (закон 1). Это НЕ «ждёт человека»: ждать нечего.
+    Unattested,
+    /// Удостоверение фактической проверки есть, решения человека нет. Результат
+    /// ждёт человека; `Done` не объявляется.
+    AwaitingHumanValidation,
+    /// Человек явно принял результат (человеческая `Validation`, не фикстура).
+    HumanValidated,
+}
+
+impl EvidenceStatus {
+    /// Метка состояния для вывода. Своя строка на каждое: слитое «не готово»
+    /// неотличимо от неразобранного, а `gate=ждёт человека` в выводе N1 опирается
+    /// именно на неё.
+    pub fn label(self) -> &'static str {
+        match self {
+            EvidenceStatus::Unattested => "нет удостоверения",
+            EvidenceStatus::AwaitingHumanValidation => "ждёт человека",
+            EvidenceStatus::HumanValidated => "принято человеком",
+        }
+    }
+}
+
+/// Состояние цепочки по решению 5. `evaluate` не трогается: этот разбор отдельный —
+/// он про решение человека, а не про вердикт прогона, и пересчёт вердикта здесь
+/// выбрал бы сторону в открытом споре (F-2026-09-29-20).
+///
+/// Человеческая `Validation` — только та, чей `subject` не равен метке фикстуры.
+pub fn evidence_status(chain: &[EvidenceEntry]) -> EvidenceStatus {
+    if !chain
+        .iter()
+        .any(|entry| entry.kind == EvidenceKind::ToolAttestation)
+    {
+        return EvidenceStatus::Unattested;
+    }
+    if chain.iter().any(is_human_validation) {
+        EvidenceStatus::HumanValidated
+    } else {
+        EvidenceStatus::AwaitingHumanValidation
+    }
+}
+
+/// Человеческая ли это `Validation`. Фикстура помечена `FIXTURE_VALIDATION_LABEL` и
+/// решением человека не является: иначе тест выдавал бы себя за приёмку (решение 5).
+fn is_human_validation(entry: &EvidenceEntry) -> bool {
+    entry.kind == EvidenceKind::Validation && entry.command != FIXTURE_VALIDATION_LABEL
+}
+
 /// Решение этапного gate'а: прогон плюс цепочка, из которой оно выводится.
 ///
 /// `RunOutcome.verdict` читается КАК ДАННОЕ и не пересчитывается: раннер и
