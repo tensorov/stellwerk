@@ -22,6 +22,7 @@ use stellwerk_gateway::permission::{Permission, PermissionError, ToolRisk, RISK_
 use thiserror::Error;
 
 use crate::m5::sandbox_bwrap::Sandbox;
+use crate::m5::secrets::{AgentEnv, SecretError, Token};
 use crate::m5::EngineAdapter;
 use crate::runner::{
     stop_reason_from, verdict_for, Call, ExecOutcome, Progress, RunOutcome, StopFacts, Worker,
@@ -193,6 +194,21 @@ enum GateState {
     Refused(String),
 }
 
+/// Источник переменных окружения агента. Два РАЗНЫХ состояния, а не «есть список /
+/// нет списка»: явный набор — это решение вызывающего, а белый список собирается
+/// существующим `AgentEnv::assemble`. Подмена одного другим молча отбросила бы
+/// проверки повторного имени и утечки токена (закон 6).
+enum Environment {
+    /// Явный набор: что перечислил вызывающий, то и попадёт в процесс.
+    Explicit(Vec<(String, String)>),
+    /// Сборка по белому списку через `AgentEnv::assemble`, а не наследование окружения.
+    Allowlisted {
+        allowlist: Vec<String>,
+        host: Vec<(String, String)>,
+        token: Token,
+    },
+}
+
 /// Воркер, запускающий движок ВНУТРИ песочницы через адаптер.
 ///
 /// Поля закрыты: программу, аргументы, бюджет и разрешённые переменные задаёт
@@ -204,7 +220,7 @@ pub struct SandboxWorker<A> {
     program: PathBuf,
     args: Vec<String>,
     budget: Duration,
-    env: Vec<(String, String)>,
+    environment: Environment,
     spawned: AtomicUsize,
     /// Замер последнего запуска. `Worker::exec` возвращает `ExecOutcome` с одним лишь
     /// текстом (сигнатура из M4 не переписывается), а `evaluate()` требует `RunOutcome`;
@@ -248,7 +264,7 @@ impl<A> SandboxWorker<A> {
             program: program.into(),
             args,
             budget,
-            env,
+            environment: Environment::Explicit(env),
             spawned: AtomicUsize::new(0),
             measure: Arc::new(Mutex::new(Measure::Pending)),
             network: NetworkIntent::NotRequested,
@@ -263,6 +279,24 @@ impl<A> SandboxWorker<A> {
         self.network = NetworkIntent::Attempt {
             policy,
             url: url.into(),
+        };
+        self
+    }
+
+    /// Заменить окружение сборкой по белому списку: имена, попадающие в процесс, берутся
+    /// из `allowlist`, а не из окружения хоста. Сборка (`AgentEnv::assemble`) выполняется
+    /// в `exec` до старта процесса, поэтому отказ по повторному имени или по токену
+    /// отменяет запуск, а не декорирует его.
+    pub fn with_allowlist(
+        mut self,
+        allowlist: &[&str],
+        host: &[(String, String)],
+        token: &Token,
+    ) -> Self {
+        self.environment = Environment::Allowlisted {
+            allowlist: allowlist.iter().map(|name| (*name).to_owned()).collect(),
+            host: host.to_vec(),
+            token: token.clone(),
         };
         self
     }
@@ -308,6 +342,32 @@ impl<A> SandboxWorker<A> {
             },
         };
         Ok(GateRecord { risk, network })
+    }
+
+    /// Переменные, которые попадут в процесс агента. Явный набор отдаётся как есть; белый
+    /// список собирается существующим `AgentEnv::assemble`, и отсутствующее имя НЕ
+    /// подставляется пустым значением: `NAME=` читалось бы как «задано, но пусто»
+    /// (закон 6). Отказ сборки — это отказ запуска, а не украшение.
+    fn agent_environment(&self) -> Result<Vec<(String, String)>, SecretError> {
+        match &self.environment {
+            Environment::Explicit(pairs) => Ok(pairs.clone()),
+            Environment::Allowlisted {
+                allowlist,
+                host,
+                token,
+            } => {
+                let names: Vec<&str> = allowlist.iter().map(String::as_str).collect();
+                let assembled = AgentEnv::assemble(&names, host, token)?;
+                Ok(allowlist
+                    .iter()
+                    .filter_map(|name| {
+                        assembled
+                            .value(name)
+                            .map(|value| (name.clone(), value.to_owned()))
+                    })
+                    .collect())
+            }
+        }
     }
 
     /// Последний измеренный прогон. `None` — замер не состоялся (ещё не запускали или
@@ -387,6 +447,12 @@ impl<A: EngineAdapter + Sync> Worker for SandboxWorker<A> {
                     return Err(WorkerError(reason));
                 }
             }
+            // Окружение агента — ДО `spawned` и до старта процесса: отказ сборки
+            // (повтор имени, токен в белом списке) обязан отменить запуск, а не
+            // состояться после него. `authorize` стоит ещё раньше, в `runner::run_once`.
+            let environment = self
+                .agent_environment()
+                .map_err(|err| WorkerError(format!("agent environment refused: {err}")))?;
             self.spawned.fetch_add(1, Ordering::SeqCst);
             // Подготовленный запуск: `bwrap`-argv собирает песочница, а не адаптер.
             let args: Vec<&str> = self.args.iter().map(String::as_str).collect();
@@ -396,7 +462,7 @@ impl<A: EngineAdapter + Sync> Worker for SandboxWorker<A> {
                 .map_err(|e| WorkerError(format!("sandbox refused the run: {e}")))?;
             // Окружение задаётся ДО spawn: пустое, затем только разрешённые переменные.
             launch.env_clear();
-            for (key, value) in &self.env {
+            for (key, value) in &environment {
                 launch.env(key, value);
             }
             let outcome = self
