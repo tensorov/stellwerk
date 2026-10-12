@@ -1,0 +1,18 @@
+[package]
+name = "stellwerk-cli"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+stellwerk-core = { path = "../stellwerk-core" }
+stellwerk-task = { path = "../stellwerk-task" }
+stellwerk-store = { path = "../stellwerk-store" }
+stellwerk-gateway = { path = "../stellwerk-gateway" }
+clap = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+
+[lints]
+workspace = true
