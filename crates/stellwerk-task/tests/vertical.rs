@@ -9,11 +9,11 @@ use std::pin::Pin;
 use stellwerk_core::contract::{
     DataClass, Event, EventRisk, ModelBinding, PolicyLevel, RetentionClass, RiskClass, TaskStatus,
 };
-use stellwerk_gateway::permission::ToolRisk;
+use stellwerk_gateway::permission::{PermissionError, ToolRisk};
 use stellwerk_store::{EventStore, SqliteStore, TaskStore};
 use stellwerk_task::runner::{
-    authorize, run_once, Call, CallAttempt, CallVerdict, ExecOutcome, RunOutcome, StopReason,
-    Verdict, Worker, WorkerError,
+    authorize, run_once, Call, CallAttempt, CallVerdict, ExecOutcome, RiskRegistry, RunOutcome,
+    StopReason, Verdict, Worker, WorkerError,
 };
 use stellwerk_task::taskfile::TaskFile;
 
@@ -22,6 +22,7 @@ use stellwerk_task::taskfile::TaskFile;
 struct FakeWorker {
     launches: Cell<usize>,
     fail: bool,
+    registry: TestRegistry,
 }
 
 impl FakeWorker {
@@ -29,7 +30,40 @@ impl FakeWorker {
         Self {
             launches: Cell::new(0),
             fail,
+            registry: TestRegistry::new(),
         }
+    }
+}
+
+/// Доверенный реестр для вертикали: класс инструмента приходит ОТСЮДА, а не из
+/// `call.risk`. `bash`/`fs` — чтение R0 (его имя держит дайджест тела), `r2`/`r5`
+/// дают классы для отказов, `unclass` — отсутствие классификации.
+struct TestRegistry {
+    entries: Vec<(String, String, ToolRisk)>,
+}
+
+impl TestRegistry {
+    fn new() -> Self {
+        Self {
+            entries: vec![
+                ("bash".into(), "fs".into(), R0),
+                ("r2".into(), "fs".into(), R2),
+                ("r5".into(), "fs".into(), R5),
+                ("unclass".into(), "fs".into(), ToolRisk::Unclassified),
+            ],
+        }
+    }
+}
+
+impl RiskRegistry for TestRegistry {
+    fn risk_of(&self, tool: &str, module: &str) -> Result<ToolRisk, PermissionError> {
+        self.entries
+            .iter()
+            .find(|(t, m, _)| t == tool && m == module)
+            .map(|(_, _, risk)| *risk)
+            .ok_or(PermissionError::TableIncomplete {
+                risk: RiskClass::R0,
+            })
     }
 }
 
@@ -48,6 +82,10 @@ impl Worker for FakeWorker {
 
     fn spawned(&self) -> usize {
         self.launches.get()
+    }
+
+    fn registry(&self) -> &dyn RiskRegistry {
+        &self.registry
     }
 }
 
@@ -71,11 +109,19 @@ fn holds_any_data() -> ModelBinding {
 }
 
 fn attempt(task: &str, risk: ToolRisk, ok: bool, caller: PolicyLevel) -> CallAttempt {
+    // Инструмент выбирается по классу в реестре: класс берётся из реестра, а не из
+    // `call.risk`, и один инструмент не может нести два разных класса.
+    let (tool, module) = match risk {
+        ToolRisk::Unclassified => ("unclass", "fs"),
+        ToolRisk::Classified(RiskClass::R2) => ("r2", "fs"),
+        ToolRisk::Classified(RiskClass::R5) => ("r5", "fs"),
+        _ => ("bash", "fs"),
+    };
     CallAttempt {
         task_id: task.into(),
         call: Call {
-            tool: "bash".into(),
-            module: "fs".into(),
+            tool: tool.into(),
+            module: module.into(),
             risk,
             data: DataClass::Public,
             model: holds_any_data(),
@@ -130,7 +176,11 @@ async fn a_refused_call_starts_no_worker_and_still_leaves_a_receipt() {
     // R2 при L2Contributor: нехватка уровня, а не запрет по риску.
     let ask = attempt("t-refused", R2, true, PolicyLevel::L2Contributor);
     let got = run_once(&ask, &worker, &store).await.expect("отказ");
-    assert_eq!(got, authorize(&ask.call, ask.caller), "не наш вердикт");
+    assert_eq!(
+        got,
+        authorize(&ask.call, ask.caller, worker.registry()).verdict,
+        "не наш вердикт"
+    );
     assert!(matches!(got, CallVerdict::Deny { .. }), "{got:?}");
     assert_eq!(worker.spawned(), 0, "запускать нельзя");
     assert!(!trail(&store, "t-refused").await.is_empty(), "нет следа");
@@ -141,7 +191,7 @@ async fn a_refused_call_starts_no_worker_and_still_leaves_a_receipt() {
 async fn the_denial_reason_reaches_the_trail_with_its_rule_code() {
     let (store, worker) = bench(false);
     let ask = attempt("t-reason", R5, true, PolicyLevel::L5Owner);
-    let reason = deny_reason(authorize(&ask.call, ask.caller));
+    let reason = deny_reason(authorize(&ask.call, ask.caller, worker.registry()).verdict);
     run_once(&ask, &worker, &store).await.expect("отказ");
     let seen = trail(&store, "t-reason").await;
     let code = reason.split(':').next().unwrap_or_default();

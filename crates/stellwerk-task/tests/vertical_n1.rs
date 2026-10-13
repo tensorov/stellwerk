@@ -14,12 +14,23 @@ use stellwerk_task::evidence::{evidence_status, model_claim, tool_attestation, E
 use stellwerk_task::ledger_sqlite::SqliteEvidenceLedger;
 use stellwerk_task::m5::sandbox_bwrap::Sandbox;
 use stellwerk_task::m5::FixtureEngine;
-use stellwerk_task::orchestrator::SandboxWorker;
+use stellwerk_task::orchestrator::{SandboxWorker, StaticRegistry, ToolEntry};
 use stellwerk_task::runner::{run_once, Call, CallAttempt, CallVerdict, Verdict};
 
 /// Системные каталоги на чтение — тот же набор, что у `stellwerk-cli` (N1-10):
 /// bwrap стартует с пустым корнем, и без них `sh` нечем запустить.
 const SYSTEM_READ_ONLY: &[&str] = &["/usr", "/bin", "/lib", "/lib64", "/etc"];
+
+/// Доверенный реестр ЭТОГО теста: production-реестр намеренно не содержит
+/// фикстурный агент CLI (свой класс он объявляет в реестре, который CLI собирает
+/// у себя). Класс обязан приходить через `.with_registry(...)` — тот же шов, что
+/// и production: без реестра `fixture`/`stellwerk-cli` был бы `Unclassified` и
+/// отвергнут до вопроса (закон 6).
+static N1_TOOL_REGISTRY: &[ToolEntry] = &[ToolEntry {
+    module: "stellwerk-cli",
+    tool: "fixture",
+    class: RiskClass::R0,
+}];
 
 static UNIQUE_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -83,7 +94,8 @@ async fn the_full_chain_ends_in_awaiting_human_validation() {
         vec!["pi-fixture.sh".to_string()],
         Duration::from_secs(30),
         Vec::new(),
-    );
+    )
+    .with_registry(StaticRegistry(N1_TOOL_REGISTRY));
 
     let task_id = "n1-vertical".to_string();
     let attempt = CallAttempt {
@@ -152,6 +164,23 @@ async fn the_full_chain_ends_in_awaiting_human_validation() {
     let status = evidence_status(&chain);
     assert_eq!(status.label(), "ждёт человека");
     assert_ne!(status.label(), "Done");
+
+    let unknown = CallAttempt {
+        task_id: "n1-vertical-unknown".to_string(),
+        call: Call {
+            tool: "unregistered-tool".to_string(),
+            ..attempt.call.clone()
+        },
+        caller: PolicyLevel::L2Contributor,
+        workspace_ref: "ws-n1".to_string(),
+    };
+    let refused = run_once(&unknown, &worker, &store)
+        .await
+        .expect("run_once ok");
+    assert!(
+        matches!(refused, CallVerdict::Deny { .. }),
+        "тот же шов реестра обязан отвергнуть неклассифицированный инструмент, got {refused:?}"
+    );
 }
 
 #[test]

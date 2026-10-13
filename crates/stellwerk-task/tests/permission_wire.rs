@@ -1,21 +1,21 @@
 //! RED M4/packet-02: раннер ОБЯЗАН спросить разрешение на КАЖДЫЙ вызов инструмента,
-//! а инструмент без классификации обязан получить `Deny`.
+//! а эффективный риск берётся из ДОВЕРЕННОГО реестра, а не из самодекларации `call.risk`.
 //!
 //! Здесь проверяется не решение `decide` — оно закрыто в `stellwerk-gateway`
 //! (`tests/gate.rs`, `tests/gate_ask.rs`), — а ДОСТИЖИМОСТЬ гейта из пути раннера.
-//! Поэтому ожидаемое значение берётся из самого `decide` по тому же `CallRequest`,
-//! который собирает пакет 03: своей копии правил в тесте быть не должно, иначе
+//! Классы R0..R5 приходят из тестового реестра `TestRegistry`, а ожидаемый вердикт —
+//! из самого `decide` по тому `CallRequest`, который `authorize` обязан собрать из
+//! применённого реестром риска. Своей копии правил в тесте быть не должно, иначе
 //! тест проверял бы сам себя.
 //!
 //! Ассерты — ПО ВАРИАНТУ (`matches!`/`assert_eq` на конкретный вариант), а не флаг:
 //! `Unclassified` обязан быть ОТЛИЧИМ от `R0` (закон 6), а «никто не ответил» —
-//! от «запрещено политикой» (В4). Проверка вида «ошибка или нет» стёрла бы ровно
-//! то различие, ради которого тест написан.
+//! от «запрещено политикой» (В4).
 
 use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, RetentionClass, RiskClass};
 use stellwerk_gateway::gate::{decide, CallRequest};
-use stellwerk_gateway::permission::ToolRisk;
-use stellwerk_task::runner::{authorize, Call, CallVerdict};
+use stellwerk_gateway::permission::{PermissionError, ToolRisk};
+use stellwerk_task::runner::{authorize, Call, CallVerdict, RiskRegistry};
 
 /// Каждый риск, включая отсутствие классификации: матрица без `Unclassified` не
 /// проверяет закон 6, а без `R5` — что политика вообще отказывает.
@@ -38,6 +38,57 @@ const LEVELS: [PolicyLevel; 6] = [
     PolicyLevel::L5Owner,
 ];
 
+/// Доверенный тестовый реестр: класс риска инструмента задаёт ТОЛЬКО он. Инструмент
+/// вне реестра — `Err`, а не `R0`-умолчание: неизвестное обязано быть отказом.
+struct TestRegistry {
+    entries: Vec<(String, String, ToolRisk)>,
+}
+
+impl TestRegistry {
+    fn new() -> Self {
+        Self {
+            entries: vec![
+                ("r0".into(), "m".into(), ToolRisk::Classified(RiskClass::R0)),
+                ("r1".into(), "m".into(), ToolRisk::Classified(RiskClass::R1)),
+                ("r2".into(), "m".into(), ToolRisk::Classified(RiskClass::R2)),
+                ("r3".into(), "m".into(), ToolRisk::Classified(RiskClass::R3)),
+                ("r4".into(), "m".into(), ToolRisk::Classified(RiskClass::R4)),
+                ("r5".into(), "m".into(), ToolRisk::Classified(RiskClass::R5)),
+                ("unclass".into(), "m".into(), ToolRisk::Unclassified),
+            ],
+        }
+    }
+}
+
+impl RiskRegistry for TestRegistry {
+    fn risk_of(&self, tool: &str, module: &str) -> Result<ToolRisk, PermissionError> {
+        self.entries
+            .iter()
+            .find(|(t, m, _)| t == tool && m == module)
+            .map(|(_, _, risk)| *risk)
+            .ok_or(PermissionError::TableIncomplete {
+                risk: RiskClass::R0,
+            })
+    }
+}
+
+fn test_registry() -> TestRegistry {
+    TestRegistry::new()
+}
+
+/// Инструмент, чей класс в тестовом реестре равен переданному риску.
+fn tool_for(risk: ToolRisk) -> (&'static str, &'static str) {
+    match risk {
+        ToolRisk::Unclassified => ("unclass", "m"),
+        ToolRisk::Classified(RiskClass::R0) => ("r0", "m"),
+        ToolRisk::Classified(RiskClass::R1) => ("r1", "m"),
+        ToolRisk::Classified(RiskClass::R2) => ("r2", "m"),
+        ToolRisk::Classified(RiskClass::R3) => ("r3", "m"),
+        ToolRisk::Classified(RiskClass::R4) => ("r4", "m"),
+        ToolRisk::Classified(RiskClass::R5) => ("r5", "m"),
+    }
+}
+
 /// Binding, пропускающий любой класс данных: ось данных проверяет тест гейта, и
 /// здесь отказ по ней замаскировал бы отказ по риску.
 fn holds_any_data() -> ModelBinding {
@@ -53,23 +104,30 @@ fn holds_any_data() -> ModelBinding {
     }
 }
 
-fn call(risk: ToolRisk, interactive: bool) -> Call {
+/// Вызов с инструментом из реестра, но с ЗАВЕДОМО нерелевантной самодекларацией:
+/// решение обязано следовать реестру, а не `risk`.
+fn call_for(risk: ToolRisk, interactive: bool) -> Call {
+    let (tool, module) = tool_for(risk);
     Call {
-        tool: "bash".into(),
-        module: "fs".into(),
-        risk,
+        tool: tool.into(),
+        module: module.into(),
+        risk: ToolRisk::Unclassified,
         data: DataClass::Public,
         model: holds_any_data(),
         interactive,
     }
 }
 
-/// Тот же вызов глазами гейта — ровно то, что пакет 03 собирает из `Call` и `caller`.
-fn as_request(call: &Call, caller: PolicyLevel) -> CallRequest {
+/// Тот же вызов глазами гейта — запрос собирается из применённого реестром риска,
+/// а не из `call.risk`. Это ровно то, что обязан делать `authorize`.
+fn as_request_applied(call: &Call, caller: PolicyLevel, reg: &dyn RiskRegistry) -> CallRequest {
+    let applied = reg
+        .risk_of(&call.tool, &call.module)
+        .unwrap_or(ToolRisk::Unclassified);
     CallRequest {
         tool: call.tool.clone(),
         module: call.module.clone(),
-        risk: call.risk,
+        risk: applied,
         caller,
         data: call.data,
         model: call.model.clone(),
@@ -79,7 +137,7 @@ fn as_request(call: &Call, caller: PolicyLevel) -> CallRequest {
 
 /// Один вызов — одно решение: так каждый сценарий читается как «вход → вердикт».
 fn authorize_call(risk: ToolRisk, interactive: bool, caller: PolicyLevel) -> CallVerdict {
-    authorize(&call(risk, interactive), caller)
+    authorize(&call_for(risk, interactive), caller, &test_registry()).verdict
 }
 
 /// Причина отказа. Вариант обязан быть `Deny`: пустая строка не сказала бы агенту,
@@ -89,6 +147,45 @@ fn denial_reason(verdict: &CallVerdict) -> &str {
         CallVerdict::Deny { reason } => reason,
         other => panic!("не Deny, а {other:?}: причину взять не из чего"),
     }
+}
+
+#[test]
+fn a_tool_absent_from_the_registry_is_refused_even_when_the_caller_declares_r0() {
+    let reg = test_registry();
+    let mut c = call_for(ToolRisk::Classified(RiskClass::R0), false);
+    // Инструмент вне реестра, а вызывающий объявляет R0 — так делал CLI-путь N1.
+    c.tool = "bash".into();
+    c.module = "fs".into();
+    c.risk = ToolRisk::Classified(RiskClass::R0);
+    let decision = authorize(&c, PolicyLevel::L5Owner, &reg);
+    assert!(
+        matches!(decision.verdict, CallVerdict::Deny { .. }),
+        "реестр не знает `bash`/`fs`, а объявленный R0 не спасает: {:?}",
+        decision.verdict
+    );
+    assert_ne!(
+        decision.verdict,
+        CallVerdict::Allow,
+        "самодекларация R0 не разрешает незарегистрированный инструмент"
+    );
+}
+
+#[test]
+fn changing_only_the_declared_risk_does_not_change_the_decision() {
+    let reg = test_registry();
+    let mut declared_r0 = call_for(ToolRisk::Classified(RiskClass::R4), true);
+    declared_r0.risk = ToolRisk::Classified(RiskClass::R0);
+    let mut declared_r5 = call_for(ToolRisk::Classified(RiskClass::R4), true);
+    declared_r5.risk = ToolRisk::Classified(RiskClass::R5);
+
+    let a = authorize(&declared_r0, PolicyLevel::L5Owner, &reg).verdict;
+    let b = authorize(&declared_r5, PolicyLevel::L5Owner, &reg).verdict;
+    assert_eq!(a, b, "смена самодекларации не меняет решение");
+    assert_eq!(
+        a,
+        CallVerdict::Ask,
+        "решено по реестру R4, а не по объявленным R0/R5"
+    );
 }
 
 #[test]
@@ -212,16 +309,18 @@ fn a_refusal_names_its_reason_so_the_refusal_can_be_recorded() {
 /// Главный тест пакета: у `authorize` НЕТ пути, возвращающего вердикт в обход
 /// `decide`. F-10 вырос не из «забыли вызвать», а из того, что прямой вызов был
 /// возможен, но никто его не сделал; равенство гейту по всей матрице входов
-/// закрывает класс, а не сегодняшний экземпляр.
+/// закрывает класс, а не сегодняшний экземпляр. Классы берутся из реестра, поэтому
+/// матрица не держится на самодекларации.
 #[test]
 fn every_verdict_is_the_gate_verdict_so_allow_has_no_second_source() {
+    let reg = test_registry();
     let (mut allowed, mut denied) = (0usize, 0usize);
     for risk in RISKS {
         for caller in LEVELS {
             for interactive in [false, true] {
-                let call = call(risk, interactive);
-                let got = authorize(&call, caller);
-                let want = decide(&as_request(&call, caller));
+                let call = call_for(risk, interactive);
+                let got = authorize(&call, caller, &reg).verdict;
+                let want = decide(&as_request_applied(&call, caller, &reg));
                 let why = "раннер не вправе решить иначе, чем гейт";
                 assert_eq!(
                     got, want,

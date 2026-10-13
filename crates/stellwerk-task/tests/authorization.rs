@@ -2,13 +2,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, RetentionClass, RiskClass};
-use stellwerk_gateway::permission::ToolRisk;
+use stellwerk_gateway::permission::{PermissionError, ToolRisk};
 use stellwerk_store::{EventStore, SqliteStore};
 use stellwerk_task::m5::sandbox_bwrap::Sandbox;
 use stellwerk_task::m5::secrets::{agent_argv, AgentEnv, SecretError, Token};
 use stellwerk_task::m5::FixtureEngine;
 use stellwerk_task::orchestrator::SandboxWorker;
-use stellwerk_task::runner::{run_once, Call, CallAttempt, CallVerdict, Worker};
+use stellwerk_task::runner::{run_once, Call, CallAttempt, CallVerdict, RiskRegistry, Worker};
 
 const WINDOW: Duration = Duration::from_secs(60);
 const BUDGET: Duration = Duration::from_secs(30);
@@ -16,6 +16,37 @@ const TOKEN_NAME: &str = "GITHUB_TOKEN";
 const TOKEN_VALUE: &str = "ghp-n1-09-never-in-the-agent-reach";
 const R0: ToolRisk = ToolRisk::Classified(RiskClass::R0);
 const R5: ToolRisk = ToolRisk::Classified(RiskClass::R5);
+
+/// Доверенный реестр: класс инструмента приходит ОТСЮДА, а не из `call.risk`.
+/// `bash`/`fs` — чтение R0, `r5`/`fs` — необратимое разрушение. Без него
+/// `SandboxWorker` использовал бы production-реестр, не знающий тестовых имён,
+/// и отказ пришёл бы по неизвестности, а не по проверяемому классу.
+struct TestRegistry {
+    entries: Vec<(String, String, ToolRisk)>,
+}
+
+impl TestRegistry {
+    fn new() -> Self {
+        Self {
+            entries: vec![
+                ("bash".into(), "fs".into(), R0),
+                ("r5".into(), "fs".into(), R5),
+            ],
+        }
+    }
+}
+
+impl RiskRegistry for TestRegistry {
+    fn risk_of(&self, tool: &str, module: &str) -> Result<ToolRisk, PermissionError> {
+        self.entries
+            .iter()
+            .find(|(t, m, _)| t == tool && m == module)
+            .map(|(_, _, risk)| *risk)
+            .ok_or(PermissionError::TableIncomplete {
+                risk: RiskClass::R0,
+            })
+    }
+}
 
 fn system_dirs() -> Vec<PathBuf> {
     ["/usr", "/bin", "/lib", "/lib64", "/etc"]
@@ -74,9 +105,17 @@ fn call() -> Call {
     }
 }
 fn attempt(task: &str, risk: ToolRisk, caller: PolicyLevel) -> CallAttempt {
+    let tool = match risk {
+        ToolRisk::Classified(RiskClass::R5) => "r5",
+        _ => "bash",
+    };
     CallAttempt {
         task_id: task.into(),
-        call: Call { risk, ..call() },
+        call: Call {
+            tool: tool.into(),
+            risk,
+            ..call()
+        },
         caller,
         workspace_ref: "ws-n1-09".into(),
     }
@@ -94,6 +133,7 @@ fn marker_worker(root: &Path) -> SandboxWorker<FixtureEngine> {
         BUDGET,
         vec![],
     )
+    .with_registry(TestRegistry::new())
 }
 fn env_worker(root: &Path) -> SandboxWorker<FixtureEngine> {
     let e = in_system(&["/usr/bin/env", "/bin/env"]);
@@ -105,6 +145,7 @@ fn env_worker(root: &Path) -> SandboxWorker<FixtureEngine> {
         BUDGET,
         vec![],
     )
+    .with_registry(TestRegistry::new())
 }
 fn emit_worker(root: &Path, line: &str) -> SandboxWorker<FixtureEngine> {
     let p = in_system(&["/usr/bin/printf", "/bin/printf"]);
@@ -116,6 +157,7 @@ fn emit_worker(root: &Path, line: &str) -> SandboxWorker<FixtureEngine> {
         BUDGET,
         vec![],
     )
+    .with_registry(TestRegistry::new())
 }
 
 #[tokio::test]

@@ -20,7 +20,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use stellwerk_core::contract::{DataClass, Event, EventRisk, ModelBinding, PolicyLevel, TaskSpec};
 use stellwerk_gateway::gate::{decide, CallRequest};
-use stellwerk_gateway::permission::ToolRisk;
+use stellwerk_gateway::permission::{PermissionError, ToolRisk};
 use stellwerk_store::EventStore;
 use thiserror::Error;
 
@@ -256,14 +256,15 @@ fn gate(name: &str) -> u32 {
         .unwrap_or(1)
 }
 
-/// Вызов инструмента: всё, о чём раннер обязан спросить разрешение. Умолчаний нет:
-/// «не классифицирован» это `Unclassified`, а не «риск не задан, значит нулевой».
+/// Вызов инструмента: всё, о чём раннер обязан спросить разрешение.
 #[derive(Debug, Clone)]
 pub struct Call {
     pub tool: String,
     pub module: String,
-    /// Риск инструмента. `Unclassified` — состояние, а не нулевой риск: иначе
-    /// неизвестный тул проходил бы как `R0`, и дыра была бы неотличима от чтения.
+    /// Заявленный вызывающим риск. НЕ влияет на разрешение: эффективный риск берёт
+    /// из доверенного реестра `authorize`, а самодекларация оставлена, чтобы тесты
+    /// могли доказать её незначимость (закон 6). Поле читается только здесь, в
+    /// тестах и в старых вызывающих, и ни один путь решения его не использует.
     pub risk: ToolRisk,
     pub data: DataClass,
     pub model: ModelBinding,
@@ -272,21 +273,54 @@ pub struct Call {
     pub interactive: bool,
 }
 
+/// Реестр рисков — единственный источник эффективного риска на производственном пути.
+/// Ошибка реестра или отсутствие записи — не повод подставлять `R0`.
+pub trait RiskRegistry: Send + Sync {
+    fn risk_of(&self, tool: &str, module: &str) -> Result<ToolRisk, PermissionError>;
+}
+
+/// Решение гейта с применённым риском из доверенного реестра.
+#[derive(Debug, Clone)]
+pub struct GateDecision {
+    pub risk: ToolRisk,
+    pub verdict: CallVerdict,
+}
+
 /// Решение по вызову: единственный вопрос раннера к слою разрешений. Тело — сборка
-/// запроса и один вызов `decide`, без разбора вердикта: вторая копия правил прошла бы
-/// тесты сегодня и разошлась с гейтом при первой же правке политики — ровно тот класс,
-/// из которого вырос F-10.
-pub fn authorize(call: &Call, caller: PolicyLevel) -> CallVerdict {
+/// запроса из ДОВЕРЕННОГО реестра и контекста сессии и один вызов `decide`.
+///
+/// `call.risk` не читается: раньше именно копирование самодекларации в запрос
+/// делало вызывающего источником эффективного риска, и решение соглашалось с
+/// объявлением, а не с реестром. Ошибка реестра — отказ ДО исполнения; отсутствие
+/// записи (`Unclassified`) решает `decide` по общей политике, а не `R0`-умолчание.
+pub fn authorize(call: &Call, caller: PolicyLevel, registry: &dyn RiskRegistry) -> GateDecision {
+    let applied = match registry.risk_of(&call.tool, &call.module) {
+        Ok(risk) => risk,
+        Err(err) => {
+            return GateDecision {
+                risk: ToolRisk::Unclassified,
+                verdict: CallVerdict::Deny {
+                    reason: format!(
+                        "registry_refused: инструмент `{}`/`{}` не разрешён доверенным реестром: {err}",
+                        call.tool, call.module
+                    ),
+                },
+            };
+        }
+    };
     let request = CallRequest {
         tool: call.tool.clone(),
         module: call.module.clone(),
-        risk: call.risk,
+        risk: applied,
         caller,
         data: call.data,
         model: call.model.clone(),
         interactive: call.interactive,
     };
-    decide(&request)
+    GateDecision {
+        risk: applied,
+        verdict: decide(&request),
+    }
 }
 
 // --- M4/packet-05: вертикальный срез — решение обязано дойти до того, что произойдёт ---
@@ -340,6 +374,9 @@ pub trait Worker {
 
     /// Сколько раз воркер ФАКТИЧЕСКИ запускали, включая упавшие запуски.
     fn spawned(&self) -> usize;
+
+    /// Доверенный реестр рисков, используемый для принятия решения.
+    fn registry(&self) -> &dyn RiskRegistry;
 }
 
 /// Один проход: решение → запуск или отказ → чек.
@@ -359,24 +396,34 @@ pub async fn run_once(
     worker: &dyn Worker,
     store: &impl EventStore,
 ) -> Result<CallVerdict, RunError> {
-    // Решение принимает `authorize` и никто больше: своя копия правил разошлась бы с
-    // гейтом при первой правке политики (F-10). `interactive` приходит из попытки как
-    // есть — раннер его не подставляет, потому что подстановка была бы вторым решением
-    // о том, есть ли кому спросить.
-    match authorize(&attempt.call, attempt.caller) {
+    let decision = authorize(&attempt.call, attempt.caller, worker.registry());
+    match decision.verdict {
         CallVerdict::Allow => match worker.exec(&attempt.workspace_ref, &attempt.call).await {
             Ok(outcome) => {
-                // Тело вывода в чек не идёт никогда: только дайджест, сверить который
-                // можно лишь на момент захвата (REVIEW §3.2).
                 let digest = format!("{:x}", Sha256::digest(outcome.output.as_bytes()));
-                record(store, attempt, CallStatus::Succeeded, None, Some(&digest)).await?;
+                record(
+                    store,
+                    attempt,
+                    decision.risk,
+                    CallStatus::Succeeded,
+                    None,
+                    Some(&digest),
+                )
+                .await?;
                 Ok(CallVerdict::Allow)
             }
             Err(failure) => {
-                // Сбой — не `Allow` и не отсутствие следа: чек ложится ДО возврата
-                // ошибки, иначе упавший вызов нечем было бы расследовать.
                 let cause = failure.0;
-                match record(store, attempt, CallStatus::Failed, Some(&cause), None).await {
+                match record(
+                    store,
+                    attempt,
+                    decision.risk,
+                    CallStatus::Failed,
+                    Some(&cause),
+                    None,
+                )
+                .await
+                {
                     Ok(()) => Err(RunError(cause)),
                     Err(unwritten) => Err(RunError(format!(
                         "чек сбоя не записан: {unwritten}; причина сбоя: {cause}"
@@ -384,17 +431,23 @@ pub async fn run_once(
                 }
             }
         },
-        // Отказ, пауза и заданный вопрос — три РАЗНЫХ состояния (В4), и у каждого своя
-        // причина в потоке. Чек пишется ДО возврата: запрещённый вызов — тоже факт, а
-        // вызов без следа неотличим от небывшего.
         CallVerdict::Deny { reason } => {
-            record(store, attempt, CallStatus::Denied, Some(&reason), None).await?;
+            record(
+                store,
+                attempt,
+                decision.risk,
+                CallStatus::Denied,
+                Some(&reason),
+                None,
+            )
+            .await?;
             Ok(CallVerdict::Deny { reason })
         }
         CallVerdict::Suspended => {
             record(
                 store,
                 attempt,
+                decision.risk,
                 CallStatus::Suspended,
                 Some(NOBODY_TO_ASK),
                 None,
@@ -406,6 +459,7 @@ pub async fn run_once(
             record(
                 store,
                 attempt,
+                decision.risk,
                 CallStatus::Asked,
                 Some(ANSWER_PENDING),
                 None,
@@ -470,6 +524,7 @@ static RECEIPT_SEQ: AtomicU64 = AtomicU64::new(0);
 async fn record(
     store: &impl EventStore,
     attempt: &CallAttempt,
+    applied_risk: ToolRisk,
     status: CallStatus,
     reason: Option<&str>,
     output_sha256: Option<&str>,
@@ -480,13 +535,8 @@ async fn record(
     payload.insert("module".to_owned(), attempt.call.module.clone());
     payload.insert("caller".to_owned(), format!("{:?}", attempt.caller));
     payload.insert("status".to_owned(), status.name().to_owned());
-    // Проход неинтерактивен, и это ФАКТ, а не подстановка неизвестного: канала, которому
-    // можно задать вопрос, у раннера нет (F-11; его заведёт TUI-путь). Отсюда и
-    // `Suspended` вместо тихого `Allow` при риске, требующем `Ask`.
     payload.insert("interactive".to_owned(), "false".to_owned());
-    // Класса риска у неопознанного инструмента нет, и ключа `risk` у такого чека НЕТ:
-    // «риск неизвестен» не должно читаться как «R0» (закон 6).
-    if let ToolRisk::Classified(class) = attempt.call.risk {
+    if let ToolRisk::Classified(class) = applied_risk {
         payload.insert("risk".to_owned(), format!("{class:?}"));
     }
     if let Some(reason) = reason {
@@ -501,19 +551,14 @@ async fn record(
             attempt.task_id,
             RECEIPT_SEQ.fetch_add(1, Ordering::Relaxed)
         ),
-        // Полный путь, а не `use`: в этом модуле `EventSource` — трейт разбора потока
-        // Pi, и одноимённый вид контракта импортом перебил бы его.
         source: stellwerk_core::contract::EventSource::System,
         event_type: "run.call".to_owned(),
-        // `actor` — тот, кто ДЕЙСТВОВАЛ. При отказе не действовал никто: решение приняла
-        // политика, и подписать отказ модулем значило бы приписать ему действие,
-        // которого не было.
         actor: match status {
             CallStatus::Succeeded | CallStatus::Failed => attempt.call.module.clone(),
             CallStatus::Denied | CallStatus::Suspended | CallStatus::Asked => "policy".to_owned(),
         },
         workspace: Some(attempt.workspace_ref.clone()),
-        risk: column_risk(attempt.call.risk),
+        risk: column_risk(applied_risk),
         payload,
         ts: now_rfc3339(),
     };

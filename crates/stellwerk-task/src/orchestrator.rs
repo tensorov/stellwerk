@@ -25,8 +25,8 @@ use crate::m5::sandbox_bwrap::Sandbox;
 use crate::m5::secrets::{AgentEnv, SecretError, Token};
 use crate::m5::EngineAdapter;
 use crate::runner::{
-    stop_reason_from, verdict_for, Call, ExecOutcome, Progress, RunOutcome, StopFacts, Worker,
-    WorkerError,
+    stop_reason_from, verdict_for, Call, ExecOutcome, Progress, RiskRegistry, RunOutcome,
+    StopFacts, Worker, WorkerError,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -44,6 +44,16 @@ pub struct ToolEntry {
     pub class: RiskClass,
 }
 
+/// Статический реестр рисков.
+#[derive(Debug, Clone, Copy)]
+pub struct StaticRegistry(pub &'static [ToolEntry]);
+
+impl RiskRegistry for StaticRegistry {
+    fn risk_of(&self, tool: &str, module: &str) -> Result<ToolRisk, PermissionError> {
+        risk_for_in(self.0, tool, module)
+    }
+}
+
 /// Реестр инструментов Stellwerk — единственный авторитет о классе риска.
 ///
 /// Живёт в КОДЕ, а не в конфиге репозитория: конфиг правится тем же PR, что
@@ -52,6 +62,11 @@ pub struct ToolEntry {
 /// а не скопированы из конфига. Инструмент вне этого списка — не «R0 по
 /// умолчанию», а `Unclassified`: неизвестное не превращается в разрешённое
 /// чтение (закон 6).
+///
+/// Здесь только инструменты, существующие в production. Фикстурный агент CLI
+/// (`stellwerk-cli run`) сюда НЕ входит: свой класс он объявляет в реестре,
+/// который CLI собирает у себя (`main.rs`), иначе фикстура получала бы из
+/// production-реестра разрешение, выданное ею же самою.
 pub const TOOL_REGISTRY: &[ToolEntry] = &[
     // gate_report — снимок для чтения, побочного эффекта нет.
     ToolEntry {
@@ -79,6 +94,22 @@ pub const TOOL_REGISTRY: &[ToolEntry] = &[
     },
 ];
 
+pub const PRODUCTION_REGISTRY: StaticRegistry = StaticRegistry(TOOL_REGISTRY);
+
+fn risk_for_in(
+    registry: &[ToolEntry],
+    tool: &str,
+    module: &str,
+) -> Result<ToolRisk, PermissionError> {
+    let Some(entry) = registry
+        .iter()
+        .find(|entry| entry.tool == tool && entry.module == module)
+    else {
+        return Ok(ToolRisk::Unclassified);
+    };
+    class_covered_in(entry.class, &RISK_PERMISSION).map(|()| ToolRisk::Classified(entry.class))
+}
+
 /// Класс риска инструмента — из реестра Stellwerk.
 ///
 /// Инструмент вне реестра даёт `Unclassified`, а не `R0`: иначе незнакомый
@@ -88,13 +119,7 @@ pub const TOOL_REGISTRY: &[ToolEntry] = &[
 ///
 /// Конфигурация репозитория не читается вовсе — это видно по сигнатуре.
 pub fn risk_for(tool: &str, module: &str) -> Result<ToolRisk, PermissionError> {
-    let Some(entry) = TOOL_REGISTRY
-        .iter()
-        .find(|entry| entry.tool == tool && entry.module == module)
-    else {
-        return Ok(ToolRisk::Unclassified);
-    };
-    class_covered_in(entry.class, &RISK_PERMISSION).map(|()| ToolRisk::Classified(entry.class))
+    risk_for_in(TOOL_REGISTRY, tool, module)
 }
 
 /// Покрыт ли класс таблицей вердиктов `table`.
@@ -230,6 +255,10 @@ pub struct SandboxWorker<A> {
     network: NetworkIntent,
     /// Запись входного гейта. Захвачена в начале `exec`, до старта процесса.
     gate: Arc<Mutex<GateState>>,
+    /// Доверенный реестр рисков. Один и тот же реестр питает `preflight` и
+    /// `runner::authorize`: если бы решение брало риск из другого места, запись
+    /// гейта осталась бы декорацией, не влияющей на Allow/Deny.
+    registry: Box<dyn RiskRegistry>,
 }
 
 /// Состояние замера последнего запуска. Три РАЗНЫХ состояния, а не «есть/нет»: «замера
@@ -269,7 +298,16 @@ impl<A> SandboxWorker<A> {
             measure: Arc::new(Mutex::new(Measure::Pending)),
             network: NetworkIntent::NotRequested,
             gate: Arc::new(Mutex::new(GateState::Pending)),
+            registry: Box::new(PRODUCTION_REGISTRY),
         }
+    }
+
+    /// Заменить доверенный реестр рисков. Производственный путь использует
+    /// `PRODUCTION_REGISTRY`; тесты подставляют свой, чтобы класс инструмента
+    /// задавался реестром, а не самодекларацией вызова.
+    pub fn with_registry(mut self, registry: impl RiskRegistry + 'static) -> Self {
+        self.registry = Box::new(registry);
+        self
     }
 
     /// Заявить сетевой выход, который запуск СОБИРАЕТСЯ попробовать. Проверка —
@@ -332,8 +370,10 @@ impl<A> SandboxWorker<A> {
     /// принимает слой разрешений (`permission_for`), а не воркер, иначе два
     /// разных отказа слились бы в один.
     fn preflight(&self, tool: &str, module: &str) -> Result<GateRecord, String> {
-        let risk =
-            risk_for(tool, module).map_err(|err| format!("risk registry is incomplete: {err}"))?;
+        let risk = self
+            .registry
+            .risk_of(tool, module)
+            .map_err(|err| format!("risk registry is incomplete: {err}"))?;
         let network = match &self.network {
             NetworkIntent::NotRequested => NetworkVerdict::NotRequested,
             NetworkIntent::Attempt { policy, url } => match network_gate(policy, url) {
@@ -497,5 +537,9 @@ impl<A: EngineAdapter + Sync> Worker for SandboxWorker<A> {
 
     fn spawned(&self) -> usize {
         self.spawned.load(Ordering::SeqCst)
+    }
+
+    fn registry(&self) -> &dyn RiskRegistry {
+        self.registry.as_ref()
     }
 }

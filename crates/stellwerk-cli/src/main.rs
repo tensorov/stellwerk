@@ -16,7 +16,7 @@ use stellwerk_task::evidence::{evidence_status, model_claim, tool_attestation, E
 use stellwerk_task::ledger_sqlite::SqliteEvidenceLedger;
 use stellwerk_task::m5::sandbox_bwrap::Sandbox;
 use stellwerk_task::m5::FixtureEngine;
-use stellwerk_task::orchestrator::SandboxWorker;
+use stellwerk_task::orchestrator::{SandboxWorker, StaticRegistry, ToolEntry};
 use stellwerk_task::runner::{run_once, Call, CallAttempt, CallVerdict, Verdict};
 use stellwerk_task::taskfile::TaskFile;
 use tokio::runtime::Runtime;
@@ -30,6 +30,19 @@ use tokio::runtime::Runtime;
 ///   * `/lib`, `/lib64` — динамический загрузчик и libc (`ld-linux-x86-64.so.2`, симлинки в `usr/lib`);
 ///   * `/etc`  — системная конфигурация, которую может запросить libc (NSS, локаль).
 const SYSTEM_READ_ONLY: &[&str] = &["/usr", "/bin", "/lib", "/lib64", "/etc"];
+
+/// Реестр риска АГЕНТА CLI — фикстуры `pi-fixture.sh`, которую запускает `run`.
+///
+/// Это отдельный от `stellwerk_task::orchestrator::TOOL_REGISTRY` реестр: фикстура
+/// не является production-инструментом, и её класс нельзя выдавать из общего
+/// реестра — иначе код, называющий своего агента «fixture» и назначающий ему R0,
+/// разрешал бы вызов сам себе (дефект N1). R0 честен для этой операции: агент
+/// локально печатает фиксированный поток, побочных эффектов нет.
+static CLI_AGENT_TOOLS: &[ToolEntry] = &[ToolEntry {
+    module: "stellwerk-cli",
+    tool: "fixture",
+    class: RiskClass::R0,
+}];
 
 /// Счётчик уникальности имён временных каталогов/файлов в пределах процесса: наносекунды
 /// могут совпасть у двух быстрых прогонов, счётчик — нет.
@@ -136,16 +149,18 @@ fn run_task(path: &Path) -> Result<(), String> {
         vec!["pi-fixture.sh".to_string()],
         budget,
         Vec::new(),
-    );
+    )
+    .with_registry(StaticRegistry(CLI_AGENT_TOOLS));
 
     let attempt = CallAttempt {
         task_id: spec.id.clone(),
         call: Call {
             tool: "fixture".to_string(),
             module: "stellwerk-cli".to_string(),
-            // Явный R0, как в N1-01: fixture-агент — локальное чтение без побочных
-            // эффектов. `risk_for` реестра его не знает и дал бы `Unclassified`, а
-            // неизвестное в неинтерактивном прогоне обязано стать отказом.
+            // Самодекларация НЕ авторитетна: эффективный класс `fixture` берётся из
+            // реестра `CLI_AGENT_TOOLS` (выше), где он записан R0 — локальное
+            // чтение фикстуры без побочных эффектов. Значение здесь не влияет на
+            // вердикт и оставлено лишь как заполнитель поля `Call`.
             risk: ToolRisk::Classified(RiskClass::R0),
             data: spec.limits.data_class,
             model: ModelBinding {
