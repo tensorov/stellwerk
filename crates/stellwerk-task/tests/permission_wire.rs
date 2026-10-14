@@ -12,10 +12,22 @@
 //! `Unclassified` обязан быть ОТЛИЧИМ от `R0` (закон 6), а «никто не ответил» —
 //! от «запрещено политикой» (В4).
 
-use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, RetentionClass, RiskClass};
+use std::cell::Cell;
+use std::future::{ready, Future};
+use std::path::Path;
+use std::pin::Pin;
+
+use stellwerk_core::contract::{
+    DataClass, Event, EventRisk, ModelBinding, PolicyLevel, RetentionClass, RiskClass,
+};
 use stellwerk_gateway::gate::{decide, CallRequest};
 use stellwerk_gateway::permission::{PermissionError, ToolRisk};
-use stellwerk_task::runner::{authorize, Call, CallVerdict, RiskRegistry};
+use stellwerk_store::{EventStore, SqliteStore};
+use stellwerk_task::orchestrator::StaticRegistry;
+use stellwerk_task::runner::{
+    authorize, run_once, Call, CallAttempt, CallVerdict, ExecOutcome, RiskRegistry, Worker,
+    WorkerError,
+};
 
 /// Каждый риск, включая отсутствие классификации: матрица без `Unclassified` не
 /// проверяет закон 6, а без `R5` — что политика вообще отказывает.
@@ -339,4 +351,194 @@ fn every_verdict_is_the_gate_verdict_so_allow_has_no_second_source() {
         "матрица без Allow доказала бы только пессимизм"
     );
     assert!(denied > 0, "матрица без Deny доказала бы только оптимизм");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// N1/F8 — чек несёт ПРИМЕНЁННЫЙ реестром риск, и оба отказа реестра не запускают
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Тесты выше проверяют решение `authorize` в изоляции. Здесь проверяется, что оно
+// ДОХОДИТ до наблюдаемого результата: до записанного чека и до факта запуска. Чек —
+// это `GateDecision.risk`, положенный в поток; если бы он брался из `call.risk`,
+// самодекларация снова стала бы источником истины, только на шаг позже.
+
+type Exec<'a> = Pin<Box<dyn Future<Output = Result<ExecOutcome, WorkerError>> + Send + 'a>>;
+
+/// Воркер для проверок чека и отказа. Реестр доверенный: класс инструмента приходит
+/// из него, а не из `call.risk`. Счётчик запусков отделён от записи, иначе «воркер не
+/// вызван» прошёл бы и при молчащем раннере.
+struct RecordingWorker {
+    launches: Cell<usize>,
+    registry: Box<dyn RiskRegistry>,
+}
+
+impl RecordingWorker {
+    fn new(registry: impl RiskRegistry + 'static) -> Self {
+        Self {
+            launches: Cell::new(0),
+            registry: Box::new(registry),
+        }
+    }
+}
+
+impl Worker for RecordingWorker {
+    fn exec(&self, _workspace_ref: &str, call: &Call) -> Exec<'_> {
+        self.launches.set(self.launches.get() + 1);
+        Box::pin(ready(Ok(ExecOutcome {
+            output: format!("вывод {}", call.tool),
+        })))
+    }
+
+    fn spawned(&self) -> usize {
+        self.launches.get()
+    }
+
+    fn registry(&self) -> &dyn RiskRegistry {
+        self.registry.as_ref()
+    }
+}
+
+fn store() -> SqliteStore {
+    SqliteStore::open(Path::new(":memory:")).expect("открыто")
+}
+
+async fn receipts(store: &SqliteStore, task: &str) -> Vec<Event> {
+    store.list_by_task(task).await.expect("выборка")
+}
+
+/// N1/F8: чек обязан нести ПРИМЕНЁННЫЙ реестром риск, а не самодекларацию вызова.
+/// Классы намеренно РАЗНЫЕ: `call.risk` объявляет R0, реестр говорит R4. Тест,
+/// проходящий лишь при их совпадении, не доказывал бы ничего — он был бы слеп ровно
+/// к тому дефекту, ради которого написан.
+#[tokio::test]
+async fn the_receipt_carries_the_applied_registry_risk_not_the_declared_one() {
+    let store = store();
+    let declared = ToolRisk::Classified(RiskClass::R0);
+    let applied = ToolRisk::Classified(RiskClass::R4);
+    assert_ne!(
+        declared, applied,
+        "классы обязаны различаться, иначе тест слеп"
+    );
+
+    // Инструмент `r4`/`m` есть в реестре как R4; вызывающий объявляет R0 и ждёт
+    // ответа человека (L5Owner + интерактив -> Ask, а не исполнение).
+    let worker = RecordingWorker::new(test_registry());
+    let mut call = call_for(ToolRisk::Classified(RiskClass::R4), true);
+    call.risk = declared;
+    let attempt = CallAttempt {
+        task_id: "t-receipt".into(),
+        call,
+        caller: PolicyLevel::L5Owner,
+        workspace_ref: "ws-n1".into(),
+    };
+
+    let got = run_once(&attempt, &worker, &store).await.expect("вопрос");
+    assert_eq!(
+        got,
+        CallVerdict::Ask,
+        "R4 у владельца интерактивно — вопрос"
+    );
+    assert_eq!(worker.spawned(), 0, "Ask — не Allow: воркер не запускается");
+
+    let seen = receipts(&store, "t-receipt").await;
+    assert_eq!(seen.len(), 1, "на вызов ровно один чек");
+    let receipt = &seen[0];
+    assert_eq!(
+        receipt.risk,
+        EventRisk::Classified(RiskClass::R4),
+        "в колонке чека обязан быть применённый реестром R4"
+    );
+    assert_ne!(
+        receipt.risk,
+        EventRisk::Classified(RiskClass::R0),
+        "объявленный вызывающим R0 не должен попасть в чек"
+    );
+    assert_eq!(
+        receipt.payload.get("risk").map(String::as_str),
+        Some("R4"),
+        "в payload чека — применённый класс, а не самодекларация"
+    );
+}
+
+/// Реестр, не знающий инструмента, отдаёт `Ok(Unclassified)` — ровно так делает
+/// production `StaticRegistry` для отсутствующего тула. Неизвестное решает политика:
+/// интерактивному владельцу — ВОПРОС (человеческий гейт), остальным — отказ. В обоих
+/// случаях воркер НЕ запускается: `Ask` — не `Allow`. Утверждать «неизвестное всегда
+/// Deny» здесь было бы неправдой: интерактивный владелец получает именно `Ask`.
+#[tokio::test]
+async fn an_unclassified_registry_answer_never_executes_and_asks_only_the_owner() {
+    let store = store();
+    // Пустой production-реестр: любой инструмент -> Ok(Unclassified).
+    let registry = StaticRegistry(&[]);
+    let mut saw_ask = false;
+    let mut saw_deny = false;
+
+    let cases: [(bool, PolicyLevel, &str); 3] = [
+        (true, PolicyLevel::L5Owner, "интерактивный владелец"),
+        (false, PolicyLevel::L5Owner, "владелец без канала ответа"),
+        (true, PolicyLevel::L3Maintainer, "интерактив ниже владельца"),
+    ];
+    for (interactive, caller, what) in cases {
+        let worker = RecordingWorker::new(registry);
+        let mut call = call_for(ToolRisk::Unclassified, interactive);
+        call.tool = "absent-tool".into();
+        call.module = "absent-module".into();
+        let attempt = CallAttempt {
+            task_id: "t-unclass".into(),
+            call,
+            caller,
+            workspace_ref: "ws-n1".into(),
+        };
+        let got = run_once(&attempt, &worker, &store)
+            .await
+            .expect("run_once ok");
+        assert_eq!(worker.spawned(), 0, "{what}: неисполнение обязательно");
+        match (interactive && caller == PolicyLevel::L5Owner, got) {
+            (true, CallVerdict::Ask) => saw_ask = true,
+            (false, CallVerdict::Deny { .. }) => saw_deny = true,
+            (_, other) => panic!("{what}: неверный вердикт {other:?}"),
+        }
+    }
+    assert!(
+        saw_ask,
+        "интерактивный владелец обязан получить Ask, а не Deny"
+    );
+    assert!(saw_deny, "остальные обязаны получить Deny");
+}
+
+/// Ошибка реестра — ВТОРОЙ отказный путь, отличный от `Ok(Unclassified)`: lookup не
+/// смог ответить, и `authorize` отвергает до исполнения. Проверяется отдельно, иначе
+/// два разных отказа слились бы в один и «нет данных» стало бы неотличимо от «реестр
+/// сломан» (закон 6).
+struct RefusingRegistry;
+
+impl RiskRegistry for RefusingRegistry {
+    fn risk_of(&self, _tool: &str, _module: &str) -> Result<ToolRisk, PermissionError> {
+        Err(PermissionError::TableIncomplete {
+            risk: RiskClass::R0,
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_registry_error_refuses_before_execution() {
+    let store = store();
+    let worker = RecordingWorker::new(RefusingRegistry);
+    let attempt = CallAttempt {
+        task_id: "t-registry-err".into(),
+        call: call_for(ToolRisk::Classified(RiskClass::R0), true),
+        caller: PolicyLevel::L5Owner,
+        workspace_ref: "ws-n1".into(),
+    };
+    let got = run_once(&attempt, &worker, &store)
+        .await
+        .expect("run_once ok");
+    match got {
+        CallVerdict::Deny { reason } => assert!(
+            reason.contains("registry_refused"),
+            "отказ обязан назвать путь реестра, а не политику: {reason}"
+        ),
+        other => panic!("ошибка реестра обязана дать Deny, а не {other:?}"),
+    }
+    assert_eq!(worker.spawned(), 0, "ошибка реестра — не исполнять");
 }

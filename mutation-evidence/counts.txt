@@ -1,0 +1,15 @@
+cargo-mutants outcome counts (source: outcomes.json, verbatim)
+
+total_mutants : 95
+caught        : 57
+missed        : 9
+unviable      : 29
+timeout       : 0
+success       : 0
+
+Denominator: caught + missed = 57 + 9 = 66
+unviable is NOT in the denominator (it is a build failure, not a test verdict).
+
+caught/(caught+missed) = 57/66 = 86.3636% -> 86.4%
+threshold: >= 75%
+verdict: PASS
