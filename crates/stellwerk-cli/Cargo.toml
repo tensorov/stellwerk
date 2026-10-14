@@ -21,6 +21,9 @@ stellwerk-registry = { path = "../stellwerk-registry" }
 clap = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
+# TUI-01: интерактивный терминальный слой CLI. Версии — в workspace (ADR-0018).
+ratatui = { workspace = true }
+crossterm = { workspace = true }
 
 [lints]
 workspace = true

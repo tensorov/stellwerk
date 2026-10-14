@@ -5,7 +5,7 @@ members  = ["crates/stellwerk-core", "crates/stellwerk-registry", "crates/stellw
 [workspace.package]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-rust-version = "1.80"   # поднять, если rmcp потребует выше
+rust-version = "1.88"   # TUI-01: ratatui 0.30.2 требует rustc 1.88.0 (см. ADR-0018)
 
 [workspace.dependencies]
 clap       = { version = "4.6.7", features = ["derive"] }
@@ -21,6 +21,11 @@ sha2       = "0.10.9"
 # за эту сессию. SQLite — локальное хранилище федерации; later = Postgres.
 rusqlite   = { version = "0.33", features = ["bundled"] }
 rmcp       = { version = "3.4.0", default-features = false, features = ["client", "transport-child-process"] }  # ⚠️verify features
+# ⚠️ contract-change (TUI-01): TUI движки для интерактивного терминального слоя.
+# Оба пинованы точно (`=x.y.z`), не диапазоном: TUI-слой чувствителен к
+# несовпадению версий backend'а и ratatui. См. docs/adr/0018-tui-dependencies.md.
+ratatui    = "=0.30.2"
+crossterm  = "=0.29.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
