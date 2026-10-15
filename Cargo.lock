@@ -1647,6 +1647,7 @@ dependencies = [
  "crossterm",
  "ratatui",
  "serde",
+ "serde_json",
  "stellwerk-core",
  "stellwerk-gateway",
  "stellwerk-registry",
