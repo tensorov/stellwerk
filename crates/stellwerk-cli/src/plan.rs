@@ -27,6 +27,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// Имя агента-планировщика в конфигурации транспорта.
 pub const PLANNER_AGENT: &str = "stellwerk-planner";
@@ -100,6 +101,13 @@ pub struct PlanSession {
     /// требует человека.
     pub version: u64,
     pub approved_version: Option<u64>,
+    /// SHA-256 канонического текста утверждённого плана. Отдельно от `version`:
+    /// счётчик ловит правку через API, дайджест — правку текста в обход счётчика.
+    /// `#[serde(default)]` нужен для старых `session.json` без поля: отсутствие
+    /// означает «утверждения с привязкой к тексту нет», то есть человека всё равно
+    /// спросят, а не молча сочтут план утверждённым.
+    #[serde(default)]
+    pub approved_digest: Option<String>,
 }
 
 impl PlanSession {
@@ -113,6 +121,7 @@ impl PlanSession {
             summary: None,
             version: 0,
             approved_version: None,
+            approved_digest: None,
         }
     }
 
@@ -135,6 +144,44 @@ impl PlanSession {
 
     pub fn approve(&mut self) {
         self.approved_version = Some(self.version);
+        self.approved_digest = self.plan_digest();
+    }
+
+    /// Канонический текст плана — то, что человек утверждает. Порядок полей
+    /// фиксирован, отсутствие summary названо явно (`<нет>`), а не пустой
+    /// строкой: отсутствие — состояние (закон 6). `None` — плана нет.
+    fn plan_text(&self) -> Option<String> {
+        let draft = self.draft.as_ref()?;
+        let mut out = String::new();
+        out.push_str("summary: ");
+        out.push_str(self.summary.as_deref().unwrap_or("<нет>"));
+        out.push('\n');
+        out.push_str("goal: ");
+        out.push_str(&draft.goal);
+        out.push('\n');
+        for (label, items) in [
+            ("allowed_changes", &draft.allowed_changes),
+            ("acceptance", &draft.acceptance),
+            ("checks", &draft.checks),
+            ("constraints", &draft.constraints),
+        ] {
+            out.push_str(label);
+            out.push_str(":\n");
+            for item in items {
+                out.push_str("- ");
+                out.push_str(item);
+                out.push('\n');
+            }
+        }
+        Some(out)
+    }
+
+    /// Дайджест канонического текста плана; `None` — плана нет.
+    pub fn plan_digest(&self) -> Option<String> {
+        let text = self.plan_text()?;
+        let mut hasher = Sha256::new();
+        hasher.update(text.as_bytes());
+        Some(format!("{:x}", hasher.finalize()))
     }
 
     /// Привязывает утверждение к дереву: сменился снимок — утверждение сброшено.
@@ -148,7 +195,7 @@ impl PlanSession {
     }
 
     pub fn approval_required(&self) -> bool {
-        self.approved_version != Some(self.version)
+        self.approved_version != Some(self.version) || self.approved_digest != self.plan_digest()
     }
 
     pub fn is_approved(&self) -> bool {

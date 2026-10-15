@@ -100,6 +100,63 @@ fn a_changed_draft_after_approval_requires_a_new_approval() {
 }
 
 #[test]
+fn changing_plan_text_without_bumping_the_version_still_requires_approval() {
+    let mut s = PlanSession::new("/repo", "abc123");
+    s.set_draft(draft("цель"), "кратко".to_string());
+    s.approve();
+    assert!(
+        !s.approval_required(),
+        "сразу после утверждения человек не нужен"
+    );
+    // Правка текста в обход `set_draft`: поля `draft` публичны, счётчик версии
+    // не двигается — поймать обязан именно дайджест текста, а не версия.
+    s.draft.as_mut().unwrap().goal = "другая цель".to_string();
+    assert_eq!(s.version, 1, "версия намеренно не менялась");
+    assert!(
+        s.approval_required(),
+        "изменённый текст плана обязан требовать нового утверждения"
+    );
+    assert!(!s.is_approved());
+}
+
+#[test]
+fn a_draft_has_a_text_digest() {
+    let mut s = PlanSession::new("/repo", "abc123");
+    s.draft = Some(draft("цель"));
+    assert!(
+        s.plan_digest().is_some(),
+        "у черновика обязан быть дайджест текста"
+    );
+}
+
+#[test]
+fn the_digest_is_stable_for_identical_text() {
+    let mut a = PlanSession::new("/repo", "head-a");
+    a.set_draft(draft("один и тот же план"), "s".to_string());
+    let mut b = PlanSession::new("/repo", "head-b");
+    b.set_draft(draft("один и тот же план"), "s".to_string());
+    assert!(a.plan_digest().is_some(), "дайджест существует");
+    assert_eq!(
+        a.plan_digest(),
+        b.plan_digest(),
+        "один и тот же текст даёт один и тот же дайджест, независимо от снимка"
+    );
+}
+
+#[test]
+fn absent_summary_and_empty_summary_are_different_texts() {
+    let mut s = PlanSession::new("/repo", "abc123");
+    s.draft = Some(draft("цель"));
+    let absent = s.plan_digest();
+    s.summary = Some(String::new());
+    assert_ne!(
+        s.plan_digest(),
+        absent,
+        "отсутствие summary и пустое summary — разные состояния (закон 6)"
+    );
+}
+
+#[test]
 fn a_model_claim_of_approval_does_not_approve_anything() {
     // Ответ модели «план утверждён» — это текст, а не действие TUI. Утверждение
     // существует только как `approve()` от нажатия человека.
@@ -123,6 +180,8 @@ fn a_session_round_trips_through_disk() {
     assert_eq!(loaded.goal.as_deref(), Some("цель"));
     assert_eq!(loaded.version, s.version);
     assert_eq!(loaded.approved_version, s.approved_version);
+    assert_eq!(loaded.approved_digest, s.approved_digest);
+    assert_eq!(loaded.plan_digest(), s.plan_digest());
     assert!(loaded.is_approved());
     let _ = std::fs::remove_dir_all(&dir);
 }

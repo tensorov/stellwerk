@@ -25,6 +25,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 ratatui = { workspace = true }
