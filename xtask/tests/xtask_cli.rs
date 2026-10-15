@@ -336,7 +336,7 @@ fn code_of(out: &Output) -> i32 {
 
 /// Измерение состоялось, даже когда инструмент вернул 1: это вердикт, а не поломка.
 /// Числа — замер 2026-10-04 по stellwerk-gateway (269 / 71 / 177 / 0 / 21 = 28.63%),
-/// то есть заведомо ниже порога 80.
+/// то есть заведомо ниже порога 75.
 #[test]
 fn mutation_run_exits_zero_on_fail_verdict() {
     let dir = sandbox();
@@ -357,13 +357,12 @@ fn mutation_run_refuses_unfinished_measurement() {
     assert_ne!(code_of(&out), 0, "{stderr}");
     assert!(stderr.contains("нет outcomes.json"), "{stderr}");
 }
-/// Ровно на пороге — PASS: сравнение целочисленное, а «ровно 80%» не должно
-/// превращаться в FAIL из-за 80.00000000000001 в f64. missed=0: при missed>0
-/// срабатывает второй clause, и 80% уже не проходит.
+/// Ровно на пороге — PASS: сравнение целочисленное, а «ровно 75%» не должно
+/// превращаться в FAIL из-за 75.00000000000001 в f64. 3/4 = 75.00%.
 #[test]
 fn mutation_tasks_pass_exactly_at_threshold() {
     let dir = sandbox();
-    let out = run_with_stub(&["mutation-task"], &dir, &outcomes(5, 4, 0, 1, 0), 2);
+    let out = run_with_stub(&["mutation-task"], &dir, &outcomes(4, 3, 0, 1, 0), 2);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(code_of(&out), 0, "{stderr}");
     assert!(stderr.contains("PASS"), "PASS не назван: {stderr}");
@@ -375,13 +374,13 @@ fn mutation_tasks_pass_exactly_at_threshold() {
 }
 
 /// Ниже порога вердикт кодируется ненулевым кодом — в отличие от `mutation-run`, где
-/// то же измерение с FAIL даёт 0.
+/// то же измерение с FAIL даёт 0. 74/100 = 74.00% ниже порога 75.
 #[test]
 fn mutation_tasks_fail_below_threshold() {
     let dir = sandbox();
-    let out = run_with_stub(&["mutation-task"], &dir, &outcomes(100, 79, 21, 0, 0), 2);
+    let out = run_with_stub(&["mutation-task"], &dir, &outcomes(100, 74, 26, 0, 0), 2);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_ne!(code_of(&out), 0, "79% ниже порога 80: {stderr}");
+    assert_ne!(code_of(&out), 0, "74% ниже порога 75: {stderr}");
     assert!(stderr.contains("FAIL"), "отказ не назван FAIL: {stderr}");
 }
 
@@ -412,32 +411,33 @@ fn mutation_tasks_do_not_forward_arguments() {
     assert_eq!(argv.trim(), want, "в дочерний процесс ушло лишнее: {argv}");
 }
 
-/// missed > 0 должен блокировать коммит — даже при 100% пойманных viable.
+/// missed > 0 сам по себе не блокирует (ADR-0019): 4/5 = 80% выше порога 75, поэтому
+/// PASS, но недобитый мутант остаётся виден в свидетельстве (`missed=1`).
 #[test]
-fn mutation_tasks_fail_when_missed_gt_zero() {
+fn mutation_tasks_missed_gt_zero_does_not_block_when_threshold_ok() {
     let dir = sandbox();
-    // caught=4, missed=1, timeout=0, unviable=0, total=5: 100% viable поймано, но missed>0
+    // caught=4, missed=1, timeout=0, unviable=0, total=5: 80% viable поймано.
     let out = run_with_stub(&["mutation-task"], &dir, &outcomes(5, 4, 1, 0, 0), 2);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_ne!(code_of(&out), 0, "missed>0 должен блокировать: {stderr}");
-    assert!(stderr.contains("FAIL"), "отказ не назван FAIL: {stderr}");
+    assert_eq!(code_of(&out), 0, "missed>0 не должен блокировать: {stderr}");
+    assert!(stderr.contains("PASS"), "вердикт не назван PASS: {stderr}");
     assert!(
-        stderr.contains("missed>0"),
-        "должно упоминать missed>0: {stderr}"
+        stderr.contains("missed=1"),
+        "свидетельство о missed потеряно: {stderr}"
     );
 }
 
-/// missed == 0 — clause не блокирует; процентный порог остаётся решающим.
+/// missed == 0 не спасает от провала по порогу: 74% ниже 75 — FAIL, хотя пропусков нет.
 #[test]
-fn mutation_tasks_missed_zero_does_not_block_by_itself() {
+fn mutation_tasks_missed_zero_below_threshold_still_fails() {
     let dir = sandbox();
-    // 79% ниже порога 80, missed==0 — блокирует именно процентный порог
-    let out = run_with_stub(&["mutation-task"], &dir, &outcomes(100, 79, 0, 21, 0), 2);
+    // 74% ниже порога 75, missed==0 — блокирует именно процентный порог
+    let out = run_with_stub(&["mutation-task"], &dir, &outcomes(100, 74, 0, 26, 0), 2);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_ne!(
         code_of(&out),
         0,
-        "должен блокировать по порогу 80: {stderr}"
+        "должен блокировать по порогу 75: {stderr}"
     );
     assert!(stderr.contains("FAIL"), "отказ не назван FAIL: {stderr}");
 }

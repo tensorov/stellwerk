@@ -1,4 +1,4 @@
-//! GREEN M5/packet-18a — порог 80% как код, а не строка в приёмке.
+//! GREEN M5/packet-18a — порог 75% как код, а не строка в приёмке.
 //!
 //! Контракт счёта — `mutants.out/outcomes.json`, и формат взят из исходников 27.1.0:
 //! счётчики `LabOutcome` суть `usize` (outcome.rs:60-72); `end_time` заполняется только
@@ -15,8 +15,8 @@ use serde_json::Value;
 use std::fs;
 use std::path::Path;
 
-/// Порог из поля `mutation_threshold` пакета: это приёмка, а не настройка.
-const REQUIRED_THRESHOLD: u32 = 80;
+/// Порог приёмки — решение владельца (ADR-0019): 75%, а не настройка из argv.
+const REQUIRED_THRESHOLD: u32 = 75;
 /// Гейт живёт только на критичных крейтех; `stellwerk-store` диагностический.
 const CRITICAL_CRATES: [&str; 2] = ["stellwerk-gateway", "stellwerk-task"];
 const TASK: &str = "stellwerk-task";
@@ -236,7 +236,7 @@ fn clause_1_low_score_fails_with_crate_threshold_and_reached() {
     assert_eq!((g.decision, g.hundredths), (Decision::Fail, Some(4963)));
     let m = &g.message;
     assert!(
-        ["stellwerk-task", "80.00%", "49.63%"]
+        ["stellwerk-task", "75.00%", "49.63%"]
             .iter()
             .all(|n| m.contains(n)),
         "{m}"
@@ -248,7 +248,7 @@ fn clause_1_low_score_fails_with_crate_threshold_and_reached() {
 #[test]
 fn score_is_rounded_integer_timeout_is_not_caught_unviable_excluded() {
     let cases = [
-        ((4, 1, 0, 0), Some(8000), Decision::Pass), // clause 2: ровно порог
+        ((3, 1, 0, 0), Some(7500), Decision::Pass), // clause 2: ровно порог
         ((4, 1, 0, 500), Some(8000), Decision::Pass), // clause 6: unviable вне знаменателя
         ((1, 0, 1, 0), Some(5000), Decision::Fail), // clause 3: timeout не caught
         ((0, 0, 1, 0), Some(0), Decision::Fail),    // clause 3: один timeout — не N/A
@@ -341,17 +341,17 @@ fn clause_4_incomplete_or_erroneous_run_never_passes() {
     }
 }
 
-/// clause 7: понижение порога ниже 80 отвергается, а не применяется.
+/// clause 7: понижение порога ниже 75 отвергается, а не применяется (ADR-0019).
 #[test]
 fn clause_7_lowering_threshold_is_rejected() {
-    assert_eq!(REQUIRED_THRESHOLD, 80);
-    assert!(threshold(80).is_ok() && threshold(79).is_err() && threshold(0).is_err());
-    // Контракт порога проверяется до чтения артефакта: 79 отвергается, даже когда файла нет.
+    assert_eq!(REQUIRED_THRESHOLD, 75);
+    assert!(threshold(75).is_ok() && threshold(74).is_err() && threshold(0).is_err());
+    // Контракт порога проверяется до чтения артефакта: 74 отвергается, даже когда файла нет.
     let run = Run {
         outcomes: &std::env::temp_dir(),
         tool_exit: 2,
     };
-    assert!(matches!(gate(&run, TASK, 79), Err(GateError::Malformed(_))));
+    assert!(matches!(gate(&run, TASK, 74), Err(GateError::Malformed(_))));
     assert!(matches!(gate(&run, TASK, 40), Err(GateError::Malformed(_))));
 }
 
@@ -375,8 +375,8 @@ fn clause_8_score_comes_from_outcomes_json_not_stdout() {
     ));
 }
 
-/// clause 9: код возврата cargo-mutants сам по себе не признак прохождения; 4/1 — ровно
-/// порог, при котором инструмент вернул бы FoundProblems(2).
+/// clause 9: код возврата cargo-mutants сам по себе не признак прохождения; 4/1 — выше
+/// порога, при котором инструмент вернул бы FoundProblems(2).
 #[test]
 fn clause_9_tool_exit_code_is_not_the_pass_signal() {
     let verdicts = |tag: &str, c: u64, m: u64, t: u64, u: u64| -> Vec<Decision> {
