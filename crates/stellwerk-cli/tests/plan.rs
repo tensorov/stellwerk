@@ -1,0 +1,386 @@
+//! Tests for the Plan surface. All of them are pure: no terminal, no network, no
+//! live model. The one property that needs the real model — that the planner has
+//! no tools — is checked here structurally against the generated config, and is
+//! exercised live in `docs/demos/plan-build.md`.
+
+use std::path::PathBuf;
+
+use stellwerk_cli::plan::{
+    build_prompt, load_session, parse_reply, render_plan, save_session, session_path, PlanDraft,
+    PlanSession, Reply, Stage, Turn, View, BUILD_UNAVAILABLE_REASON, PLANNER_CONFIG_JSON,
+    PLANNER_MODEL,
+};
+
+fn draft(goal: &str) -> PlanDraft {
+    PlanDraft {
+        goal: goal.to_string(),
+        allowed_changes: vec!["src/lib.rs".to_string()],
+        acceptance: vec!["тест проходит".to_string()],
+        checks: vec!["cargo test".to_string()],
+        constraints: vec!["без новых зависимостей".to_string()],
+    }
+}
+
+fn tmp(name: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!("stellwerk-plan-test-{name}-{nanos}"))
+}
+
+#[test]
+fn a_question_reply_is_recognized() {
+    let reply = parse_reply(r#"{"kind":"question","text":"Какой репозиторий?"}"#);
+    match reply {
+        Reply::Question { text } => assert_eq!(text, "Какой репозиторий?"),
+        other => panic!("ожидался вопрос, получено: {other:?}"),
+    }
+}
+
+#[test]
+fn a_plan_reply_is_recognized() {
+    let raw = r#"{"kind":"plan","summary":"кратко",
+        "goal":"исправить опечатку",
+        "allowed_changes":["src/lib.rs"],
+        "acceptance":["тест зелёный"],
+        "checks":["cargo test"],
+        "constraints":["без новых зависимостей"]}"#;
+    match parse_reply(raw) {
+        Reply::Plan { draft, summary } => {
+            assert_eq!(draft.goal, "исправить опечатку");
+            assert_eq!(draft.allowed_changes, vec!["src/lib.rs".to_string()]);
+            assert_eq!(summary, "кратко");
+        }
+        other => panic!("ожидался план, получено: {other:?}"),
+    }
+}
+
+#[test]
+fn a_plan_wrapped_in_prose_is_still_extracted() {
+    let raw = "Вот план:\n{\"kind\":\"plan\",\"summary\":\"s\",\"goal\":\"g\",\
+               \"allowed_changes\":[],\"acceptance\":[],\"checks\":[],\"constraints\":[]}\nГотово.";
+    match parse_reply(raw) {
+        Reply::Plan { draft, .. } => assert_eq!(draft.goal, "g"),
+        other => panic!("ожидался план из прозы, получено: {other:?}"),
+    }
+}
+
+#[test]
+fn an_unparseable_reply_is_a_distinct_state_not_a_default() {
+    match parse_reply("я не понял задачу") {
+        Reply::Unrecognized { raw } => assert_eq!(raw, "я не понял задачу"),
+        other => panic!("неразобранное обязано быть Unrecognized, получено: {other:?}"),
+    }
+}
+
+#[test]
+fn approving_marks_the_current_version() {
+    let mut s = PlanSession::new("/repo", "abc123");
+    s.set_goal("исправить опечатку");
+    s.set_draft(draft("исправить опечатку"), "кратко".to_string());
+    assert!(s.approval_required(), "до утверждения нужен человек");
+    s.approve();
+    assert!(!s.approval_required(), "утверждённая версия одобрена");
+    assert!(s.is_approved());
+}
+
+#[test]
+fn a_changed_draft_after_approval_requires_a_new_approval() {
+    let mut s = PlanSession::new("/repo", "abc123");
+    s.set_goal("исправить опечатку");
+    s.set_draft(draft("исправить опечатку"), "кратко".to_string());
+    s.approve();
+    s.set_draft(draft("исправить опечатку"), "иная версия".to_string());
+    assert!(
+        s.approval_required(),
+        "изменённый план обязан требовать нового утверждения"
+    );
+    assert!(!s.is_approved());
+}
+
+#[test]
+fn a_model_claim_of_approval_does_not_approve_anything() {
+    // Ответ модели «план утверждён» — это текст, а не действие TUI. Утверждение
+    // существует только как `approve()` от нажатия человека.
+    let mut s = PlanSession::new("/repo", "abc123");
+    s.set_draft(draft("g"), "s".to_string());
+    s.push_turn(Turn::Model("план утверждён".to_string()));
+    assert!(s.approval_required(), "текст модели не утверждает план");
+}
+
+#[test]
+fn a_session_round_trips_through_disk() {
+    let dir = tmp("roundtrip");
+    let path = session_path(&dir);
+    let mut s = PlanSession::new("/repo", "abc123");
+    s.set_goal("цель");
+    s.set_draft(draft("цель"), "кратко".to_string());
+    s.approve();
+    save_session(&path, &s).unwrap();
+
+    let loaded = load_session(&path).unwrap().expect("сессия сохранена");
+    assert_eq!(loaded.goal.as_deref(), Some("цель"));
+    assert_eq!(loaded.version, s.version);
+    assert_eq!(loaded.approved_version, s.approved_version);
+    assert!(loaded.is_approved());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_missing_session_is_absent_not_a_default() {
+    let dir = tmp("missing");
+    let path = session_path(&dir);
+    assert!(
+        load_session(&path).unwrap().is_none(),
+        "отсутствие файла — отдельное состояние, а не пустая сессия"
+    );
+}
+
+#[test]
+fn render_shows_goal_input_before_anything_else() {
+    let s = PlanSession::new("/repo", "abc123");
+    let text = flatten(&render_plan(&View {
+        session: &s,
+        stage: Stage::Goal,
+        input: "добавить тест",
+        model_text: "",
+        error: None,
+    }));
+    assert!(text.contains("цель"), "на старте видно поле цели: {text}");
+    assert!(text.contains("добавить тест"), "виден ввод: {text}");
+    assert!(
+        text.contains(BUILD_UNAVAILABLE_REASON),
+        "Build обязан быть видимо недоступен: {text}"
+    );
+}
+
+#[test]
+fn render_shows_draft_fields_and_pending_approval() {
+    let mut s = PlanSession::new("/repo", "abc123");
+    s.set_goal("исправить опечатку");
+    s.set_draft(draft("исправить опечатку"), "кратко".to_string());
+    let text = flatten(&render_plan(&View {
+        session: &s,
+        stage: Stage::Review,
+        input: "",
+        model_text: "",
+        error: None,
+    }));
+    assert!(
+        text.contains("исправить опечатку"),
+        "видна цель плана: {text}"
+    );
+    assert!(text.contains("src/lib.rs"), "виден допустимый файл: {text}");
+    assert!(
+        text.contains("ждёт утверждения"),
+        "неутверждённый план ждёт человека: {text}"
+    );
+    assert!(
+        text.contains(BUILD_UNAVAILABLE_REASON),
+        "Build видимо недоступен: {text}"
+    );
+}
+
+#[test]
+fn render_shows_approval_once_the_human_approved() {
+    let mut s = PlanSession::new("/repo", "abc123");
+    s.set_draft(draft("g"), "s".to_string());
+    s.approve();
+    let text = flatten(&render_plan(&View {
+        session: &s,
+        stage: Stage::Approved,
+        input: "",
+        model_text: "",
+        error: None,
+    }));
+    assert!(text.contains("утвержд"), "виден факт утверждения: {text}");
+    assert!(
+        text.contains(BUILD_UNAVAILABLE_REASON),
+        "Build остаётся недоступным и после утверждения: {text}"
+    );
+}
+
+#[test]
+fn planner_config_grants_no_mutating_execution_or_network_tool() {
+    // Строгая проверка структуры, а не поиск подстрок: любой инструмент кроме
+    // scoped `read` обязан быть ровно `false`, поэтому новый включённый
+    // инструмент не проскочит молча.
+    let config: serde_json::Value = serde_json::from_str(PLANNER_CONFIG_JSON).unwrap();
+    let tools = config
+        .pointer("/agent/stellwerk-planner/tools")
+        .and_then(serde_json::Value::as_object)
+        .expect("конфиг планировщика содержит объект tools");
+    for (name, enabled) in tools {
+        let expected = name == "read";
+        assert_eq!(
+            enabled.as_bool(),
+            Some(expected),
+            "инструмент `{name}` обязан быть {}",
+            if expected {
+                "включён"
+            } else {
+                "выключен"
+            }
+        );
+    }
+    for required in ["bash", "edit", "write", "patch", "task", "webfetch"] {
+        assert!(
+            tools.get(required).is_some(),
+            "инструмент `{required}` обязан присутствовать и быть выключенным"
+        );
+    }
+    assert_eq!(
+        config
+            .pointer("/agent/stellwerk-planner/model")
+            .and_then(serde_json::Value::as_str),
+        Some(PLANNER_MODEL),
+        "модель планировщика пинована явно"
+    );
+}
+
+#[test]
+fn a_snapshot_drift_after_approval_forces_reapproval() {
+    let mut s = PlanSession::new("/repo", "old-head");
+    s.set_draft(draft("g"), "s".to_string());
+    s.approve();
+    assert!(!s.approval_required(), "до сдвига план утверждён");
+    s.reconcile_snapshot("new-head");
+    assert_eq!(s.snapshot, "new-head");
+    assert_eq!(s.version, 2, "смена дерева — новая версия, а не прежняя");
+    assert!(
+        s.approval_required(),
+        "другое дерево — прежнее утверждение недействительно"
+    );
+    assert!(!s.is_approved());
+}
+
+#[test]
+fn a_matching_snapshot_leaves_approval_intact() {
+    let mut s = PlanSession::new("/repo", "same-head");
+    s.set_draft(draft("g"), "s".to_string());
+    s.approve();
+    s.reconcile_snapshot("same-head");
+    assert!(
+        !s.approval_required(),
+        "тот же снимок не сбрасывает утверждение"
+    );
+}
+
+#[test]
+fn set_goal_and_set_draft_bump_the_version() {
+    let mut s = PlanSession::new("/repo", "abc123");
+    assert_eq!(s.version, 0);
+    s.set_goal("цель");
+    assert_eq!(s.version, 1, "новая цель — новая версия");
+    s.set_draft(draft("цель"), "кратко".to_string());
+    assert_eq!(s.version, 2, "новый черновик — новая версия");
+}
+
+#[test]
+fn extract_json_rejects_reversed_braces() {
+    match parse_reply("}\n{") {
+        Reply::Unrecognized { raw } => assert_eq!(raw, "}\n{"),
+        other => panic!("перевёрнутые скобки обязаны быть Unrecognized: {other:?}"),
+    }
+}
+
+#[test]
+fn an_unreadable_path_is_an_error_not_an_absent_session() {
+    let dir = tmp("dir-as-session");
+    std::fs::create_dir_all(&dir).unwrap();
+    let result = load_session(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        result.is_err(),
+        "каталог вместо файла — ошибка чтения, а не «сессии нет»"
+    );
+}
+
+#[test]
+fn render_labels_the_current_stage_and_the_answering_prompt() {
+    let s = PlanSession::new("/repo", "abc123");
+    let goal = flatten(&render_plan(&View {
+        session: &s,
+        stage: Stage::Goal,
+        input: "",
+        model_text: "",
+        error: None,
+    }));
+    assert!(goal.contains("готов"), "стартовая фаза подписана: {goal}");
+    let asking = flatten(&render_plan(&View {
+        session: &s,
+        stage: Stage::Asking,
+        input: "",
+        model_text: "",
+        error: None,
+    }));
+    assert!(
+        asking.contains("отвечает модель"),
+        "фаза ответа подписана: {asking}"
+    );
+    assert!(
+        asking.contains("модель отвечает"),
+        "виден ход ответа: {asking}"
+    );
+    let answering = flatten(&render_plan(&View {
+        session: &s,
+        stage: Stage::Answering,
+        input: "уточнить",
+        model_text: "",
+        error: None,
+    }));
+    assert!(
+        answering.contains("ответ> уточнить"),
+        "виден ввод ответа: {answering}"
+    );
+}
+
+#[test]
+fn an_empty_session_render_has_no_dialogue_or_live_text() {
+    let s = PlanSession::new("/repo", "abc123");
+    let text = flatten(&render_plan(&View {
+        session: &s,
+        stage: Stage::Goal,
+        input: "",
+        model_text: "",
+        error: None,
+    }));
+    assert!(
+        !text.contains("диалог:"),
+        "без реплик нет секции диалога: {text}"
+    );
+    assert!(
+        !text.contains("модель (сейчас)"),
+        "без текста модели нет строки: {text}"
+    );
+}
+
+#[test]
+fn build_prompt_carries_goal_snapshot_and_json_contract() {
+    let mut s = PlanSession::new("/repo", "deadbeef");
+    s.set_goal("исправить опечатку");
+    let prompt = build_prompt(&s);
+    assert!(
+        prompt.contains("исправить опечатку"),
+        "цель в промпте: {prompt}"
+    );
+    assert!(prompt.contains("/repo"), "репозиторий в промпте: {prompt}");
+    assert!(prompt.contains("deadbeef"), "снимок в промпте: {prompt}");
+    assert!(
+        prompt.contains("\"kind\":\"plan\""),
+        "контракт JSON объявлен: {prompt}"
+    );
+    assert!(
+        prompt.contains("НЕ утверждаешь"),
+        "запрет самоутверждения объявлен: {prompt}"
+    );
+}
+
+fn flatten(lines: &[ratatui::text::Line<'static>]) -> String {
+    lines
+        .iter()
+        .map(|l| format!("{l}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
