@@ -143,6 +143,17 @@ async fn status(s: &SqliteStore, task: &str) -> Option<String> {
         .and_then(|e| e.payload.get("status").cloned())
 }
 
+/// Все статусы задачи в порядке записи (`ORDER BY ts, id`). Нужен там, где по одной
+/// задаче пишется больше одного события (первый проход + возобновление).
+async fn statuses(s: &SqliteStore, task: &str) -> Vec<String> {
+    s.list_by_task(task)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| e.payload.get("status").cloned())
+        .collect()
+}
+
 #[tokio::test]
 async fn ask_stops_the_pass_and_the_tail_is_never_requested() {
     let (_, w, s) = harness("ask");
@@ -168,6 +179,76 @@ async fn ask_stops_the_pass_and_the_tail_is_never_requested() {
         s.list_by_task("a4").await.unwrap().is_empty(),
         "a4 не одобрялся"
     );
+}
+
+/// Ответ на `Ask` не воскрешает старую пачку. `run_gated` держит набор вызовов только
+/// в аргументе: у него нет `self` и нет статики с индексом пачки, поэтому продолжение
+/// идёт НОВЫМ проходом с НОВЫМ набором, а `Allow_B` из исходной пачки сам по себе не
+/// исполняется.
+///
+/// Характеризующий (lock) тест: поведение верно by construction, RED без внесения
+/// самого дефекта недостижим. Тест фиксирует отсутствие скрытого состояния между
+/// вызовами — против реализации со скрытым курсором/хвостом он падал бы: хвост `p3`
+/// исполнился бы, у `p3` появился бы чек. Возобновление берёт ТОТ ЖЕ `task_id`, что
+/// был остановлен (`p2`): состояние, ключёванное по задаче, обязано быть поймано, а
+/// не проскочить мимо нового id. Эффект проверяется по `spawned()` (счётчик exec) и
+/// чеку `Succeeded`, а не по общему `STARTED`: его создаёт уже первый проход.
+#[tokio::test]
+async fn an_answered_ask_does_not_resume_the_old_tail() {
+    let (_, w, s) = harness("resume");
+    let first = [
+        call("p1", "bash", false), // Allow — исполняется
+        call("p2", "r2", true),    // Ask — проход остановлен
+        call("p3", "bash", false), // Allow_B — хвост, не должен исполняться
+    ];
+    let pass = run_gated(&first, &w, &s).await.unwrap();
+    assert_eq!(
+        blocked(&pass),
+        vec![CallVerdict::Allow, CallVerdict::Ask],
+        "исходная пачка: Allow, затем Ask"
+    );
+    assert_eq!(w.spawned(), 1, "исполнен только первый вызов");
+    assert_eq!(status(&s, "p2").await.as_deref(), Some("Asked"));
+    assert!(
+        s.list_by_task("p3").await.unwrap().is_empty(),
+        "хвост p3 не запрашивался"
+    );
+
+    // Человек ответил на `Ask` задачи p2. Возобновление — НОВЫЙ проход с НОВЫМ
+    // набором и с тем же `task_id`, а не продолжение старого вектора с индекса 2.
+    let resumed = [call("p2", "bash", false)];
+    match run_gated(&resumed, &w, &s).await.unwrap() {
+        GatedPass::Completed(v) => assert_eq!(v, vec![CallVerdict::Allow]),
+        other => panic!("ожидался Completed, получено {other:?}"),
+    }
+    assert_eq!(
+        w.spawned(),
+        2,
+        "исполнено ровно то, что передано в новый проход"
+    );
+    let p2 = statuses(&s, "p2").await;
+    assert!(
+        p2.contains(&"Asked".to_string()),
+        "чек первого прохода сохранён, а не затёрт: {p2:?}"
+    );
+    assert!(
+        p2.contains(&"Succeeded".to_string()),
+        "возобновлённый вызов дал эффект: {p2:?}"
+    );
+    assert!(
+        s.list_by_task("p3").await.unwrap().is_empty(),
+        "Allow_B из исходной пачки не воскрешён ответом на Ask"
+    );
+
+    // Положительный контроль: явно переданный p3 ИСПОЛНЯЕТСЯ. Значит прежние
+    // «p3 пуст» — следствие отсутствия воскрешения, а не неработоспособности p3.
+    let explicit = [call("p3", "bash", false)];
+    match run_gated(&explicit, &w, &s).await.unwrap() {
+        GatedPass::Completed(v) => assert_eq!(v, vec![CallVerdict::Allow]),
+        other => panic!("ожидался Completed, получено {other:?}"),
+    }
+    assert_eq!(w.spawned(), 3, "явно переданный p3 исполнен");
+    assert_eq!(status(&s, "p3").await.as_deref(), Some("Succeeded"));
 }
 
 #[tokio::test]
