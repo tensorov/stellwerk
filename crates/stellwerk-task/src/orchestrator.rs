@@ -11,7 +11,7 @@
 //! `Worker` в этом крейте, и она не собирает команду сама ни в одной ветке.
 
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -234,6 +234,28 @@ enum Environment {
     },
 }
 
+/// Аргументы запуска Pi: ровно одно расширение и ЯВНЫЙ список инструментов.
+///
+/// `--offline` убирает сеть, `--no-session` — запись сессии, `--no-extensions` —
+/// обнаружение чужих расширений, `--no-context-files` — подхват `AGENTS.md`.
+/// `--api-key` не передаётся никогда: argv виден в `/proc` любому в namespace,
+/// поэтому ключ остаётся на хосте и в процесс не попадает.
+pub fn pi_transport_args(extension: &Path, tools: &[&str]) -> Vec<String> {
+    [
+        "--offline",
+        "--no-session",
+        "--no-extensions",
+        "--no-context-files",
+        "-e",
+        &extension.display().to_string(),
+        "--tools",
+        &tools.join(","),
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
 /// Воркер, запускающий движок ВНУТРИ песочницы через адаптер.
 ///
 /// Поля закрыты: программу, аргументы, бюджет и разрешённые переменные задаёт
@@ -330,6 +352,36 @@ impl<A> SandboxWorker<A> {
     pub fn with_socket(mut self, socket: impl Into<PathBuf>) -> Self {
         self.socket = Some(socket.into());
         self
+    }
+
+    /// Заявить ОБА канала сразу: каталог сокетов монтируется на чтение целиком, поэтому
+    /// `gate.sock` виден рядом с `model.sock` без правки песочницы. Разные каталоги —
+    /// отказ ДО запуска: иначе второй канал не виден, и «гейта нет» стало бы тишиной.
+    pub fn with_sockets(
+        mut self,
+        model: impl Into<PathBuf>,
+        gate: impl Into<PathBuf>,
+    ) -> Result<Self, WorkerError> {
+        let (model, gate) = (model.into(), gate.into());
+        let dir = model
+            .parent()
+            .filter(|dir| Some(*dir) == gate.parent())
+            .map(Path::to_path_buf)
+            .ok_or_else(|| WorkerError("каналы модели и гейта в разных каталогах".to_owned()))?;
+        if !dir.is_dir() {
+            return Err(WorkerError(format!(
+                "каталог каналов отсутствует: {}",
+                dir.display()
+            )));
+        }
+        if dir.starts_with(&self.sandbox.work) || dir.starts_with(&self.sandbox.tmp) {
+            return Err(WorkerError("каталог каналов внутри work/tmp".to_owned()));
+        }
+        self.socket = Some(model);
+        if !self.sandbox.read_only.contains(&dir) {
+            self.sandbox.read_only.push(dir);
+        }
+        Ok(self)
     }
 
     /// Заменить окружение сборкой по белому списку: имена, попадающие в процесс, берутся
