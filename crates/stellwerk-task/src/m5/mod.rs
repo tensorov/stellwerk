@@ -17,6 +17,8 @@ pub mod secrets;
 pub mod integrator_profile;
 // Транспорт модели: кадры на хостовом сокете, маршрут выбирает хост, а не песочница.
 pub mod model_transport;
+// Канал гейта: вердикт по инструменту ДО эффекта, риск классифицирует хост.
+pub mod gate_channel;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
