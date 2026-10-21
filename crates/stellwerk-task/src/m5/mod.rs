@@ -15,6 +15,8 @@ pub mod session_identity;
 pub mod secrets;
 // Профиль интегратора: перечень видимых путей задан в коде, и пути к чужому секрету нет.
 pub mod integrator_profile;
+// Транспорт модели: кадры на хостовом сокете, маршрут выбирает хост, а не песочница.
+pub mod model_transport;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
