@@ -26,6 +26,13 @@ rmcp       = { version = "3.4.0", default-features = false, features = ["client"
 # несовпадению версий backend'а и ratatui. См. docs/adr/0018-tui-dependencies.md.
 ratatui    = "=0.30.2"
 crossterm  = "=0.29.0"
+# ⚠️ contract-change (N2-00g1): TLS для хостового HTTP-backend. Транспорт наш:
+# значение токена отдаёт только TokenProxy::send готовым wire, поэтому ureq/reqwest
+# (строят запрос сами) не подходят, а curl не принимает готовый HTTP-запрос.
+# ring вместо aws-lc-rs: без cmake/nasm. Корни — данные в крейте, а не чтение
+# /etc/ssl во время выполнения. См. docs/adr/0020-http-transport.md.
+rustls     = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "=1.0.10"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

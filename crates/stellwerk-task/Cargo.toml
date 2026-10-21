@@ -22,6 +22,10 @@ tokio           = { workspace = true }
 # в [workspace.dependencies] и подключён в stellwerk-store; здесь — только строка,
 # новая внешняя зависимость не появляется.
 rusqlite        = { workspace = true }
+# N2-00g1: TLS для хостового backend. Клиент наш (TokenProxy::send), из внешнего
+# берётся только TLS-слой; см. docs/adr/0020-http-transport.md.
+rustls          = { workspace = true }
+webpki-roots    = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
