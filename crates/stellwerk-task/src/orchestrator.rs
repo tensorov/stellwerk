@@ -253,6 +253,9 @@ pub struct SandboxWorker<A> {
     measure: Arc<Mutex<Measure>>,
     /// Сетевой замысел запуска, если он заявлен. Без заявления гейтировать нечего.
     network: NetworkIntent,
+    /// Файл хостового unix-сокета канала модели. `None` — канал не запрошен; это
+    /// отличается от «канал недоступен», и argv тогда собирается как без канала.
+    socket: Option<PathBuf>,
     /// Запись входного гейта. Захвачена в начале `exec`, до старта процесса.
     gate: Arc<Mutex<GateState>>,
     /// Доверенный реестр рисков. Один и тот же реестр питает `preflight` и
@@ -297,6 +300,7 @@ impl<A> SandboxWorker<A> {
             spawned: AtomicUsize::new(0),
             measure: Arc::new(Mutex::new(Measure::Pending)),
             network: NetworkIntent::NotRequested,
+            socket: None,
             gate: Arc::new(Mutex::new(GateState::Pending)),
             registry: Box::new(PRODUCTION_REGISTRY),
         }
@@ -318,6 +322,13 @@ impl<A> SandboxWorker<A> {
             policy,
             url: url.into(),
         };
+        self
+    }
+
+    /// Отдать внутрь песочницы файл хостового unix-сокета (канал модели). Здесь только
+    /// заявка: путь проверяет и монтирует `Sandbox::command_with_socket` — до запуска.
+    pub fn with_socket(mut self, socket: impl Into<PathBuf>) -> Self {
+        self.socket = Some(socket.into());
         self
     }
 
@@ -498,7 +509,13 @@ impl<A: EngineAdapter + Sync> Worker for SandboxWorker<A> {
             let args: Vec<&str> = self.args.iter().map(String::as_str).collect();
             let mut launch = self
                 .sandbox
-                .command(&self.sandbox.work, &self.program, &args, self.budget)
+                .command_with_socket(
+                    &self.sandbox.work,
+                    &self.program,
+                    &args,
+                    self.budget,
+                    self.socket.as_deref(),
+                )
                 .map_err(|e| WorkerError(format!("sandbox refused the run: {e}")))?;
             // Окружение задаётся ДО spawn: пустое, затем только разрешённые переменные.
             launch.env_clear();
