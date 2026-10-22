@@ -6,9 +6,9 @@
 use std::path::PathBuf;
 
 use stellwerk_cli::plan::{
-    build_prompt, load_session, parse_reply, render_plan, resolve_mode, save_session, session_path,
-    PlanDraft, PlanSession, PlannerMode, Reply, Stage, Turn, View, BUILD_UNAVAILABLE_REASON,
-    PLANNER_CONFIG_JSON, PLANNER_MODEL,
+    build_prompt, build_request, load_session, parse_reply, render_plan, resolve_mode,
+    save_session, session_path, BuildRefusal, PlanDraft, PlanSession, PlannerMode, Reply, Stage,
+    Turn, View, BUILD_UNAVAILABLE_REASON, PLANNER_CONFIG_JSON, PLANNER_MODEL,
 };
 
 fn draft(goal: &str) -> PlanDraft {
@@ -19,6 +19,17 @@ fn draft(goal: &str) -> PlanDraft {
         checks: vec!["cargo test".to_string()],
         constraints: vec!["без новых зависимостей".to_string()],
     }
+}
+
+/// Утверждённый план, сделанный нашим транспортом на снимке `abc`: исходное состояние для
+/// проверок допуска к исполнению.
+fn approved_host_plan() -> PlanSession {
+    let mut session = PlanSession::new("/repo", "abc");
+    session.set_goal("цель");
+    session.set_draft(draft("цель"), "сводка".to_string());
+    session.approve();
+    session.planner = Some("host".to_string());
+    session
 }
 
 fn tmp(name: &str) -> PathBuf {
@@ -517,4 +528,121 @@ fn render_names_the_mode_and_calls_opencode_external() {
         text.contains("не записан"),
         "нет записи — так и сказано: {text}"
     );
+}
+
+/// N2-00h3a: план без утверждения не исполняется — и причина названа версией, а не «нет».
+#[test]
+fn build_requires_an_approved_plan() {
+    let empty = PlanSession::new("/repo", "abc");
+    assert_eq!(build_request(&empty, "abc"), Err(BuildRefusal::NoPlan));
+
+    let mut pending = PlanSession::new("/repo", "abc");
+    pending.set_goal("цель");
+    pending.set_draft(draft("цель"), "сводка".to_string());
+    assert_eq!(
+        build_request(&pending, "abc"),
+        Err(BuildRefusal::Unapproved {
+            version: 2,
+            approved: None
+        })
+    );
+}
+
+/// Правка после утверждения снова требует человека: версия выросла, утверждение отстало.
+#[test]
+fn an_edit_after_approval_invalidates_the_request() {
+    let mut s = approved_host_plan();
+    s.set_draft(draft("другая цель"), "сводка".to_string());
+    assert_eq!(
+        build_request(&s, "abc"),
+        Err(BuildRefusal::Unapproved {
+            version: 3,
+            approved: Some(2)
+        })
+    );
+}
+
+/// Текст правили в обход счётчика версий — дайджест это ловит отдельно от `version`.
+#[test]
+fn a_text_edit_without_a_version_bump_is_caught_by_the_digest() {
+    let mut s = approved_host_plan();
+    s.draft
+        .as_mut()
+        .expect("черновик")
+        .checks
+        .push("cargo clippy".to_string());
+    assert_eq!(
+        build_request(&s, "abc"),
+        Err(BuildRefusal::DigestChanged { version: 2 })
+    );
+}
+
+/// План утверждён для одного состояния дерева; исполнять его на другом — не «мелочь».
+#[test]
+fn a_plan_approved_for_another_snapshot_is_refused() {
+    let s = approved_host_plan();
+    let refusal = build_request(&s, "def").expect_err("снимок разошёлся");
+    match &refusal {
+        BuildRefusal::SnapshotDrift { planned, current } => {
+            assert_eq!((planned.as_str(), current.as_str()), ("abc", "def"));
+        }
+        other => panic!("ожидался SnapshotDrift, получено: {other:?}"),
+    }
+    let text = refusal.to_string();
+    assert!(
+        text.contains("abc") && text.contains("def"),
+        "оба снимка видны: {text}"
+    );
+}
+
+/// Нет записи о происхождении — это не «сделан вне транспорта» и не «host».
+#[test]
+fn an_unrecorded_planner_is_not_host() {
+    let mut s = approved_host_plan();
+    s.planner = None;
+    assert_eq!(
+        build_request(&s, "abc"),
+        Err(BuildRefusal::PlannerNotRecorded)
+    );
+    assert_ne!(
+        build_request(&s, "abc"),
+        Err(BuildRefusal::PlannerBypassedTransport {
+            recorded: "opencode".to_string()
+        }),
+        "неизвестное не превращается в известный отказ"
+    );
+}
+
+/// План, сделанный мимо транспорта, отвергается; незнакомая запись названа своей.
+#[test]
+fn opencode_is_named_as_bypassing_the_transport() {
+    let mut bypassed = approved_host_plan();
+    bypassed.planner = Some("opencode".to_string());
+    let refusal = build_request(&bypassed, "abc").expect_err("opencode не пропускается");
+    assert_eq!(
+        refusal,
+        BuildRefusal::PlannerBypassedTransport {
+            recorded: "opencode".to_string()
+        }
+    );
+    assert!(refusal.to_string().contains("opencode"), "{refusal}");
+
+    let mut odd = approved_host_plan();
+    odd.planner = Some("турбо".to_string());
+    assert_eq!(
+        build_request(&odd, "abc"),
+        Err(BuildRefusal::PlannerUnknown {
+            recorded: "турбо".to_string()
+        })
+    );
+}
+
+/// Утверждённый план с записанным `host` и тем же снимком даёт запрос с тем же содержимым.
+#[test]
+fn an_approved_host_plan_becomes_a_request() {
+    let request = build_request(&approved_host_plan(), "abc").expect("план разрешён");
+    assert_eq!(request.goal, "цель");
+    assert_eq!(request.allowed_changes, vec!["src/lib.rs".to_string()]);
+    assert_eq!(request.checks, vec!["cargo test".to_string()]);
+    assert_eq!(request.acceptance, vec!["тест проходит".to_string()]);
 }

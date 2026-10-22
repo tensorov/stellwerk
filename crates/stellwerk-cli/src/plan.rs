@@ -8,8 +8,10 @@
 //!   `opencode` через `OPENCODE_CONFIG`, не трогая проектную конфигурацию владельца.
 //! * Модель **не утверждает план**. «План утверждён» в устах модели — текст;
 //!   утверждение существует только как `PlanSession::approve()` по нажатию человека.
-//! * Build в этом срезе **недоступен** и назван явно (`BUILD_UNAVAILABLE_REASON`),
-//!   а не изображён.
+//! * Build **не исполняется**: исполнителя нет (N2-00h3b), и это названо явно
+//!   (`BUILD_UNAVAILABLE_REASON`), а не изображено. Допуск к исполнению при этом уже
+//!   проверяется по существу (`build_request`): неутверждённый план, чужой снимок и план,
+//!   сделанный мимо транспорта, отвергаются здесь.
 //!
 //! Чистые части (`parse_reply`, `PlanSession`, `render_plan`, конфигурация)
 //! проверяются без TTY и без сети (`tests/plan.rs`). Терминал и процесс модели
@@ -267,6 +269,116 @@ impl PlanSession {
     pub fn is_approved(&self) -> bool {
         self.draft.is_some() && !self.approval_required()
     }
+}
+
+/// Запрос на исполнение: то, что разрешено делать. Поля закрыты, конструктор один —
+/// собрать запрос в обход проверок нельзя.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildRequest {
+    pub goal: String,
+    pub allowed_changes: Vec<String>,
+    pub acceptance: Vec<String>,
+    pub checks: Vec<String>,
+}
+
+/// Почему исполнение не разрешено. Каждая причина — отдельный вариант: «никто не утверждал»,
+/// «план правили после утверждения», «дерево сдвинулось», «происхождение не записано»,
+/// «план сделан вне транспорта» — это разные ответы, и сливать их в один нельзя.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuildRefusal {
+    NoPlan,
+    Unapproved { version: u64, approved: Option<u64> },
+    DigestChanged { version: u64 },
+    SnapshotDrift { planned: String, current: String },
+    PlannerNotRecorded,
+    PlannerBypassedTransport { recorded: String },
+    PlannerUnknown { recorded: String },
+}
+
+impl std::fmt::Display for BuildRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoPlan => write!(f, "плана нет: исполняется утверждённый план, а не намерение"),
+            Self::Unapproved { version, approved } => match approved {
+                Some(approved) => write!(
+                    f,
+                    "план не утверждён: версия {version}, утверждена версия {approved}"
+                ),
+                None => write!(f, "план не утверждён: версия {version}, утверждения нет"),
+            },
+            Self::DigestChanged { version } => write!(
+                f,
+                "утверждение не привязано к текущему тексту плана (версия {version}): текст менялся \
+                 в обход счётчика версий — утвердите заново"
+            ),
+            Self::SnapshotDrift { planned, current } => write!(
+                f,
+                "план утверждён для снимка {planned}, а репозиторий на {current}: исполнитель \
+                 получил бы другое дерево"
+            ),
+            Self::PlannerNotRecorded => write!(
+                f,
+                "происхождение плана не записано: неизвестно, сделан ли он нашим транспортом"
+            ),
+            Self::PlannerBypassedTransport { recorded } => write!(
+                f,
+                "план сделан вне транспорта (`{recorded}`): такой план к исполнению не допускается"
+            ),
+            Self::PlannerUnknown { recorded } => write!(
+                f,
+                "записано незнакомое происхождение `{recorded}`: это ни host, ни opencode"
+            ),
+        }
+    }
+}
+
+/// Можно ли исполнять этот план. Функция чистая: снимок приходит аргументом, поэтому
+/// проверяется без репозитория и без диска.
+pub fn build_request(
+    session: &PlanSession,
+    current_snapshot: &str,
+) -> Result<BuildRequest, BuildRefusal> {
+    let Some(draft) = session.draft.as_ref() else {
+        return Err(BuildRefusal::NoPlan);
+    };
+    if session.approved_version != Some(session.version) {
+        return Err(BuildRefusal::Unapproved {
+            version: session.version,
+            approved: session.approved_version,
+        });
+    }
+    // Дайджест ловит то, что счётчик версий пропустил: текст правили через API.
+    if session.approved_digest != session.plan_digest() {
+        return Err(BuildRefusal::DigestChanged {
+            version: session.version,
+        });
+    }
+    if session.snapshot != current_snapshot {
+        return Err(BuildRefusal::SnapshotDrift {
+            planned: session.snapshot.clone(),
+            current: current_snapshot.to_string(),
+        });
+    }
+    match session.planner.as_deref() {
+        Some("host") => {}
+        Some("opencode") => {
+            return Err(BuildRefusal::PlannerBypassedTransport {
+                recorded: "opencode".to_string(),
+            })
+        }
+        Some(other) => {
+            return Err(BuildRefusal::PlannerUnknown {
+                recorded: other.to_string(),
+            })
+        }
+        None => return Err(BuildRefusal::PlannerNotRecorded),
+    }
+    Ok(BuildRequest {
+        goal: draft.goal.clone(),
+        allowed_changes: draft.allowed_changes.clone(),
+        acceptance: draft.acceptance.clone(),
+        checks: draft.checks.clone(),
+    })
 }
 
 /// Разобранный ответ модели. `Unrecognized` — отдельное состояние, а не «план по
@@ -976,7 +1088,17 @@ fn handle_key(
         },
         Stage::Approved => {
             if key.code == KeyCode::Char('b') {
-                ui.error = Some(format!("Build недоступен: {BUILD_UNAVAILABLE_REASON}"));
+                let current = git_head(Path::new(&session.repo));
+                ui.error = Some(match build_request(session, &current) {
+                    Ok(request) => format!(
+                        "Build допущен: {} · изменений: {} · проверки: {} · исполнение \
+                         появится в N2-00h3b",
+                        request.goal,
+                        request.allowed_changes.len(),
+                        request.checks.join("; ")
+                    ),
+                    Err(refusal) => format!("Build отклонён: {refusal}"),
+                });
             }
         }
         Stage::Failed | Stage::Cancelled => {
