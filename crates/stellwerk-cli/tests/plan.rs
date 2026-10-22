@@ -6,9 +6,9 @@
 use std::path::PathBuf;
 
 use stellwerk_cli::plan::{
-    build_prompt, load_session, parse_reply, render_plan, save_session, session_path, PlanDraft,
-    PlanSession, Reply, Stage, Turn, View, BUILD_UNAVAILABLE_REASON, PLANNER_CONFIG_JSON,
-    PLANNER_MODEL,
+    build_prompt, load_session, parse_reply, render_plan, resolve_mode, save_session, session_path,
+    PlanDraft, PlanSession, PlannerMode, Reply, Stage, Turn, View, BUILD_UNAVAILABLE_REASON,
+    PLANNER_CONFIG_JSON, PLANNER_MODEL,
 };
 
 fn draft(goal: &str) -> PlanDraft {
@@ -442,4 +442,79 @@ fn flatten(lines: &[ratatui::text::Line<'static>]) -> String {
         .map(|l| format!("{l}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// N2-00h2b: отсутствующая запись заполняется текущим режимом и остаётся в файле.
+#[test]
+fn the_session_records_the_planner_mode() {
+    let (mode, record) = resolve_mode(None, PlannerMode::Host).expect("режим разрешён");
+    assert_eq!(mode, PlannerMode::Host);
+    assert!(record, "запись отсутствует — её и создаём");
+
+    let mut s = PlanSession::new("/repo", "abc123");
+    s.planner = Some(mode.as_str().to_string());
+    let path = tmp("planner-record");
+    save_session(&path, &s).expect("сессия сохранена");
+    let loaded = load_session(&path).expect("чтение").expect("сессия есть");
+    assert_eq!(loaded.planner.as_deref(), Some("host"));
+}
+
+/// Записанный режим старше флага: иначе утверждённый план менял бы происхождение при
+/// перезапуске, и Build нельзя было бы спросить, как этот план получен.
+#[test]
+fn a_recorded_mode_is_not_overwritten_by_a_different_flag() {
+    let (mode, record) = resolve_mode(Some("host"), PlannerMode::Opencode).expect("режим разрешён");
+    assert_eq!(mode, PlannerMode::Host);
+    assert!(!record, "записанное не перетирается флагом");
+
+    assert!(
+        resolve_mode(Some("турбо"), PlannerMode::Host).is_err(),
+        "неизвестная запись — отказ, а не host"
+    );
+}
+
+/// Старая сессия без поля читается как «происхождение не записано», а не как `host`.
+#[test]
+fn an_old_session_without_the_field_is_not_treated_as_host() {
+    let path = tmp("planner-old");
+    std::fs::write(
+        &path,
+        r#"{"repo":"/repo","snapshot":"abc","goal":null,"turns":[],"draft":null,"summary":null,"version":0,"approved_version":null}"#,
+    )
+    .expect("старая сессия записана");
+    let loaded = load_session(&path).expect("чтение").expect("сессия есть");
+    assert_eq!(loaded.planner, None, "нет записи — не host");
+    let (mode, record) =
+        resolve_mode(loaded.planner.as_deref(), PlannerMode::Host).expect("режим разрешён");
+    assert_eq!(mode, PlannerMode::Host);
+    assert!(record, "после загрузки запись создаётся");
+}
+
+/// Режим виден человеку, и `opencode` назван тем, чем он является — ходом вне транспорта.
+#[test]
+fn render_names_the_mode_and_calls_opencode_external() {
+    let mut s = PlanSession::new("/repo", "abc123");
+    s.planner = Some("opencode".to_string());
+    let text = flatten(&render_plan(&View {
+        session: &s,
+        stage: Stage::Goal,
+        input: "",
+        model_text: "",
+        error: None,
+    }));
+    assert!(text.contains("opencode"), "режим виден: {text}");
+    assert!(text.contains("вне транспорта"), "пометка есть: {text}");
+
+    let fresh = PlanSession::new("/repo", "abc123");
+    let text = flatten(&render_plan(&View {
+        session: &fresh,
+        stage: Stage::Goal,
+        input: "",
+        model_text: "",
+        error: None,
+    }));
+    assert!(
+        text.contains("не записан"),
+        "нет записи — так и сказано: {text}"
+    );
 }

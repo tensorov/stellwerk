@@ -36,6 +36,10 @@ enum Commands {
     Plan {
         /// Path to the repository to plan changes in
         repo: PathBuf,
+        /// Where the planning turn goes: `host` is our transport, `opencode` is the
+        /// debug path that Build will not accept
+        #[arg(long, value_enum, default_value_t = plan::PlannerMode::Host)]
+        planner: plan::PlannerMode,
     },
 }
 
@@ -71,8 +75,8 @@ fn run_main(cli: &Cli) -> Result<(), String> {
         Commands::Tui(args) => {
             tui::run_tui(&args.path)?;
         }
-        Commands::Plan { repo } => {
-            plan::run_plan_tui(repo)?;
+        Commands::Plan { repo, planner } => {
+            plan::run_plan_tui(repo, *planner)?;
         }
     }
     Ok(())

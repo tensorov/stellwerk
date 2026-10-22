@@ -22,12 +22,15 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::Duration;
 
+use clap::ValueEnum;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+use crate::planner_host::PlannerHost;
 
 /// Имя агента-планировщика в конфигурации транспорта.
 pub const PLANNER_AGENT: &str = "stellwerk-planner";
@@ -36,6 +39,11 @@ pub const PLANNER_AGENT: &str = "stellwerk-planner";
 /// Pi 0.87 не знает этого провайдера вовсе (`pi auth check --provider deepseek`
 /// → `not_ready`), поэтому выбран OpenCode, а не Pi RPC.
 pub const PLANNER_MODEL: &str = "opencode/deepseek-v4.1-flash-free";
+
+/// Адрес и модель для режима `host`. Подтверждены владельцем; в теле запроса уходит голый
+/// id — префикс `neuraldeep/` это маршрут Pi, а не поле OpenAI-совместимого API.
+pub const HOST_BASE_URL: &str = "https://api.neuraldeep.ru/v1";
+pub const HOST_MODEL_ID: &str = "qwen3.6-unlim-xl-noreason";
 
 /// Дословная причина, по которой Build в этом срезе недоступен. Это не заглушка:
 /// ни `model transport` (N2-00), ни блокирующая pre-execution авторизация
@@ -66,6 +74,59 @@ pub const PLANNER_CONFIG_JSON: &str = r#"{
     }
   }
 }"#;
+
+/// Режим планировщика. `Host` — наш транспорт, `Opencode` — путь отладки промпта: ход в нём
+/// идёт мимо гейта и бюджета, поэтому Build его не примет (00h3).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum PlannerMode {
+    #[default]
+    Host,
+    Opencode,
+}
+
+impl PlannerMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Host => "host",
+            Self::Opencode => "opencode",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "host" => Some(Self::Host),
+            "opencode" => Some(Self::Opencode),
+            _ => None,
+        }
+    }
+}
+
+/// Какой режим действует и надо ли записать его в сессию.
+///
+/// Записанный режим старше флага: утверждённый план не должен менять происхождение при
+/// перезапуске — иначе Build получил бы план, про который нельзя сказать, как он сделан.
+/// Неизвестная запись — отказ, а не «сойдёт за host».
+pub fn resolve_mode(
+    recorded: Option<&str>,
+    requested: PlannerMode,
+) -> Result<(PlannerMode, bool), String> {
+    match recorded {
+        None => Ok((requested, true)),
+        Some(text) => PlannerMode::parse(text)
+            .map(|mode| (mode, false))
+            .ok_or_else(|| format!("session records unknown planner `{text}`")),
+    }
+}
+
+/// Как режим назван человеку. Отсутствие записи — отдельное состояние.
+pub fn describe_planner(recorded: Option<&str>) -> String {
+    match recorded {
+        None => "не записан".to_string(),
+        Some("host") => "host (наш транспорт)".to_string(),
+        Some("opencode") => "opencode — вне транспорта".to_string(),
+        Some(other) => format!("неизвестный режим `{other}`"),
+    }
+}
 
 /// Черновик плана в терминах шага 2: цель, допустимые изменения, критерии приёмки,
 /// проверки, ограничения исполнителя. Поля без `Default`: отсутствие поля — это
@@ -108,6 +169,10 @@ pub struct PlanSession {
     /// спросят, а не молча сочтут план утверждённым.
     #[serde(default)]
     pub approved_digest: Option<String>,
+    /// Режим, которым получен план. `None` — запись отсутствует (старая сессия), и это не
+    /// то же самое, что `host`: происхождение неизвестно, а не «наш транспорт».
+    #[serde(default)]
+    pub planner: Option<String>,
 }
 
 impl PlanSession {
@@ -122,6 +187,7 @@ impl PlanSession {
             version: 0,
             approved_version: None,
             approved_digest: None,
+            planner: None,
         }
     }
 
@@ -451,6 +517,14 @@ pub fn render_plan(view: &View<'_>) -> Vec<Line<'static>> {
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
+        format!(
+            "ход модели: {}",
+            describe_planner(session.planner.as_deref())
+        ),
+        Style::default().add_modifier(Modifier::DIM),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
         format!("[ Build недоступен ] {BUILD_UNAVAILABLE_REASON}"),
         Style::default()
             .add_modifier(Modifier::DIM)
@@ -499,95 +573,170 @@ pub fn build_prompt(session: &PlanSession) -> String {
     prompt
 }
 
-/// Живой транспорт к модели: дочерний процесс `opencode run`. Это узкий
-/// доверенный канал — процесс Stellwerk держит его, а не песочница исполнения.
+/// Куда уходит ход модели. Две реализации одного поведения; выбор записан в сессии, а не
+/// угадан по окружению.
+enum Channel {
+    Opencode {
+        child: Option<Child>,
+        scratch: PathBuf,
+    },
+    Host {
+        planner: Option<std::sync::Arc<PlannerHost>>,
+        scratch: PathBuf,
+    },
+}
+
+/// Живой транспорт к модели.
 pub struct LiveTransport {
-    child: Option<Child>,
-    scratch: PathBuf,
+    channel: Channel,
 }
 
 impl LiveTransport {
+    /// Режим `opencode`: дочерний процесс, как было до 00h2a.
     pub fn new(scratch: PathBuf) -> Self {
         Self {
-            child: None,
-            scratch,
+            channel: Channel::Opencode {
+                child: None,
+                scratch,
+            },
+        }
+    }
+
+    pub fn with_mode(mode: PlannerMode, scratch: PathBuf) -> Self {
+        match mode {
+            PlannerMode::Opencode => Self::new(scratch),
+            PlannerMode::Host => Self {
+                channel: Channel::Host {
+                    planner: None,
+                    scratch,
+                },
+            },
         }
     }
 
     /// Запускает запрос. Возвращает приёмник событий; чтение идёт в отдельном
     /// потоке, поэтому TUI не зависает.
     pub fn ask(&mut self, prompt: &str) -> Result<Receiver<TransportEvent>, String> {
-        let config = write_planner_config(&self.scratch)?;
-        let mut child = Command::new("opencode")
-            .args([
-                "run",
-                "--pure",
-                "--format",
-                "json",
-                "--agent",
-                PLANNER_AGENT,
-            ])
-            .arg(prompt)
-            .env("OPENCODE_CONFIG", &config)
-            .current_dir(&self.scratch)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("spawn opencode: {e}"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "opencode не отдал stdout".to_string())?;
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-            let mut session = None;
-            let mut failed = false;
-            for line in reader.lines() {
-                let Ok(line) = line else { break };
-                let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
-                    continue;
-                };
-                if let Some(id) = value.get("sessionID").and_then(serde_json::Value::as_str) {
-                    session = Some(id.to_string());
-                }
-                match value.get("type").and_then(serde_json::Value::as_str) {
-                    Some("text") => {
-                        if let Some(text) = value
-                            .pointer("/part/text")
-                            .and_then(serde_json::Value::as_str)
+        match &mut self.channel {
+            Channel::Opencode { child, scratch } => {
+                let config = write_planner_config(scratch)?;
+                let mut process = Command::new("opencode")
+                    .args([
+                        "run",
+                        "--pure",
+                        "--format",
+                        "json",
+                        "--agent",
+                        PLANNER_AGENT,
+                    ])
+                    .arg(prompt)
+                    .env("OPENCODE_CONFIG", &config)
+                    .current_dir(scratch)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .map_err(|e| format!("spawn opencode: {e}"))?;
+                let stdout = process
+                    .stdout
+                    .take()
+                    .ok_or_else(|| "opencode не отдал stdout".to_string())?;
+                let (tx, rx) = mpsc::channel();
+                thread::spawn(move || {
+                    let reader = BufReader::new(stdout);
+                    let mut session = None;
+                    let mut failed = false;
+                    for line in reader.lines() {
+                        let Ok(line) = line else { break };
+                        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                            continue;
+                        };
+                        if let Some(id) = value.get("sessionID").and_then(serde_json::Value::as_str)
                         {
-                            let _ = tx.send(TransportEvent::Text(text.to_string()));
+                            session = Some(id.to_string());
+                        }
+                        match value.get("type").and_then(serde_json::Value::as_str) {
+                            Some("text") => {
+                                if let Some(text) = value
+                                    .pointer("/part/text")
+                                    .and_then(serde_json::Value::as_str)
+                                {
+                                    let _ = tx.send(TransportEvent::Text(text.to_string()));
+                                }
+                            }
+                            Some("error") => {
+                                let msg = match value
+                                    .pointer("/error/data/message")
+                                    .and_then(serde_json::Value::as_str)
+                                {
+                                    Some(text) => format!("модель: {text}"),
+                                    None => "модель вернула ошибку без описания".to_string(),
+                                };
+                                failed = true;
+                                let _ = tx.send(TransportEvent::Failed(msg));
+                            }
+                            _ => {}
                         }
                     }
-                    Some("error") => {
-                        let msg = match value
-                            .pointer("/error/data/message")
-                            .and_then(serde_json::Value::as_str)
-                        {
-                            Some(text) => format!("модель: {text}"),
-                            None => "модель вернула ошибку без описания".to_string(),
-                        };
-                        failed = true;
-                        let _ = tx.send(TransportEvent::Failed(msg));
+                    if !failed {
+                        let _ = tx.send(TransportEvent::Finished { session });
                     }
-                    _ => {}
-                }
+                });
+                *child = Some(process);
+                Ok(rx)
             }
-            if !failed {
-                let _ = tx.send(TransportEvent::Finished { session });
+            Channel::Host { planner, scratch } => {
+                // Собирается один раз: повторный `bind` того же пути даёт `EADDRINUSE`, и
+                // второй вопрос в TUI упал бы на ровном месте.
+                let host = match planner {
+                    Some(host) => std::sync::Arc::clone(host),
+                    None => {
+                        let (tx, rx) = mpsc::channel();
+                        let built =
+                            crate::host_model::ModelConfig::from_env(HOST_BASE_URL, HOST_MODEL_ID)
+                                .map_err(crate::planner_host::PlannerError::Model)
+                                .and_then(|config| PlannerHost::prepare(config, scratch, &[]));
+                        match built {
+                            Ok(host) => {
+                                let host = std::sync::Arc::new(host);
+                                *planner = Some(std::sync::Arc::clone(&host));
+                                host
+                            }
+                            Err(why) => {
+                                // Человек видит причину, TUI остаётся живым.
+                                let _ = tx.send(TransportEvent::Failed(why.to_string()));
+                                return Ok(rx);
+                            }
+                        }
+                    }
+                };
+                let (tx, rx) = mpsc::channel();
+                let prompt = prompt.to_owned();
+                thread::spawn(move || match host.ask(&prompt) {
+                    Ok(text) => {
+                        let _ = tx.send(TransportEvent::Text(text));
+                        let _ = tx.send(TransportEvent::Finished { session: None });
+                    }
+                    Err(why) => {
+                        let _ = tx.send(TransportEvent::Failed(why.to_string()));
+                    }
+                });
+                Ok(rx)
             }
-        });
-        self.child = Some(child);
-        Ok(rx)
+        }
     }
 
     /// Останавливает запрос: убивает и пожинает процесс. Идемпотентна.
+    ///
+    /// Для режима `host` отмены нет: поток вправе доработать до `TURN_TIMEOUT` (120 с),
+    /// приёмник при этом отбрасывается и поздний ответ никого не обновит. Это записано
+    /// здесь, а не выдано за остановку сетевого вызова.
     pub fn cancel(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+        if let Channel::Opencode { child, .. } = &mut self.channel {
+            if let Some(mut process) = child.take() {
+                let _ = process.kill();
+                let _ = process.wait();
+            }
         }
     }
 }
@@ -705,14 +854,19 @@ impl PlanUi {
 
 /// Точка входа подкоманды `stellwerk plan <repo>`. Держит терминал и цикл
 /// событий; отрисовка берётся из чистого `render_plan`.
-pub fn run_plan_tui(repo: &Path) -> Result<(), String> {
+pub fn run_plan_tui(repo: &Path, requested: PlannerMode) -> Result<(), String> {
     let snapshot = git_head(repo);
     let path = session_path(repo);
     let mut session = load_session(&path)?
         .unwrap_or_else(|| PlanSession::new(&repo.display().to_string(), &snapshot));
     session.reconcile_snapshot(&snapshot);
+    let (mode, record) = resolve_mode(session.planner.as_deref(), requested)?;
+    if record {
+        session.planner = Some(mode.as_str().to_owned());
+        save_session(&path, &session)?;
+    }
     let scratch = std::env::temp_dir().join(format!("stellwerk-plan-{}", std::process::id()));
-    let mut transport = LiveTransport::new(scratch);
+    let mut transport = LiveTransport::with_mode(mode, scratch);
 
     let mut terminal = crate::tui::enter()?;
     let result = plan_loop(&mut terminal, &path, &mut session, &mut transport);
