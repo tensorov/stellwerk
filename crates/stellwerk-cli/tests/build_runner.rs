@@ -8,8 +8,8 @@ use std::sync::Mutex;
 
 use serde_json::json;
 use stellwerk_cli::build_runner::{
-    copy_workspace, gate_summary, run_build, serve_gate_until_stopped, serve_model_until_stopped,
-    wake, BuildPolicy, BuildRun, BUILD_MODULE,
+    answer_text, copy_workspace, gate_summary, prompt, run_build, serve_gate_until_stopped,
+    serve_model_until_stopped, wake, BuildPolicy, BuildRun, BUILD_MODULE,
 };
 use stellwerk_cli::plan::BuildRequest;
 use stellwerk_gateway::gate::decide;
@@ -437,4 +437,31 @@ fn the_gate_summary_names_each_decision() {
         },
     ]);
     assert_eq!(summary, "allowed(read) · denied(bash:risk_denied: R5)");
+}
+
+/// Приглашение требует работы, а не пересказа: без этого модель заканчивает ход
+/// текстом, и гейт не видит ни одной заявки.
+#[test]
+fn the_build_prompt_asks_for_the_work_not_a_description() {
+    let text = prompt(&request());
+    assert!(text.contains("выполняй"), "приглашение: {text}");
+    assert!(text.contains("edit"), "назван инструмент: {text}");
+    assert!(
+        text.contains("src/lib.rs"),
+        "названы допустимые изменения: {text}"
+    );
+}
+
+/// Вывод Build — поток JSON, и его начало это заголовок сессии, а не ответ модели.
+/// Печатать префикс значило показывать не то, что сказал агент.
+#[test]
+fn the_build_answer_is_the_last_assistant_message() {
+    let stream = concat!(
+        "{\"type\":\"session\",\"id\":\"01a1\",\"cwd\":\"/tmp/x\"}\n",
+        "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"задача\"}}\n",
+        "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"правлю\"}]}}\n",
+        "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"text\":\"готово\"}}\n"
+    );
+    assert_eq!(answer_text(stream), "готово");
+    assert_eq!(answer_text("не json"), "не json");
 }

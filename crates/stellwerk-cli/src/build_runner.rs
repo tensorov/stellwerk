@@ -258,6 +258,47 @@ pub fn gate_summary(answers: &[GateAnswer]) -> String {
         .join(" · ")
 }
 
+/// Что сказала модель. Поток `--mode json` — построчный JSON, и первые 240 символов
+/// этого потока всегда заголовок сессии; печатать их значило показывать не ответ.
+/// Если ответа в потоке нет, возвращается начало вывода: пустая строка скрыла бы,
+/// что печатать было что.
+pub fn answer_text(output: &str) -> String {
+    let mut last = String::new();
+    for line in output.lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        collect_assistant(&value, &mut last);
+    }
+    if last.is_empty() {
+        output.chars().take(240).collect()
+    } else {
+        last
+    }
+}
+
+fn collect_assistant(value: &serde_json::Value, last: &mut String) {
+    if value.get("role").and_then(serde_json::Value::as_str) == Some("assistant") {
+        if let Some(text) = value.get("text").and_then(serde_json::Value::as_str) {
+            *last = text.to_string();
+            return;
+        }
+        if let Some(blocks) = value.get("content").and_then(serde_json::Value::as_array) {
+            let text: String = blocks
+                .iter()
+                .filter_map(|block| block.get("text").and_then(serde_json::Value::as_str))
+                .collect();
+            if !text.is_empty() {
+                *last = text;
+                return;
+            }
+        }
+    }
+    for nested in value.as_object().into_iter().flat_map(|o| o.values()) {
+        collect_assistant(nested, last);
+    }
+}
+
 fn build_binding() -> ModelBinding {
     ModelBinding {
         id: "build".to_string(),
@@ -271,15 +312,19 @@ fn build_binding() -> ModelBinding {
     }
 }
 
-fn prompt(request: &crate::plan::BuildRequest) -> String {
-    let mut out = format!("Задача: {}\n", request.goal);
+pub fn prompt(request: &crate::plan::BuildRequest) -> String {
+    let mut out = format!("Задача: {}\n\n", request.goal);
+    // Модель без этой строки пересказывает план и завершает ход: заявок в гейт ноль,
+    // и «разрешено» неотличимо от «никто не просил».
+    out.push_str("Не пересказывай план — выполняй его. Правь файлы инструментом edit.\n");
+    out.push_str("Оболочка запрещена политикой; доступны read, edit, write.\n\n");
     out.push_str("Допустимые изменения:\n");
     for item in &request.allowed_changes {
         out.push_str("- ");
         out.push_str(item);
         out.push('\n');
     }
-    out.push_str("Проверки:\n");
+    out.push_str("Проверки (их выполнит человек, не запускай их сам):\n");
     for item in &request.checks {
         out.push_str("- ");
         out.push_str(item);

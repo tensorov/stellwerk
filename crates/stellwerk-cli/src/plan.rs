@@ -1029,7 +1029,7 @@ impl PlanUi {
         self.build = None;
         match received {
             Ok(outcome) => {
-                let text: String = outcome.output.chars().take(240).collect();
+                let text = crate::build_runner::answer_text(&outcome.output);
                 let gate = crate::build_runner::gate_summary(&outcome.gate);
                 self.error = Some(format!(
                     "Build: ходов модели {} · гейт: {gate} · вывод: {text}",
