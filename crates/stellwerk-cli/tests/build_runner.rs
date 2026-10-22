@@ -3,10 +3,15 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use std::collections::VecDeque;
+use std::sync::Mutex;
+
+use serde_json::json;
 use stellwerk_cli::build_runner::{
-    copy_workspace, serve_gate_until_stopped, serve_model_until_stopped, wake, BuildPolicy,
-    BUILD_MODULE,
+    copy_workspace, run_build, serve_gate_until_stopped, serve_model_until_stopped, wake,
+    BuildPolicy, BuildRun, BUILD_MODULE,
 };
+use stellwerk_cli::plan::BuildRequest;
 use stellwerk_gateway::gate::decide;
 use stellwerk_task::m5::gate_channel::{GateChannel, GatePolicy};
 use stellwerk_task::m5::model_transport::{
@@ -146,4 +151,131 @@ fn the_model_servant_stops_on_a_wake_connection() {
 #[test]
 fn the_gate_speaks_for_the_build_module() {
     assert_eq!(BUILD_MODULE, "stellwerk-build");
+}
+
+/// Ответы модели по очереди. Пустая очередь — не отказ прогона: агент мог закончить раньше.
+struct Scripted(Mutex<VecDeque<Vec<Frame>>>);
+
+impl ModelBackend for Scripted {
+    fn turn(&self, _messages: &[TurnMessage]) -> Result<Vec<Frame>, BackendError> {
+        let mut queue = self.0.lock().expect("очередь");
+        Ok(queue.pop_front().unwrap_or_else(|| {
+            vec![Frame::Text {
+                text: "готово".to_string(),
+            }]
+        }))
+    }
+}
+
+fn request() -> BuildRequest {
+    BuildRequest {
+        goal: "добавить строку".to_string(),
+        allowed_changes: vec!["src/lib.rs".to_string()],
+        acceptance: vec!["тест проходит".to_string()],
+        checks: vec!["cargo test".to_string()],
+    }
+}
+
+fn pi() -> PathBuf {
+    let home = std::env::var_os("HOME").expect("HOME задан");
+    let launcher = std::env::var_os("PI_BIN").map_or_else(
+        || PathBuf::from(home).join(".pi/agent/bin/pi"),
+        PathBuf::from,
+    );
+    assert!(
+        launcher.is_file(),
+        "нет {}; задайте PI_BIN",
+        launcher.display()
+    );
+    launcher
+}
+
+fn extension() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../stellwerk-task/pi/stellwerk_transport.ts")
+}
+
+fn repo(name: &str) -> (PathBuf, PathBuf) {
+    let root = scratch(name);
+    let repo = root.join("repo");
+    std::fs::create_dir_all(repo.join(".git")).expect(".git");
+    std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").expect("HEAD");
+    std::fs::create_dir_all(repo.join("src")).expect("src");
+    std::fs::write(repo.join("src/lib.rs"), "pub fn one() -> u8 { 1 }\n").expect("lib.rs");
+    (repo, root.join("run"))
+}
+
+/// C: `pi` действительно стартует в песочнице и говорит через наш канал.
+#[test]
+fn the_build_runs_pi_through_our_channels() {
+    let (repo, root) = repo("run");
+    let backend = Scripted(Mutex::new(VecDeque::from([vec![Frame::Text {
+        text: "pong".to_string(),
+    }]])));
+    let outcome = run_build(
+        BuildRun {
+            request: &request(),
+            repo: &repo,
+            root: &root,
+            extension: &extension(),
+            pi: &pi(),
+        },
+        &backend,
+    )
+    .expect("прогон");
+
+    assert!(
+        outcome.output.contains("pong"),
+        "вывод pi: {}",
+        outcome.output
+    );
+    assert!(
+        outcome.model_turns >= 1,
+        "ходов модели: {}",
+        outcome.model_turns
+    );
+    assert!(
+        !root.join("work/.git").exists(),
+        "история не попала в песочницу"
+    );
+}
+
+/// C целиком: оболочка запрещена до эффекта — канарейка не создана, причина названа.
+#[test]
+fn the_shell_is_denied_before_it_touches_anything() {
+    let (repo, root) = repo("deny");
+    let canary = root.join("work/canary");
+    let call = Frame::ToolCall {
+        id: "call-1".to_string(),
+        name: "bash".to_string(),
+        input: json!({ "command": format!("touch {}", canary.display()) }),
+    };
+    let backend = Scripted(Mutex::new(VecDeque::from([
+        vec![call],
+        vec![Frame::Text {
+            text: "ok".to_string(),
+        }],
+    ])));
+    let outcome = run_build(
+        BuildRun {
+            request: &request(),
+            repo: &repo,
+            root: &root,
+            extension: &extension(),
+            pi: &pi(),
+        },
+        &backend,
+    )
+    .expect("прогон");
+
+    assert!(!canary.exists(), "эффекта нет: {}", outcome.output);
+    assert!(
+        outcome.output.contains("gate_denied"),
+        "причина deny: {}",
+        outcome.output
+    );
+    assert!(
+        outcome.gate_requests >= 1,
+        "заявок в гейт: {}",
+        outcome.gate_requests
+    );
 }
