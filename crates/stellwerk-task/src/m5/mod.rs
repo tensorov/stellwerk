@@ -21,6 +21,8 @@ pub mod model_transport;
 pub mod http_wire;
 // Канал гейта: вердикт по инструменту ДО эффекта, риск классифицирует хост.
 pub mod gate_channel;
+// Ходовой backend: кадр хода уходит в OpenAI-совместимый сервис, сеть есть только у хоста.
+pub mod model_backend;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
