@@ -685,3 +685,25 @@ fn an_unparsed_reply_is_written_down() {
     );
     assert_eq!(std::fs::read_to_string(&path).expect("файл"), raw);
 }
+
+/// Модель иногда описывает правку объектом. Путь в нём есть, и он же — скоуп; отказ
+/// разбора здесь был бы отказом из-за формы, а не из-за содержания.
+#[test]
+fn a_plan_with_object_entries_names_the_file() {
+    let raw = "{\"kind\":\"plan\",\"summary\":\"две\",\"goal\":\"две\",\
+        \"allowed_changes\":[{\"file\":\"src/lib.rs\",\"change\":\"добавить two\"}],\
+        \"acceptance\":[],\"checks\":[],\"constraints\":[]}";
+    let Reply::Plan { draft, .. } = parse_reply(raw) else {
+        panic!("план не разобран: {raw}");
+    };
+    assert_eq!(draft.allowed_changes, vec!["src/lib.rs".to_string()]);
+}
+
+/// А вот объект без пути — это не план с пустым скоупом, а неразобранный ответ.
+#[test]
+fn a_scope_entry_without_a_file_is_not_guessed() {
+    let raw = "{\"kind\":\"plan\",\"summary\":\"две\",\"goal\":\"две\",\
+        \"allowed_changes\":[{\"change\":\"добавить two\"}],\
+        \"acceptance\":[],\"checks\":[],\"constraints\":[]}";
+    assert!(matches!(parse_reply(raw), Reply::Unrecognized { .. }));
+}

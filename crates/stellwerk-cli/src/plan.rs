@@ -449,12 +449,30 @@ fn plan_from_json(value: &serde_json::Value) -> Option<(PlanDraft, String)> {
             .get("goal")
             .and_then(serde_json::Value::as_str)?
             .to_string(),
-        allowed_changes: string_list(value, "allowed_changes")?,
+        allowed_changes: path_list(value, "allowed_changes")?,
         acceptance: string_list(value, "acceptance")?,
         checks: string_list(value, "checks")?,
         constraints: string_list(value, "constraints")?,
     };
     Some((draft, summary.to_string()))
+}
+
+/// Элемент `allowed_changes` — путь. Модель иногда присылает объект `{file, change}`;
+/// `file` и есть путь, а `change` — проза для человека, не для скоупа. Любая другая
+/// форма (нет `file`, не строка) — отказ разбора, а не догадка.
+fn path_list(value: &serde_json::Value, key: &str) -> Option<Vec<String>> {
+    let array = value.get(key)?.as_array()?;
+    array
+        .iter()
+        .map(|item| match item {
+            serde_json::Value::String(path) => Some(path.clone()),
+            serde_json::Value::Object(object) => object
+                .get("file")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            _ => None,
+        })
+        .collect()
 }
 
 fn string_list(value: &serde_json::Value, key: &str) -> Option<Vec<String>> {
@@ -710,6 +728,8 @@ pub fn build_prompt(session: &PlanSession) -> String {
          Если данных достаточно — верни план:\n\
          {\"kind\":\"plan\",\"summary\":\"...\",\"goal\":\"...\",\"allowed_changes\":[...],\
          \"acceptance\":[...],\"checks\":[...],\"constraints\":[...]}\n\
+         allowed_changes — только пути строками (например \"src/lib.rs\"), без объектов\
+         и без описаний: что именно правится, сказано в summary.\n\
          Ты НЕ утверждаешь план: утверждение делает человек.\n",
     );
     prompt
