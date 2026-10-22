@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use stellwerk_task::m5::sandbox_bwrap::Sandbox;
 use stellwerk_task::m5::secrets::{
-    agent_argv, read_token_outside, AgentEnv, ProxyError, SecretError, Token, TokenProxy,
+    agent_argv, read_token_outside, AgentEnv, ProxyError, ProxyRequest, SecretError, Token,
+    TokenProxy,
 };
 
 const BUDGET: Duration = Duration::from_secs(30);
@@ -22,7 +23,8 @@ const NAME: &str = "GITHUB_TOKEN";
 /// Значение токена — константой, а не вызовом: тест ищет именно эту строку, и строка,
 /// собранная функцией, искала бы сама себя.
 const VALUE: &str = "ghp-t0ken-never-in-the-agent-reach";
-const URL: &str = "https://api.github.com/user";
+const HOST: &str = "api.github.com";
+const PATH: &str = "/user";
 
 fn token() -> Token {
     Token::new(NAME, VALUE).expect("имя и значения заданы")
@@ -118,7 +120,9 @@ fn a_token_in_a_command_argument_is_refused_and_the_vector_is_never_built() {
 #[test]
 fn the_proxy_substitutes_the_token_and_returns_a_body_that_does_not_carry_it() {
     let proxy = TokenProxy::new(token());
-    let sent = proxy.send("GET", URL, |wire| {
+    let request =
+        ProxyRequest::new("GET", HOST, PATH, None, None).expect("запрос без тела разрешён");
+    let sent = proxy.send(request, |wire| {
         assert!(
             wire.contains(&format!("authorization: Bearer {VALUE}")),
             "{wire}"
@@ -143,9 +147,9 @@ fn the_proxy_substitutes_the_token_and_returns_a_body_that_does_not_carry_it() {
 #[test]
 fn a_proxy_failure_whose_cause_echoes_the_authorization_header_carries_no_token() {
     let proxy = TokenProxy::new(token());
-    let failed = proxy.send("GET", URL, |wire| {
-        Err(format!("reset while sending {wire}"))
-    });
+    let request =
+        ProxyRequest::new("GET", HOST, PATH, None, None).expect("запрос без тела разрешён");
+    let failed = proxy.send(request, |wire| Err(format!("reset while sending {wire}")));
     let refused = match failed {
         Err(ProxyError::Upstream { reason }) => reason,
         Ok(other) => panic!("ошибка транспорта — отказ, а не {other:?}"),

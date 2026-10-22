@@ -47,6 +47,31 @@ pub enum SecretError {
     /// «открылось пустое» не было бы ни тем, ни другим.
     #[error("proxy configuration `{path}` was not read: {why}")]
     Unreadable { path: PathBuf, why: String },
+    /// Поле запроса пустое. Имя поля в отказе: «неверный запрос» без него чинится чтением
+    /// исходника, а не сообщением.
+    #[error("request field `{field}` is blank: an empty value is not an address")]
+    EmptyRequestField { field: &'static str },
+    /// Перевод строки в методе, хосте, пути или типе — это попытка дописать заголовок.
+    /// Проверка ДО сборки провода: после `authorization` дописанный заголовок был бы принят
+    /// сервисом как часть запроса, и отказ опоздал бы.
+    #[error("request field `{field}` carries a line break: a header would be injected")]
+    ControlByte { field: &'static str },
+    /// Путь относительный: без ведущего `/` запрос читается как абсолютная форма прокси, и
+    /// сервис получил бы чужой адрес в строке запроса.
+    #[error("request path is not absolute: it must start with `/`")]
+    PathNotAbsolute,
+    /// Тело без типа: сервис разобрал бы его по догадке, а «непонятый запрос» неотличим от
+    /// «мы собрали его неверно».
+    #[error("request carries a body without a content type: the service would have to guess")]
+    BodyWithoutContentType,
+    /// Тип без тела: утверждение о данных, которых нет. Отдельный вариант, потому что это
+    /// ошибка сборки запроса, а не «тело пустое».
+    #[error("request names a content type but carries no body")]
+    ContentTypeWithoutBody,
+    /// Тело сверх потолка. Размер и потолок в отказе: «слишком большое» без числа не даёт
+    /// понять, насколько.
+    #[error("request body is {len} bytes, over the {max}-byte limit")]
+    BodyTooLarge { len: usize, max: usize },
 }
 
 /// Токен. `Debug` написан руками и печатает длину, а не значение: `derive(Debug)` вёл бы
@@ -201,6 +226,74 @@ pub struct ProxyResponse {
     pub body: String,
 }
 
+/// Потолок тела запроса. Одно число для проверки и для теста: литерал в двух местах
+/// разошёлся бы молча.
+pub const MAX_BODY: usize = 1024 * 1024;
+
+/// Запрос, который прокси отправит. Поля закрыты, а конструктор проверяет их все: значение,
+/// не прошедшее проверку, не должно дожить до транспорта, потому что отправку не отменить.
+/// Поля для заголовка авторизации здесь нет и быть не может — его вставляет только прокси.
+#[derive(Debug, Clone, Copy)]
+pub struct ProxyRequest<'a> {
+    method: &'a str,
+    host: &'a str,
+    path: &'a str,
+    content_type: Option<&'a str>,
+    body: Option<&'a str>,
+}
+
+impl<'a> ProxyRequest<'a> {
+    /// Все поля обязательны, кроме типа и тела, которые ходят парой. Пустое тело с типом —
+    /// данные («задано, пусто»), тип без тела — ошибка сборки: это разные вещи.
+    pub fn new(
+        method: &'a str,
+        host: &'a str,
+        path: &'a str,
+        content_type: Option<&'a str>,
+        body: Option<&'a str>,
+    ) -> Result<Self, SecretError> {
+        check_line("method", method)?;
+        check_line("host", host)?;
+        check_line("path", path)?;
+        if !path.starts_with('/') {
+            return Err(SecretError::PathNotAbsolute);
+        }
+        match (content_type, body) {
+            (None, Some(_)) => return Err(SecretError::BodyWithoutContentType),
+            (Some(_), None) => return Err(SecretError::ContentTypeWithoutBody),
+            (Some(ct), Some(body)) => {
+                check_line("content-type", ct)?;
+                if body.len() > MAX_BODY {
+                    return Err(SecretError::BodyTooLarge {
+                        len: body.len(),
+                        max: MAX_BODY,
+                    });
+                }
+            }
+            (None, None) => {}
+        }
+        Ok(Self {
+            method,
+            host,
+            path,
+            content_type,
+            body,
+        })
+    }
+}
+
+/// Поле занимает одну строку: пустое — не адрес, с переводом строки — вторая строка
+/// запроса, то есть дописанный заголовок.
+fn check_line(field: &'static str, value: &str) -> Result<(), SecretError> {
+    if value.trim().is_empty() {
+        return Err(SecretError::EmptyRequestField { field });
+    }
+    if value.contains(['\r', '\n']) {
+        return Err(SecretError::ControlByte { field });
+    }
+    Ok(())
+}
+
 /// Прокси — единственное место, где токен существует. Он держит значение, подставляет его в
 /// заголовок сам и отдаёт наружу тело; агент к значению не прикасается.
 #[derive(Debug, Clone)]
@@ -219,13 +312,12 @@ impl TokenProxy {
     /// ровно в этой строке — в коде прокси. Транспорт тоже наш код: агент в сокет не пишет и
     /// из него не читает, поэтому и подставить токен в его аргументы некуда.
     ///
-    /// Запрос задаётся методом и адресом, и больше ничем: заголовок авторизации в задании
-    /// запроса выразить НЕВОЗМОЖНО, параметра для него нет. Запрет дешевле проверки, а
-    /// проверялось бы то, что и так нельзя передать.
+    /// Проверенное `ProxyRequest` не может выразить заголовок авторизации: поля для него нет,
+    /// а переводы строк в остальных полях отвергнуты конструктором. Запрет дешевле проверки,
+    /// а проверялось бы то, что и так нельзя передать.
     pub fn send<F>(
         &self,
-        method: &str,
-        url: &str,
+        request: ProxyRequest<'_>,
         transport: F,
     ) -> Result<ProxyResponse, ProxyError>
     where
@@ -233,10 +325,23 @@ impl TokenProxy {
     {
         // Значение подставляется из приватного поля: у `Token` нет даже `Display`, поэтому
         // и случайный `format!("{token}")` в отладочном коде секрет не напечатает.
-        let wire = format!(
-            "{} {} HTTP/1.1\r\nauthorization: Bearer {}\r\n\r\n",
-            method, url, self.token.value
+        let mut wire = format!(
+            "{} {} HTTP/1.1\r\nhost: {}\r\n",
+            request.method, request.path, request.host
         );
+        if let (Some(content_type), Some(body)) = (request.content_type, request.body) {
+            wire.push_str(&format!(
+                "content-type: {content_type}\r\ncontent-length: {}\r\n",
+                body.len()
+            ));
+        }
+        wire.push_str(&format!(
+            "authorization: Bearer {}\r\n\r\n",
+            self.token.value
+        ));
+        if let Some(body) = request.body {
+            wire.push_str(body);
+        }
         match transport(&wire) {
             // Тело проходит ту же смывку, что и причина отказа: внешний сервис вправе
             // отразить заголовок в ответе, а «вряд ли» в журнале неотличимо от «было».
