@@ -465,6 +465,17 @@ fn string_list(value: &serde_json::Value, key: &str) -> Option<Vec<String>> {
         .collect()
 }
 
+/// Неразобранный ответ модели — улика, а не мусор: экран обрезает строки, и без файла
+/// причину отказа не установить.
+pub fn record_unparsed(repo: &Path, raw: &str) -> std::io::Result<PathBuf> {
+    let path = repo.join(".stellwerk").join("plan").join("last-reply.txt");
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(&path, raw)?;
+    Ok(path)
+}
+
 /// Путь к сохранённой сессии внутри репозитория.
 pub fn session_path(repo: &Path) -> PathBuf {
     repo.join(".stellwerk").join("plan").join("session.json")
@@ -971,9 +982,16 @@ fn apply_reply(session: &mut PlanSession, reply: Reply, ui: &mut PlanUi) {
             ui.stage = Stage::Review;
         }
         Reply::Unrecognized { raw } => {
-            ui.error = Some(format!(
-                "модель ответила не по формату; ответ сохранён как есть: {raw}"
-            ));
+            let repo = PathBuf::from(&session.repo);
+            ui.error = Some(match record_unparsed(&repo, &raw) {
+                Ok(path) => format!(
+                    "модель ответила не по формату; ответ целиком: {}",
+                    path.display()
+                ),
+                // Экран обрезает строки, поэтому без файла улики нет; если и файл не
+                // записался, это надо назвать, а не напечатать обрезанный ответ.
+                Err(error) => format!("модель ответила не по формату; ответ не сохранён: {error}"),
+            });
             ui.stage = Stage::Failed;
         }
     }

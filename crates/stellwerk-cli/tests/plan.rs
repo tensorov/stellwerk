@@ -663,3 +663,25 @@ fn the_build_names_the_missing_token() {
     assert!(why.contains("neuraldeep.token"), "{why}");
     assert!(why.contains(&missing.display().to_string()), "{why}");
 }
+
+/// Отказ разбора обязан оставить улику: экран обрезает ответ, и без файла причина
+/// «не по формату» непроверяема.
+#[test]
+fn an_unparsed_reply_is_written_down() {
+    let dir = std::env::temp_dir().join(format!(
+        "sw-unparsed-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("время")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("каталог");
+    let raw = "{\"kind\":\"plan\",\"summary\":\"обрезано";
+    let path = stellwerk_cli::plan::record_unparsed(&dir, raw).expect("ответ записан");
+    assert!(
+        path.starts_with(&dir),
+        "путь внутри репозитория: {}",
+        path.display()
+    );
+    assert_eq!(std::fs::read_to_string(&path).expect("файл"), raw);
+}
