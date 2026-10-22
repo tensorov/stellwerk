@@ -9,6 +9,7 @@
 
 pub mod host_model;
 pub mod plan;
+pub mod planner_host;
 pub mod tui;
 
 use std::path::{Path, PathBuf};
