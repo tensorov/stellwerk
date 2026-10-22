@@ -9,7 +9,7 @@
 //! * Модель **не утверждает план**. «План утверждён» в устах модели — текст;
 //!   утверждение существует только как `PlanSession::approve()` по нажатию человека.
 //! * Build **не исполняется**: исполнителя нет (N2-00h3b), и это названо явно
-//!   (`BUILD_UNAVAILABLE_REASON`), а не изображено. Допуск к исполнению при этом уже
+//!   (`build_hint`), а не изображено. Допуск к исполнению при этом уже
 //!   проверяется по существу (`build_request`): неутверждённый план, чужой снимок и план,
 //!   сделанный мимо транспорта, отвергаются здесь.
 //!
@@ -54,7 +54,18 @@ pub const HOST_MODEL_ID: &str = "qwen3.6-unlim-xl-noreason";
 /// Дословная причина, по которой Build в этом срезе недоступен. Это не заглушка:
 /// ни `model transport` (N2-00), ни блокирующая pre-execution авторизация
 /// инструментов, инициированных моделью, не построены.
-pub const BUILD_UNAVAILABLE_REASON: &str = "исполнение подключено (N2-00h3d), но ход не начнётся без токена: положите его в $XDG_CONFIG_HOME/stellwerk/neuraldeep.token (0600)";
+/// Что на самом деле происходит с Build на этом экране. Текст зависит от стадии, потому что
+/// «недоступен» перестало быть правдой после N2-00h3d, а обещание «запущен» до прогона —
+/// ложь того же рода.
+fn build_hint(stage: Stage) -> &'static str {
+    match stage {
+        Stage::Approved => {
+            "Build: b — запустить (агент в копии дерева; запись и оболочка запрещены политикой)"
+        }
+        Stage::Building => "Build: прогон идёт",
+        _ => "Build: сначала утвердите план (a), затем b",
+    }
+}
 
 /// Конфигурация планировщика для `opencode`: агент без мутирующих, исполняющих
 /// и сетевых инструментов. Единственный включённый инструмент — scoped `read`.
@@ -647,10 +658,8 @@ pub fn render_plan(view: &View<'_>) -> Vec<Line<'static>> {
     )));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        format!("[ Build недоступен ] {BUILD_UNAVAILABLE_REASON}"),
-        Style::default()
-            .add_modifier(Modifier::DIM)
-            .add_modifier(Modifier::CROSSED_OUT),
+        build_hint(view.stage),
+        Style::default().add_modifier(Modifier::DIM),
     )));
     lines
 }

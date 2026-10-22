@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use stellwerk_cli::plan::{
     build_backend_at, build_prompt, build_request, load_session, parse_reply, render_plan,
     resolve_mode, save_session, session_path, BuildRefusal, PlanDraft, PlanSession, PlannerMode,
-    Reply, Stage, Turn, View, BUILD_UNAVAILABLE_REASON, PLANNER_CONFIG_JSON, PLANNER_MODEL,
+    Reply, Stage, Turn, View, PLANNER_CONFIG_JSON, PLANNER_MODEL,
 };
 
 fn draft(goal: &str) -> PlanDraft {
@@ -220,8 +220,12 @@ fn render_shows_goal_input_before_anything_else() {
     assert!(text.contains("цель"), "на старте видно поле цели: {text}");
     assert!(text.contains("добавить тест"), "виден ввод: {text}");
     assert!(
-        text.contains(BUILD_UNAVAILABLE_REASON),
-        "Build обязан быть видимо недоступен: {text}"
+        text.contains("сначала утвердите план"),
+        "до утверждения Build не обещает запуск: {text}"
+    );
+    assert!(
+        !text.contains("недоступен"),
+        "после N2-00h3d «недоступен» — неправда: {text}"
     );
 }
 
@@ -247,8 +251,8 @@ fn render_shows_draft_fields_and_pending_approval() {
         "неутверждённый план ждёт человека: {text}"
     );
     assert!(
-        text.contains(BUILD_UNAVAILABLE_REASON),
-        "Build видимо недоступен: {text}"
+        text.contains("сначала утвердите план"),
+        "неутверждённый план не запускает Build: {text}"
     );
 }
 
@@ -266,8 +270,8 @@ fn render_shows_approval_once_the_human_approved() {
     }));
     assert!(text.contains("утвержд"), "виден факт утверждения: {text}");
     assert!(
-        text.contains(BUILD_UNAVAILABLE_REASON),
-        "Build остаётся недоступным и после утверждения: {text}"
+        text.contains("b — запустить"),
+        "утверждённый план называет действие: {text}"
     );
 }
 
