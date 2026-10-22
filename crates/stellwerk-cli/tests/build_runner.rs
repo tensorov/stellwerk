@@ -364,3 +364,60 @@ fn the_build_logs_an_allowed_read() {
         outcome.gate
     );
 }
+
+/// C целиком: правка разрешена уровнем R1 и доезжает до одноразовой копии. Схема
+/// входа — настоящая: Pi проверяет аргументы до вызова хука, и кадр без `edits`
+/// до гейта не доходит.
+#[test]
+fn an_edit_reaches_the_copy_and_the_gate_authorizes_it() {
+    let (repo, root) = repo("write");
+    let call = Frame::ToolCall {
+        id: "call-1".to_string(),
+        name: "edit".to_string(),
+        input: json!({
+            "path": "src/lib.rs",
+            "edits": [{
+                "oldText": "pub fn one() -> u8 { 1 }",
+                "newText": "pub fn one() -> u8 { 2 }"
+            }]
+        }),
+    };
+    let backend = Scripted(Mutex::new(VecDeque::from([
+        vec![call],
+        vec![Frame::Text {
+            text: "ok".to_string(),
+        }],
+    ])));
+    let outcome = run_build(
+        BuildRun {
+            request: &request(),
+            repo: &repo,
+            root: &root,
+            extension: &extension(),
+            pi: &pi(),
+        },
+        &backend,
+    )
+    .expect("прогон");
+
+    assert!(
+        outcome
+            .gate
+            .iter()
+            .any(|answer| matches!(answer, GateAnswer::Allow { tool } if tool == "edit")),
+        "журнал гейта: {:?}",
+        outcome.gate
+    );
+    assert!(
+        !outcome.output.contains("gate_denied"),
+        "гейт не отказывал: {}",
+        outcome.output
+    );
+    let edited = std::fs::read_to_string(root.join("work/src/lib.rs")).expect("копия на месте");
+    assert!(edited.contains("{ 2 }"), "правка в копии: {edited}");
+    let original = std::fs::read_to_string(repo.join("src/lib.rs")).expect("репозиторий");
+    assert!(
+        original.contains("{ 1 }"),
+        "репозиторий не тронут: {original}"
+    );
+}
