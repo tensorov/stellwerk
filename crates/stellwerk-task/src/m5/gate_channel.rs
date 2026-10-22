@@ -27,20 +27,51 @@ pub struct GateRequest {
     pub kind: String,
     pub tool: String,
     pub parent_tool_call_id: Option<String>,
+    /// Путь, на который собирается действовать инструмент (`event.input.path` в Pi).
+    /// `None` — прислали без пути; для пишущего инструмента это отсутствие данных,
+    /// а не «путь не нужен».
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 /// Ответ хоста. Один кадр на соединение, терминальный.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum GateAnswer {
-    Allow { tool: String },
-    Ask { tool: String },
-    Suspended { tool: String },
-    Deny { tool: String, reason: String },
-    UnknownTool { tool: String, held: Vec<String> },
-    UnrecognisedSource { parent_tool_call_id: String },
-    Unclassified { tool: String },
-    Refused { code: RefusalCode, message: String },
+    Allow {
+        tool: String,
+    },
+    /// Таблица разрешила, и у разрешения есть названное основание: путь совпал с
+    /// записью утверждённого плана. Отдельное состояние, а не `Allow`: «разрешено
+    /// таблицей» и «разрешено планом владельца» — разные факты.
+    Authorized {
+        tool: String,
+        scope: String,
+    },
+    Ask {
+        tool: String,
+    },
+    Suspended {
+        tool: String,
+    },
+    Deny {
+        tool: String,
+        reason: String,
+    },
+    UnknownTool {
+        tool: String,
+        held: Vec<String>,
+    },
+    UnrecognisedSource {
+        parent_tool_call_id: String,
+    },
+    Unclassified {
+        tool: String,
+    },
+    Refused {
+        code: RefusalCode,
+        message: String,
+    },
 }
 
 /// Код отказа разбора или проверки прав. Клиент различает состояния по нему.
@@ -55,10 +86,53 @@ pub enum RefusalCode {
     Identity,
 }
 
+/// Основание для `Allow`. Называется явно, чтобы разрешение записи нельзя было
+/// перепутать с разрешением чтения.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AllowBasis {
+    /// Так решила таблица рисков (`permission_for`).
+    RiskTable,
+    /// Путь совпал с записью одобренного плана; `scope` — эта запись дословно.
+    ApprovedPlan { scope: String },
+}
+
+/// Что политика говорит о вызове. `Refused` — названный отказ политики (путь вне
+/// одобренного плана), и он не имеет права выглядеть как `Unclassified`: «запрещено»
+/// и «нет данных» — разные состояния.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolicyVerdict {
+    Evaluated {
+        request: CallRequest,
+        basis: AllowBasis,
+    },
+    Unclassified,
+    Refused {
+        reason: String,
+    },
+}
+
 /// Хостовая политика: единственное место, где известен риск инструмента. `None` — данных
 /// о риске нет, и это отдельное состояние, а не «риска ноль».
 pub trait GatePolicy: Send + Sync {
     fn request_for(&self, call: &Adjudication) -> Option<CallRequest>;
+
+    /// Решение с аргументом вызова. Умолчание отказывает, если путь пришёл, а политика
+    /// его не толкует: пропустить неразобранный путь значило бы разрешить запись,
+    /// о которой никто не высказался.
+    fn decide_call(&self, call: &Adjudication, path: Option<&str>) -> PolicyVerdict {
+        if path.is_some() {
+            return PolicyVerdict::Refused {
+                reason: "policy_does_not_handle_paths".to_owned(),
+            };
+        }
+        match self.request_for(call) {
+            Some(request) => PolicyVerdict::Evaluated {
+                request,
+                basis: AllowBasis::RiskTable,
+            },
+            None => PolicyVerdict::Unclassified,
+        }
+    }
 }
 
 /// Итог обслуживания соединения: три состояния, а не «успех/нет».
@@ -93,11 +167,22 @@ impl GateChannel {
         session: &SessionDescription,
         policy: &dyn GatePolicy,
     ) -> io::Result<GateServed> {
+        self.serve_once_logged(session, policy)
+            .map(|(served, _answer)| served)
+    }
+
+    /// То же, но с ответом: вызывающий ведёт журнал решений, и «сколько заявок»
+    /// без самих решений ничего не доказывает.
+    pub fn serve_once_logged(
+        &self,
+        session: &SessionDescription,
+        policy: &dyn GatePolicy,
+    ) -> io::Result<(GateServed, Option<GateAnswer>)> {
         let (stream, _address) = self.listener.accept()?;
         let mut writer = stream.try_clone()?;
         let mut reader = BufReader::new(stream);
         let answer = match read_request(&mut reader)? {
-            ReadOutcome::Eof => return Ok(GateServed::NoRequest),
+            ReadOutcome::Eof => return Ok((GateServed::NoRequest, None)),
             ReadOutcome::Refused(code, message) => GateAnswer::Refused { code, message },
             ReadOutcome::Request(request) => answer_for(session, policy, &request),
         };
@@ -106,10 +191,11 @@ impl GateChannel {
         // не увидит сам ответ. Предел — тот же, что у кадра.
         let tail = &mut reader.by_ref().take(MAX_FRAME_BYTES as u64);
         io::copy(tail, &mut io::sink())?;
-        Ok(match answer {
+        let served = match answer {
             GateAnswer::Refused { .. } => GateServed::Refused,
             _ => GateServed::Answered,
-        })
+        };
+        Ok((served, Some(answer)))
     }
 }
 
@@ -149,15 +235,21 @@ fn answer_for(
             }
         }
     };
-    let Some(request) = policy.request_for(&call) else {
-        return GateAnswer::Unclassified { tool: call.tool };
-    };
-    let tool = call.tool;
-    match decide(&request) {
-        Verdict::Allow => GateAnswer::Allow { tool },
-        Verdict::Ask => GateAnswer::Ask { tool },
-        Verdict::Suspended => GateAnswer::Suspended { tool },
-        Verdict::Deny { reason } => GateAnswer::Deny { tool, reason },
+    let tool = call.tool.clone();
+    match policy.decide_call(&call, request.path.as_deref()) {
+        PolicyVerdict::Unclassified => GateAnswer::Unclassified { tool },
+        PolicyVerdict::Refused { reason } => GateAnswer::Deny { tool, reason },
+        PolicyVerdict::Evaluated { request, basis } => match decide(&request) {
+            // База только аннотирует разрешение таблицы и никогда его не подменяет:
+            // если таблица сказала Ask или Deny, основание не превращает это в Allow.
+            Verdict::Allow => match basis {
+                AllowBasis::RiskTable => GateAnswer::Allow { tool },
+                AllowBasis::ApprovedPlan { scope } => GateAnswer::Authorized { tool, scope },
+            },
+            Verdict::Ask => GateAnswer::Ask { tool },
+            Verdict::Suspended => GateAnswer::Suspended { tool },
+            Verdict::Deny { reason } => GateAnswer::Deny { tool, reason },
+        },
     }
 }
 
@@ -211,9 +303,12 @@ fn parse_request(text: &str) -> Result<GateRequest, (RefusalCode, String)> {
             "frame is not a JSON object".to_owned(),
         ));
     };
-    let extra = object
-        .keys()
-        .find(|key| !matches!(key.as_str(), "kind" | "tool" | "parent_tool_call_id"));
+    let extra = object.keys().find(|key| {
+        !matches!(
+            key.as_str(),
+            "kind" | "tool" | "parent_tool_call_id" | "path"
+        )
+    });
     if let Some(field) = extra {
         return Err((
             RefusalCode::UnexpectedField,

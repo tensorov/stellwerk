@@ -64,11 +64,16 @@ function exchange(path: string, frame: Frame, terminal: (frame: Frame) => boolea
   });
 }
 
-async function authorize(tool: string, signal?: AbortSignal): Promise<{ block: true; reason: string } | undefined> {
+function pathOf(input: unknown): string | undefined {
+  const path = (input as { path?: unknown } | undefined)?.path;
+  return typeof path === "string" ? path : undefined;
+}
+
+async function authorize(tool: string, path: string | undefined, signal?: AbortSignal): Promise<{ block: true; reason: string } | undefined> {
   if (signal?.aborted) return { block: true, reason: "gate_aborted" };
   let answer: Frame | undefined;
   try {
-    const frames = await exchange(GATE_SOCK, { kind: "tool_call", tool, parent_tool_call_id: null }, () => true);
+    const frames = await exchange(GATE_SOCK, { kind: "tool_call", tool, parent_tool_call_id: null, path }, () => true);
     answer = frames[0];
   } catch (error) {
     return { block: true, reason: `gate_unreachable:${describe(error)}` };
@@ -76,6 +81,7 @@ async function authorize(tool: string, signal?: AbortSignal): Promise<{ block: t
   if (!answer) return { block: true, reason: "gate_unreachable:channel closed without an answer" };
   switch (answer.kind) {
     case "allow": return undefined;
+    case "authorized": return undefined;
     case "deny": return { block: true, reason: `gate_denied:${String(answer.reason)}` };
     case "ask": return { block: true, reason: "gate_ask" };
     case "suspended": return { block: true, reason: "gate_suspended" };
@@ -189,5 +195,5 @@ export default function stellwerk(pi: ExtensionAPI): void {
     }],
     streamSimple: streamStellwerk,
   });
-  pi.on("tool_call", async (event) => authorize(event.toolName));
+  pi.on("tool_call", async (event) => authorize(event.toolName, pathOf(event.input)));
 }

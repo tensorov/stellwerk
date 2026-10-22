@@ -7,12 +7,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use stellwerk_core::contract::PolicyLevel::L5Owner;
-use stellwerk_core::contract::RiskClass::{R0, R2, R5};
+use stellwerk_core::contract::RiskClass::{R0, R1, R2, R5};
 use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, RetentionClass, RiskClass};
 use stellwerk_gateway::gate::CallRequest;
 use stellwerk_gateway::permission::ToolRisk;
 use stellwerk_task::m5::gate_channel::{
-    GateAnswer, GateChannel, GatePolicy, GateServed, RefusalCode,
+    AllowBasis, GateAnswer, GateChannel, GatePolicy, GateServed, PolicyVerdict, RefusalCode,
 };
 use stellwerk_task::m5::session_identity::{
     Adjudication, CallSource, CodemodeState, SessionDescription, ToolSet,
@@ -24,9 +24,23 @@ struct Scripted {
     interactive: bool,
     calls: AtomicUsize,
     seen: Mutex<Vec<CallSource>>,
+    paths: Mutex<Vec<Option<String>>>,
 }
 
 impl GatePolicy for Scripted {
+    /// Записывает путь, который увидела политика, и решает по таблице рисков —
+    /// ровно то, что делает продовая политика, кроме план-скоупа.
+    fn decide_call(&self, call: &Adjudication, path: Option<&str>) -> PolicyVerdict {
+        self.paths.lock().unwrap().push(path.map(str::to_owned));
+        match self.request_for(call) {
+            Some(request) => PolicyVerdict::Evaluated {
+                request,
+                basis: AllowBasis::RiskTable,
+            },
+            None => PolicyVerdict::Unclassified,
+        }
+    }
+
     fn request_for(&self, call: &Adjudication) -> Option<CallRequest> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.seen.lock().unwrap().push(call.source.clone());
@@ -82,6 +96,7 @@ fn scripted(risk: Option<ToolRisk>, interactive: bool) -> Arc<Scripted> {
         interactive,
         calls: AtomicUsize::new(0),
         seen: Mutex::new(Vec::new()),
+        paths: Mutex::new(Vec::new()),
     })
 }
 
@@ -247,4 +262,170 @@ fn an_oversize_gate_frame_is_refused() {
     let (answers, served) = exchange(&gate, scripted(None, true), &payload);
     assert_eq!(served, GateServed::Refused);
     assert_eq!(*refused(&answers).0, RefusalCode::OversizeFrame);
+}
+
+/// Политика, которая не знает о путях: так выглядит любой существующий
+/// реализатор. Путь в кадре для неё — данные, которые она не умеет толковать,
+/// и умолчание обязано отказывать, а не пропускать.
+struct Legacy;
+
+impl GatePolicy for Legacy {
+    fn request_for(&self, call: &Adjudication) -> Option<CallRequest> {
+        Some(CallRequest {
+            tool: call.tool.clone(),
+            module: "core".to_owned(),
+            risk: ToolRisk::Classified(R0),
+            caller: L5Owner,
+            data: DataClass::Public,
+            model: binding(),
+            interactive: true,
+        })
+    }
+}
+
+/// Политика, которая разрешает запись «по плану».
+struct Planned {
+    risk: RiskClass,
+    interactive: bool,
+    basis: Option<&'static str>,
+}
+
+impl GatePolicy for Planned {
+    fn request_for(&self, _call: &Adjudication) -> Option<CallRequest> {
+        None
+    }
+
+    fn decide_call(&self, call: &Adjudication, _path: Option<&str>) -> PolicyVerdict {
+        PolicyVerdict::Evaluated {
+            request: CallRequest {
+                tool: call.tool.clone(),
+                module: "core".to_owned(),
+                risk: ToolRisk::Classified(self.risk),
+                caller: L5Owner,
+                data: DataClass::Public,
+                model: binding(),
+                interactive: self.interactive,
+            },
+            basis: match self.basis {
+                Some(scope) => AllowBasis::ApprovedPlan {
+                    scope: scope.to_owned(),
+                },
+                None => AllowBasis::RiskTable,
+            },
+        }
+    }
+}
+
+fn request_with_path(tool: &str, path: &str) -> Vec<u8> {
+    format!(
+        "{{\"kind\":\"tool_call\",\"tool\":\"{tool}\",\"parent_tool_call_id\":null,\"path\":\"{path}\"}}\n"
+    )
+    .into_bytes()
+}
+
+#[test]
+fn a_frame_carries_the_path_to_the_policy() {
+    let gate = channel("path");
+    let policy = scripted(Some(ToolRisk::Classified(R0)), true);
+    let (answers, _) = exchange(
+        &gate,
+        policy.clone(),
+        request_with_path("read", "src/lib.rs"),
+    );
+    assert!(
+        matches!(&answers[..], [GateAnswer::Allow { tool }] if tool == "read"),
+        "ответ: {answers:?}"
+    );
+    assert_eq!(
+        policy.paths.lock().unwrap().as_slice(),
+        &[Some("src/lib.rs".to_owned())],
+        "политика видит путь из кадра"
+    );
+}
+
+#[test]
+fn a_frame_without_a_path_leaves_it_unknown() {
+    let gate = channel("nopath");
+    let policy = scripted(Some(ToolRisk::Classified(R0)), true);
+    let _ = exchange(&gate, policy.clone(), request("read", None));
+    assert_eq!(
+        policy.paths.lock().unwrap().as_slice(),
+        &[None],
+        "нет пути — это None, а не пустая строка"
+    );
+}
+
+#[test]
+fn a_policy_that_did_not_opt_into_paths_refuses_them() {
+    let gate = channel("legacy");
+    let (answers, _) = exchange(
+        &gate,
+        Arc::new(Legacy),
+        request_with_path("read", "src/lib.rs"),
+    );
+    let GateAnswer::Deny { reason, .. } = only(&answers) else {
+        panic!("ожидался deny: {answers:?}");
+    };
+    assert!(
+        reason.contains("policy_does_not_handle_paths"),
+        "причина: {reason}"
+    );
+}
+
+#[test]
+fn a_policy_denial_is_deny_not_unclassified() {
+    struct Refuser;
+    impl GatePolicy for Refuser {
+        fn request_for(&self, _call: &Adjudication) -> Option<CallRequest> {
+            None
+        }
+        fn decide_call(&self, _call: &Adjudication, _path: Option<&str>) -> PolicyVerdict {
+            PolicyVerdict::Refused {
+                reason: "plan_scope_outside: src/other.rs".to_owned(),
+            }
+        }
+    }
+    let gate = channel("refused2");
+    let (answers, _) = exchange(&gate, Arc::new(Refuser), request("read", None));
+    let GateAnswer::Deny { reason, .. } = only(&answers) else {
+        panic!("ожидался deny: {answers:?}");
+    };
+    assert!(
+        reason.starts_with("plan_scope_outside"),
+        "причина: {reason}"
+    );
+}
+
+#[test]
+fn an_approved_plan_basis_is_authorized_not_allow() {
+    let gate = channel("authorized");
+    let policy = Arc::new(Planned {
+        risk: R1,
+        interactive: false,
+        basis: Some("src/lib.rs"),
+    });
+    let (answers, _) = exchange(&gate, policy, request("read", None));
+    assert!(
+        matches!(
+            &answers[..],
+            [GateAnswer::Authorized { tool, scope }]
+                if tool == "read" && scope == "src/lib.rs"
+        ),
+        "ответ: {answers:?}"
+    );
+}
+
+#[test]
+fn a_plan_basis_does_not_override_ask() {
+    let gate = channel("basis-ask");
+    let policy = Arc::new(Planned {
+        risk: R2,
+        interactive: true,
+        basis: Some("src/lib.rs"),
+    });
+    let (answers, _) = exchange(&gate, policy, request("read", None));
+    assert!(
+        matches!(&answers[..], [GateAnswer::Ask { .. }]),
+        "основание не превращает Ask в Authorized: {answers:?}"
+    );
 }
