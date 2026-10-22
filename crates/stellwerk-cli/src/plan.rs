@@ -32,7 +32,11 @@ use ratatui::widgets::Paragraph;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::build_runner::{self, BuildOutcome, BuildRun};
+use crate::host_model::ModelConfig;
 use crate::planner_host::PlannerHost;
+use stellwerk_task::m5::model_backend::HttpBackend;
+use stellwerk_task::m5::secrets::{read_token_outside, TokenProxy};
 
 /// Имя агента-планировщика в конфигурации транспорта.
 pub const PLANNER_AGENT: &str = "stellwerk-planner";
@@ -50,7 +54,7 @@ pub const HOST_MODEL_ID: &str = "qwen3.6-unlim-xl-noreason";
 /// Дословная причина, по которой Build в этом срезе недоступен. Это не заглушка:
 /// ни `model transport` (N2-00), ни блокирующая pre-execution авторизация
 /// инструментов, инициированных моделью, не построены.
-pub const BUILD_UNAVAILABLE_REASON: &str = "нужен model transport (N2-00) и pre-execution authorization инструментов, инициированных моделью; канал не построен";
+pub const BUILD_UNAVAILABLE_REASON: &str = "исполнение подключено (N2-00h3d), но ход не начнётся без токена: положите его в $XDG_CONFIG_HOME/stellwerk/neuraldeep.token (0600)";
 
 /// Конфигурация планировщика для `opencode`: агент без мутирующих, исполняющих
 /// и сетевых инструментов. Единственный включённый инструмент — scoped `read`.
@@ -486,6 +490,7 @@ pub enum Stage {
     Answering,
     Review,
     Approved,
+    Building,
     Failed,
     Cancelled,
 }
@@ -507,6 +512,7 @@ fn stage_label(stage: Stage) -> &'static str {
         Stage::Answering => "ждёт ответа человека",
         Stage::Review => "черновик",
         Stage::Approved => "утверждён",
+        Stage::Building => "сборка идёт",
         Stage::Failed => "ошибка",
         Stage::Cancelled => "отменён",
     }
@@ -615,6 +621,10 @@ pub fn render_plan(view: &View<'_>) -> Vec<Line<'static>> {
         Stage::Answering => lines.push(Line::from(format!("ответ> {}", view.input))),
         Stage::Asking => lines.push(Line::from(Span::styled(
             "модель отвечает… (Esc — отменить)",
+            Style::default().add_modifier(Modifier::DIM),
+        ))),
+        Stage::Building => lines.push(Line::from(Span::styled(
+            "агент работает в копии дерева… (прогон не отменяется)",
             Style::default().add_modifier(Modifier::DIM),
         ))),
         _ => {}
@@ -881,6 +891,59 @@ struct PlanUi {
     model_text: String,
     error: Option<String>,
     pending: Option<Receiver<TransportEvent>>,
+    build: Option<Receiver<Result<BuildOutcome, String>>>,
+}
+
+/// Бэкенд для прогона. Токен читается здесь и только здесь: под корнями, которые агент
+/// видит из песочницы, его быть не может, иначе прокси обходится чтением файла.
+pub fn build_backend_at(token_path: &Path) -> Result<HttpBackend, String> {
+    let name = token_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("token");
+    let token = read_token_outside(token_path, &build_runner::sandbox_roots(), name)
+        .map_err(|why| format!("токен {}: {why}", token_path.display()))?;
+    HttpBackend::new(HOST_BASE_URL, HOST_MODEL_ID, TokenProxy::new(token))
+        .map_err(|why| format!("бэкенд: {why}"))
+}
+
+pub fn build_backend() -> Result<HttpBackend, String> {
+    let config = ModelConfig::from_env(HOST_BASE_URL, HOST_MODEL_ID)
+        .map_err(|why| format!("конфигурация: {why}"))?;
+    build_backend_at(config.token_path())
+}
+
+fn pi_program() -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("PI_BIN") {
+        return Ok(PathBuf::from(path));
+    }
+    let home = std::env::var_os("HOME").ok_or("не задан HOME и не задан PI_BIN")?;
+    Ok(PathBuf::from(home).join(".pi/agent/bin/pi"))
+}
+
+/// Запуск прогона в отдельном потоке. Бэкенд собирается до потока: «нет токена» — это
+/// отказ начать, а не неудачная сборка, и путать их нельзя.
+fn start_build(repo: &str, request: BuildRequest, ui: &mut PlanUi) -> Result<(), String> {
+    let extension = std::env::var_os("STELLWERK_PI_EXTENSION")
+        .map(PathBuf::from)
+        .ok_or("не задан STELLWERK_PI_EXTENSION (путь к stellwerk_transport.ts)")?;
+    let pi = pi_program()?;
+    let backend = build_backend()?;
+    let root = std::env::temp_dir().join(format!("stellwerk-build-{}", std::process::id()));
+    let repo = PathBuf::from(repo);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let run = BuildRun {
+            request: &request,
+            repo: &repo,
+            root: &root,
+            extension: &extension,
+            pi: &pi,
+        };
+        let _ = tx.send(build_runner::run_build(run, &backend));
+    });
+    ui.build = Some(rx);
+    Ok(())
 }
 
 fn is_ctrl_c(key: &KeyEvent) -> bool {
@@ -923,6 +986,34 @@ impl PlanUi {
         self.pending = Some(rx);
         self.stage = Stage::Asking;
         Ok(())
+    }
+
+    /// Итог прогона приходит один раз: поток либо ответил, либо исчез. Исчезновение —
+    /// тоже ответ, и он отличается от пустого вывода.
+    fn drain_build(&mut self) {
+        let Some(rx) = self.build.as_ref() else {
+            return;
+        };
+        let received = match rx.try_recv() {
+            Ok(value) => value,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err("поток сборки исчез без ответа".to_string()),
+        };
+        self.build = None;
+        match received {
+            Ok(outcome) => {
+                let text: String = outcome.output.chars().take(240).collect();
+                self.error = Some(format!(
+                    "Build: ходов модели {} · заявок в гейт {} · вывод: {text}",
+                    outcome.model_turns, outcome.gate_requests
+                ));
+                self.stage = Stage::Approved;
+            }
+            Err(why) => {
+                self.error = Some(format!("Build завершился ошибкой: {why}"));
+                self.stage = Stage::Failed;
+            }
+        }
     }
 
     fn drain(
@@ -1009,6 +1100,7 @@ fn plan_loop(
         model_text: String::new(),
         error: None,
         pending: None,
+        build: None,
     };
 
     loop {
@@ -1039,6 +1131,7 @@ fn plan_loop(
         }
 
         ui.drain(session, transport, path)?;
+        ui.drain_build();
     }
     Ok(())
 }
@@ -1089,18 +1182,21 @@ fn handle_key(
         Stage::Approved => {
             if key.code == KeyCode::Char('b') {
                 let current = git_head(Path::new(&session.repo));
-                ui.error = Some(match build_request(session, &current) {
-                    Ok(request) => format!(
-                        "Build допущен: {} · изменений: {} · проверки: {} · исполнение \
-                         появится в N2-00h3b",
-                        request.goal,
-                        request.allowed_changes.len(),
-                        request.checks.join("; ")
-                    ),
-                    Err(refusal) => format!("Build отклонён: {refusal}"),
-                });
+                match build_request(session, &current) {
+                    Err(refusal) => ui.error = Some(format!("Build отклонён: {refusal}")),
+                    Ok(request) => match start_build(&session.repo, request, ui) {
+                        // Ни «допущен», ни «запущен» не печатается до того, как прогон
+                        // действительно начался: бэкенд собирается синхронно и падает здесь.
+                        Ok(()) => {
+                            ui.error = None;
+                            ui.stage = Stage::Building;
+                        }
+                        Err(why) => ui.error = Some(format!("Build не запущен: {why}")),
+                    },
+                }
             }
         }
+        Stage::Building => {}
         Stage::Failed | Stage::Cancelled => {
             if key.code == KeyCode::Char('r') {
                 ui.error = None;

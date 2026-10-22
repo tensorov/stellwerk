@@ -6,9 +6,9 @@
 use std::path::PathBuf;
 
 use stellwerk_cli::plan::{
-    build_prompt, build_request, load_session, parse_reply, render_plan, resolve_mode,
-    save_session, session_path, BuildRefusal, PlanDraft, PlanSession, PlannerMode, Reply, Stage,
-    Turn, View, BUILD_UNAVAILABLE_REASON, PLANNER_CONFIG_JSON, PLANNER_MODEL,
+    build_backend_at, build_prompt, build_request, load_session, parse_reply, render_plan,
+    resolve_mode, save_session, session_path, BuildRefusal, PlanDraft, PlanSession, PlannerMode,
+    Reply, Stage, Turn, View, BUILD_UNAVAILABLE_REASON, PLANNER_CONFIG_JSON, PLANNER_MODEL,
 };
 
 fn draft(goal: &str) -> PlanDraft {
@@ -645,4 +645,17 @@ fn an_approved_host_plan_becomes_a_request() {
     assert_eq!(request.allowed_changes, vec!["src/lib.rs".to_string()]);
     assert_eq!(request.checks, vec!["cargo test".to_string()]);
     assert_eq!(request.acceptance, vec!["тест проходит".to_string()]);
+}
+
+/// Отсутствие токена — отдельное состояние, а не «бэкенд, который потом как-нибудь».
+/// Прогон не начинается, и в причине назван именно тот файл, которого нет.
+#[test]
+fn the_build_names_the_missing_token() {
+    let missing = tmp("token").join("neuraldeep.token");
+    let why = match build_backend_at(&missing) {
+        Ok(_) => panic!("токена нет, а бэкенд собрался"),
+        Err(why) => why,
+    };
+    assert!(why.contains("neuraldeep.token"), "{why}");
+    assert!(why.contains(&missing.display().to_string()), "{why}");
 }

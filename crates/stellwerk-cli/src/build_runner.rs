@@ -155,6 +155,14 @@ pub fn wake(socket: &Path) -> io::Result<()> {
     std::os::unix::net::UnixStream::connect(socket).map(drop)
 }
 
+/// Корни, видимые агенту только на чтение. Токен под ними лежать не может: прочитав его
+/// сам, агент обошёл бы прокси. Список один на песочницу и на проверку пути токена.
+pub fn sandbox_roots() -> Vec<PathBuf> {
+    ["/usr", "/bin", "/lib", "/lib64", "/etc"]
+        .map(PathBuf::from)
+        .to_vec()
+}
+
 /// Сколько ждёт песочница и сколько отведено прогону.
 pub const BUILD_WINDOW: Duration = Duration::from_secs(60);
 pub const BUILD_BUDGET: Duration = Duration::from_secs(30);
@@ -242,9 +250,7 @@ pub fn run_build(run: BuildRun<'_>, backend: &dyn ModelBackend) -> Result<BuildO
     )
     .map_err(|e| format!("описание сессии: {e}"))?;
 
-    let mut read_only: Vec<PathBuf> = ["/usr", "/bin", "/lib", "/lib64", "/etc"]
-        .map(PathBuf::from)
-        .to_vec();
+    let mut read_only = sandbox_roots();
     if let Some(bin) = run.pi.parent() {
         read_only.push(bin.to_path_buf());
         if let Some(agent) = bin.parent() {
