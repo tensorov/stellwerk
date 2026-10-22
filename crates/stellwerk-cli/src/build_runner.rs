@@ -1,10 +1,11 @@
 //! Подготовка площадки Build: копия дерева без истории, политика гейта для canary C и
 //! слуга каналов, переживающий неизвестное число ходов.
 //!
-//! Политика C: гейт разрешает только чтение (`read`, R0) и запрещает оболочку (`bash`,
-//! R5 — безусловный `Deny` в таблице рисков). Запрет оболочки — это запрет инструмента
-//! целиком, а не фильтр команд: фильтра команд в этом срезе нет, и изображать его здесь
-//! было бы хуже, чем назвать отсутствующим.
+//! Политика записи: запрет определяется уровнем доступа, а не именем инструмента.
+//! `edit`/`write` — R1 (правка внутри рабочего места, откат удалением одноразовой копии),
+//! поэтому таблица рисков их разрешает; `bash` — R5, и он запрещён целиком, а не фильтром
+//! команд: фильтра команд в этом срезе нет, и изображать его было бы хуже, чем назвать
+//! отсутствующим.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -14,7 +15,9 @@ use std::time::Duration;
 use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, RetentionClass, RiskClass};
 use stellwerk_gateway::gate::CallRequest;
 use stellwerk_gateway::permission::ToolRisk;
-use stellwerk_task::m5::gate_channel::{GateChannel, GatePolicy, GateServed};
+use stellwerk_task::m5::gate_channel::{
+    AllowBasis, GateAnswer, GateChannel, GatePolicy, GateServed, PolicyVerdict,
+};
 use stellwerk_task::m5::model_transport::{ModelBackend, ModelProxy, Served};
 use stellwerk_task::m5::sandbox_bwrap::Sandbox;
 use stellwerk_task::m5::session_identity::{Adjudication, SessionDescription};
@@ -33,6 +36,18 @@ pub const BUILD_TOOLS: &[ToolEntry] = &[
         module: BUILD_MODULE,
         tool: "read",
         class: RiskClass::R0,
+    },
+    // R1 — запись в пределы рабочего места: правка файлов в песочнице, откат удалением
+    // копии. Класс задан здесь, а не вызовом: агент не вправе назвать себя безопасным.
+    ToolEntry {
+        module: BUILD_MODULE,
+        tool: "edit",
+        class: RiskClass::R1,
+    },
+    ToolEntry {
+        module: BUILD_MODULE,
+        tool: "write",
+        class: RiskClass::R1,
     },
     // R5 — единственный класс с безусловным `Deny` при любом уровне, включая владельца.
     // Для canary это и нужно: оболочка не авторизуется вообще, а не «при некоторых условиях».
@@ -112,6 +127,19 @@ impl GatePolicy for BuildPolicy {
             interactive: false,
         })
     }
+
+    /// Запрет — по уровню доступа, не по пути: `path` едет в кадре как след вызова, но
+    /// прав не сужает. Умолчание трейта отказало бы любому пути, поэтому политика,
+    /// которая путь принимает, обязана сказать это явно.
+    fn decide_call(&self, call: &Adjudication, _path: Option<&str>) -> PolicyVerdict {
+        match self.request_for(call) {
+            Some(request) => PolicyVerdict::Evaluated {
+                request,
+                basis: AllowBasis::RiskTable,
+            },
+            None => PolicyVerdict::Unclassified,
+        }
+    }
 }
 
 /// Обслуживает гейт, пока `stop` не поднят.
@@ -126,13 +154,29 @@ pub fn serve_gate_until_stopped(
     policy: &dyn GatePolicy,
     stop: &AtomicBool,
 ) -> io::Result<usize> {
+    serve_gate_until_stopped_logged(gate, session, policy, stop).map(|(served, _)| served)
+}
+
+/// То же, но с журналом решений: «заявок ноль» и «все разрешены» различимы только
+/// вместе с ответами.
+pub fn serve_gate_until_stopped_logged(
+    gate: &GateChannel,
+    session: &SessionDescription,
+    policy: &dyn GatePolicy,
+    stop: &AtomicBool,
+) -> io::Result<(usize, Vec<GateAnswer>)> {
     let mut served = 0;
+    let mut answers = Vec::new();
     while !stop.load(Ordering::SeqCst) {
-        if gate.serve_once(session, policy)? != GateServed::NoRequest {
+        let (status, answer) = gate.serve_once_logged(session, policy)?;
+        if status != GateServed::NoRequest {
             served += 1;
         }
+        if let Some(answer) = answer {
+            answers.push(answer);
+        }
     }
-    Ok(served)
+    Ok((served, answers))
 }
 
 /// Обслуживает канал модели по тому же правилу остановки.
@@ -183,6 +227,8 @@ pub struct BuildRun<'a> {
 pub struct BuildOutcome {
     pub model_turns: usize,
     pub gate_requests: usize,
+    /// Сами решения гейта: имя инструмента и основание разрешения либо причина отказа.
+    pub gate: Vec<GateAnswer>,
     /// Что напечатал агент. Отказ гейта виден здесь же, в его собственном выводе.
     pub output: String,
 }
@@ -243,7 +289,7 @@ pub fn run_build(run: BuildRun<'_>, backend: &dyn ModelBackend) -> Result<BuildO
     let held = stellwerk_task::m5::session_identity::SessionDescription::new(
         "build",
         &tmp,
-        stellwerk_task::m5::session_identity::ToolSet::listed(&["read", "bash"])
+        stellwerk_task::m5::session_identity::ToolSet::listed(&["read", "bash", "edit", "write"])
             .map_err(|e| format!("набор инструментов: {e}"))?,
         BUILD_WINDOW,
         stellwerk_task::m5::session_identity::CodemodeState::AbsentAfterConfigLoad,
@@ -264,7 +310,7 @@ pub fn run_build(run: BuildRun<'_>, backend: &dyn ModelBackend) -> Result<BuildO
         window: BUILD_WINDOW,
     };
 
-    let mut args = pi_transport_args(&extension, &["bash", "read"]);
+    let mut args = pi_transport_args(&extension, &["bash", "read", "edit", "write"]);
     for tail in [
         "--provider",
         "stellwerk",
@@ -315,7 +361,8 @@ pub fn run_build(run: BuildRun<'_>, backend: &dyn ModelBackend) -> Result<BuildO
     let stop = AtomicBool::new(false);
     std::thread::scope(|scope| -> Result<BuildOutcome, String> {
         let model_thread = scope.spawn(|| serve_model_until_stopped(&model, backend, &stop));
-        let gate_thread = scope.spawn(|| serve_gate_until_stopped(&gate, &held, &policy, &stop));
+        let gate_thread =
+            scope.spawn(|| serve_gate_until_stopped_logged(&gate, &held, &policy, &stop));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -331,13 +378,14 @@ pub fn run_build(run: BuildRun<'_>, backend: &dyn ModelBackend) -> Result<BuildO
             .join()
             .map_err(|_| "поток модели упал".to_string())?
             .map_err(|e| format!("канал модели: {e}"))?;
-        let gate_requests = gate_thread
+        let (gate_requests, gate) = gate_thread
             .join()
             .map_err(|_| "поток гейта упал".to_string())?
             .map_err(|e| format!("канал гейта: {e}"))?;
         Ok(BuildOutcome {
             model_turns,
             gate_requests,
+            gate,
             output: outcome.output,
         })
     })

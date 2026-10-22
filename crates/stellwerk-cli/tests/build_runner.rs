@@ -13,7 +13,7 @@ use stellwerk_cli::build_runner::{
 };
 use stellwerk_cli::plan::BuildRequest;
 use stellwerk_gateway::gate::decide;
-use stellwerk_task::m5::gate_channel::{GateChannel, GatePolicy};
+use stellwerk_task::m5::gate_channel::{GateAnswer, GateChannel, GatePolicy, PolicyVerdict};
 use stellwerk_task::m5::model_transport::{
     BackendError, Frame, ModelBackend, ModelProxy, TurnMessage,
 };
@@ -49,7 +49,7 @@ fn session(held: &[&str]) -> SessionDescription {
 
 fn verdict_for(tool: &str) -> String {
     let policy = BuildPolicy { model: binding() };
-    let adjudication = session(&["read", "bash", "edit"])
+    let adjudication = session(&["read", "bash", "edit", "patch"])
         .adjudicate(tool, None)
         .expect("инструмент в наборе");
     let request = policy
@@ -92,7 +92,7 @@ fn read_is_allowed_and_the_shell_is_denied() {
 /// Инструмент вне доверенного реестра — отказ с причиной, а не молчаливый `Deny`.
 #[test]
 fn an_unknown_tool_is_denied_with_a_reason() {
-    let unknown = verdict_for("edit");
+    let unknown = verdict_for("patch");
     assert!(unknown.starts_with("Deny"), "{unknown}");
     assert!(
         unknown.contains("unclassified_tool"),
@@ -277,5 +277,90 @@ fn the_shell_is_denied_before_it_touches_anything() {
         outcome.gate_requests >= 1,
         "заявок в гейт: {}",
         outcome.gate_requests
+    );
+}
+
+fn adjudicate(tool: &str) -> stellwerk_task::m5::session_identity::Adjudication {
+    session(&["read", "bash", "edit", "write"])
+        .adjudicate(tool, None)
+        .expect("инструмент в наборе")
+}
+
+/// Запись разрешена уровнем R1, и пришедший путь её не отменяет: путь — след вызова,
+/// а не второй фильтр. Умолчание трейта здесь отказало бы, поэтому проверяем явно.
+#[test]
+fn an_edit_is_allowed_by_level_and_the_path_does_not_revoke_it() {
+    let policy = BuildPolicy { model: binding() };
+    let call = adjudicate("edit");
+    let verdict = policy.decide_call(&call, Some("src/lib.rs"));
+    let PolicyVerdict::Evaluated { request, .. } = verdict else {
+        panic!("ожидалось решение: {verdict:?}");
+    };
+    assert!(
+        matches!(decide(&request), stellwerk_gateway::gate::Verdict::Allow),
+        "R1 разрешён таблицей"
+    );
+
+    let call = adjudicate("write");
+    let verdict = policy.decide_call(&call, None);
+    let PolicyVerdict::Evaluated { request, .. } = verdict else {
+        panic!("ожидалось решение: {verdict:?}");
+    };
+    assert!(matches!(
+        decide(&request),
+        stellwerk_gateway::gate::Verdict::Allow
+    ));
+}
+
+/// Оболочка остаётся R5: уровень не совпадает с тем, что разрешает план, и запрет
+/// безусловен.
+#[test]
+fn the_shell_stays_denied_at_r5() {
+    let policy = BuildPolicy { model: binding() };
+    let verdict = policy.decide_call(&adjudicate("bash"), Some("src/lib.rs"));
+    let PolicyVerdict::Evaluated { request, .. } = verdict else {
+        panic!("ожидалось решение: {verdict:?}");
+    };
+    let denied = decide(&request);
+    assert!(
+        matches!(denied, stellwerk_gateway::gate::Verdict::Deny { .. }),
+        "bash: {denied:?}"
+    );
+}
+
+/// Живой прогон: разрешение остаётся в журнале, а не только в счётчике заявок.
+#[test]
+fn the_build_logs_an_allowed_read() {
+    let (repo, root) = repo("edit");
+    let call = Frame::ToolCall {
+        id: "call-1".to_string(),
+        name: "read".to_string(),
+        input: json!({ "path": "src/lib.rs" }),
+    };
+    let backend = Scripted(Mutex::new(VecDeque::from([
+        vec![call],
+        vec![Frame::Text {
+            text: "ok".to_string(),
+        }],
+    ])));
+    let outcome = run_build(
+        BuildRun {
+            request: &request(),
+            repo: &repo,
+            root: &root,
+            extension: &extension(),
+            pi: &pi(),
+        },
+        &backend,
+    )
+    .expect("прогон");
+
+    assert!(
+        outcome
+            .gate
+            .iter()
+            .any(|answer| matches!(answer, GateAnswer::Allow { tool } if tool == "read")),
+        "журнал гейта: {:?}",
+        outcome.gate
     );
 }
