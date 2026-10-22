@@ -7,6 +7,7 @@
 //! `main.rs`-зависимости (clap, stellwerk-registry), а общий код —
 //! `run_task`, `RunResult`, вспомогательные функции — живёт здесь.
 
+pub mod build_runner;
 pub mod host_model;
 pub mod plan;
 pub mod planner_host;
