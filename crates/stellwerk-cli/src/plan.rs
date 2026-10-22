@@ -1012,9 +1012,10 @@ impl PlanUi {
         match received {
             Ok(outcome) => {
                 let text: String = outcome.output.chars().take(240).collect();
+                let gate = crate::build_runner::gate_summary(&outcome.gate);
                 self.error = Some(format!(
-                    "Build: ходов модели {} · заявок в гейт {} · вывод: {text}",
-                    outcome.model_turns, outcome.gate_requests
+                    "Build: ходов модели {} · гейт: {gate} · вывод: {text}",
+                    outcome.model_turns
                 ));
                 self.stage = Stage::Approved;
             }

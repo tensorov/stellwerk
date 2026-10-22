@@ -8,8 +8,8 @@ use std::sync::Mutex;
 
 use serde_json::json;
 use stellwerk_cli::build_runner::{
-    copy_workspace, run_build, serve_gate_until_stopped, serve_model_until_stopped, wake,
-    BuildPolicy, BuildRun, BUILD_MODULE,
+    copy_workspace, gate_summary, run_build, serve_gate_until_stopped, serve_model_until_stopped,
+    wake, BuildPolicy, BuildRun, BUILD_MODULE,
 };
 use stellwerk_cli::plan::BuildRequest;
 use stellwerk_gateway::gate::decide;
@@ -420,4 +420,21 @@ fn an_edit_reaches_the_copy_and_the_gate_authorizes_it() {
         original.contains("{ 1 }"),
         "репозиторий не тронут: {original}"
     );
+}
+
+/// Строка статуса называет решения, а не только их число: «никто не спрашивал» и
+/// «спрашивали и разрешили» должны читаться по-разному.
+#[test]
+fn the_gate_summary_names_each_decision() {
+    assert_eq!(gate_summary(&[]), "решений нет");
+    let summary = gate_summary(&[
+        GateAnswer::Allow {
+            tool: "read".to_string(),
+        },
+        GateAnswer::Deny {
+            tool: "bash".to_string(),
+            reason: "risk_denied: R5".to_string(),
+        },
+    ]);
+    assert_eq!(summary, "allowed(read) · denied(bash:risk_denied: R5)");
 }

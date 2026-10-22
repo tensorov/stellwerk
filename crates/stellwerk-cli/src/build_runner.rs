@@ -233,6 +233,31 @@ pub struct BuildOutcome {
     pub output: String,
 }
 
+/// Краткая запись решений гейта: что разрешено и на каком основании, что отклонено и
+/// почему. Ноль решений — это «решений нет», а не пустая строка.
+pub fn gate_summary(answers: &[GateAnswer]) -> String {
+    if answers.is_empty() {
+        return "решений нет".to_string();
+    }
+    answers
+        .iter()
+        .map(|answer| match answer {
+            GateAnswer::Allow { tool } => format!("allowed({tool})"),
+            GateAnswer::Authorized { tool, scope } => format!("authorized({tool}:{scope})"),
+            GateAnswer::Deny { tool, reason } => format!("denied({tool}:{reason})"),
+            GateAnswer::Ask { tool } => format!("asked({tool})"),
+            GateAnswer::Suspended { tool } => format!("suspended({tool})"),
+            GateAnswer::Unclassified { tool } => format!("unclassified({tool})"),
+            GateAnswer::UnknownTool { tool, .. } => format!("unknown_tool({tool})"),
+            GateAnswer::UnrecognisedSource {
+                parent_tool_call_id,
+            } => format!("unrecognised({parent_tool_call_id})"),
+            GateAnswer::Refused { code, .. } => format!("refused({code:?})"),
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
 fn build_binding() -> ModelBinding {
     ModelBinding {
         id: "build".to_string(),
