@@ -55,18 +55,36 @@ pub enum ErrorCode {
     ToolNotOffered,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TurnMessage {
-    pub role: Role,
-    pub text: String,
+/// Сообщение разговора. Форму задаёт роль: assistant несёт текст и сделанные вызовы,
+/// tool — идентификатор вызова, который он закрывает. Отсутствие `tool_calls` у assistant
+/// означает пустой список, но «ни текста, ни вызовов» — уже не ход.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "role", rename_all = "snake_case")]
+pub enum TurnMessage {
+    System {
+        text: String,
+    },
+    User {
+        text: String,
+    },
+    Assistant {
+        text: Option<String>,
+        #[serde(default)]
+        tool_calls: Vec<AssistantCall>,
+    },
+    Tool {
+        tool_call_id: String,
+        name: String,
+        text: String,
+        is_error: bool,
+    },
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Role {
-    User,
-    Assistant,
+#[derive(Debug, Clone, Deserialize)]
+pub struct AssistantCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: serde_json::Value,
 }
 
 /// Определение инструмента, предложенного модели. `parameters` — JSON-схема объекта.
@@ -324,9 +342,93 @@ fn parse(text: &str) -> Result<TurnRequest, Refusal> {
     let messages = object
         .get("messages")
         .ok_or_else(|| refusal(ErrorCode::Schema, "frame has no `messages`"))?;
-    let messages = serde_json::from_value(messages.clone())
+    let raw_messages = messages
+        .as_array()
+        .ok_or_else(|| refusal(ErrorCode::Schema, "`messages` is not an array"))?;
+    for raw in raw_messages {
+        validate_message_keys(raw)?;
+    }
+    let messages: Vec<TurnMessage> = serde_json::from_value(messages.clone())
         .map_err(|error| refusal(ErrorCode::Schema, error.to_string()))?;
+    validate_messages(&messages)?;
     Ok(TurnRequest { tools, messages })
+}
+
+/// Разбор сырых ключей до десериализации: `serde` молча проглотил бы неизвестный ключ,
+/// и лишнее поле стало бы неотличимо от сознательного сообщения.
+fn validate_message_keys(raw: &serde_json::Value) -> Result<(), Refusal> {
+    let Some(object) = raw.as_object() else {
+        return Err(refusal(ErrorCode::Schema, "message is not a JSON object"));
+    };
+    let role = object
+        .get("role")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| refusal(ErrorCode::Schema, "message has no string `role`"))?;
+    let (allowed, required): (&[&str], &[&str]) = match role {
+        "system" | "user" => (&["role", "text"], &["role", "text"]),
+        "assistant" => (&["role", "text", "tool_calls"], &["role"]),
+        "tool" => (
+            &["role", "tool_call_id", "name", "text", "is_error"],
+            &["role", "tool_call_id", "name", "text", "is_error"],
+        ),
+        other => {
+            return Err(refusal(
+                ErrorCode::Schema,
+                format!("unknown message role `{other}`"),
+            ));
+        }
+    };
+    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(refusal(
+            ErrorCode::Schema,
+            format!("unexpected key `{key}` in a `{role}` message"),
+        ));
+    }
+    if let Some(key) = required.iter().find(|key| !object.contains_key(**key)) {
+        return Err(refusal(
+            ErrorCode::Schema,
+            format!("`{role}` message has no `{key}`"),
+        ));
+    }
+    Ok(())
+}
+
+/// Смысловая проверка уже разобранных сообщений: пустой id вызова или tool-сообщение
+/// без адресата делают разговор невоспроизводимым.
+fn validate_messages(messages: &[TurnMessage]) -> Result<(), Refusal> {
+    for message in messages {
+        match message {
+            TurnMessage::Assistant { text, tool_calls } => {
+                if text.is_none() && tool_calls.is_empty() {
+                    return Err(refusal(
+                        ErrorCode::Schema,
+                        "assistant message carries neither text nor tool calls",
+                    ));
+                }
+                for call in tool_calls {
+                    if call.id.is_empty() {
+                        return Err(refusal(ErrorCode::Schema, "tool call has an empty `id`"));
+                    }
+                    if !call.arguments.is_object() {
+                        return Err(refusal(
+                            ErrorCode::Schema,
+                            format!("tool call `{}` arguments are not an object", call.id),
+                        ));
+                    }
+                }
+            }
+            TurnMessage::Tool { tool_call_id, .. } => {
+                if tool_call_id.is_empty() {
+                    return Err(refusal(
+                        ErrorCode::Schema,
+                        "tool message has an empty `tool_call_id`",
+                    ));
+                }
+            }
+            TurnMessage::System { .. } | TurnMessage::User { .. } => {}
+        }
+    }
+    Ok(())
 }
 
 fn write_frame(writer: &mut UnixStream, frame: &Frame) -> io::Result<()> {

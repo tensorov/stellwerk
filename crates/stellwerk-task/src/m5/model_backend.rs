@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use super::http_wire::BaseUrl;
 use super::model_transport::{
-    BackendError, Frame, ModelBackend, Role, ToolDef, TurnMessage, TurnRequest,
+    BackendError, Frame, ModelBackend, ToolDef, TurnMessage, TurnRequest,
 };
 use super::secrets::{ProxyRequest, TokenProxy};
 
@@ -38,18 +38,7 @@ impl HttpBackend {
         messages: &[TurnMessage],
         tools: Option<&[ToolDef]>,
     ) -> Result<Vec<Frame>, BackendError> {
-        let turns: Vec<serde_json::Value> = messages
-            .iter()
-            .map(|message| {
-                serde_json::json!({
-                    "role": match message.role {
-                        Role::User => "user",
-                        Role::Assistant => "assistant",
-                    },
-                    "content": message.text,
-                })
-            })
-            .collect();
+        let turns: Vec<serde_json::Value> = messages.iter().map(message_json).collect();
         let mut body = serde_json::json!({
             "model": self.model,
             "messages": turns,
@@ -103,6 +92,62 @@ impl ModelBackend for HttpBackend {
 
     fn turn_request(&self, request: &TurnRequest) -> Result<Vec<Frame>, BackendError> {
         self.send(&request.messages, request.tools.as_deref())
+    }
+}
+
+/// Сообщение в форме OpenAI: роль задаёт форму, пустой `tool_calls` не порождает ключ,
+/// а аргументы вызова уезжают строкой JSON.
+fn message_json(message: &TurnMessage) -> serde_json::Value {
+    match message {
+        TurnMessage::System { text } => serde_json::json!({
+            "role": "system",
+            "content": text,
+        }),
+        TurnMessage::User { text } => serde_json::json!({
+            "role": "user",
+            "content": text,
+        }),
+        TurnMessage::Assistant { text, tool_calls } => {
+            let mut rendered = serde_json::json!({
+                "role": "assistant",
+                "content": text,
+            });
+            if !tool_calls.is_empty() {
+                rendered["tool_calls"] = serde_json::Value::Array(
+                    tool_calls
+                        .iter()
+                        .map(|call| {
+                            serde_json::json!({
+                                "id": call.id,
+                                "type": "function",
+                                "function": {
+                                    "name": call.name,
+                                    "arguments": call.arguments.to_string(),
+                                },
+                            })
+                        })
+                        .collect(),
+                );
+            }
+            rendered
+        }
+        TurnMessage::Tool {
+            tool_call_id,
+            text,
+            is_error,
+            ..
+        } => {
+            let content = if *is_error {
+                format!("<tool_error>{text}</tool_error>")
+            } else {
+                text.clone()
+            };
+            serde_json::json!({
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": content,
+            })
+        }
     }
 }
 
