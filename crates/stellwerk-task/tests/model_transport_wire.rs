@@ -20,6 +20,10 @@ impl ModelBackend for Scripted {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(self.frames.clone())
     }
+
+    fn turn_request(&self, request: &TurnRequest) -> Result<Vec<Frame>, BackendError> {
+        self.turn(&request.messages)
+    }
 }
 
 struct Failing;
@@ -29,6 +33,10 @@ impl ModelBackend for Failing {
         Err(BackendError {
             message: "no route configured".to_owned(),
         })
+    }
+
+    fn turn_request(&self, request: &TurnRequest) -> Result<Vec<Frame>, BackendError> {
+        self.turn(&request.messages)
     }
 }
 
@@ -140,7 +148,10 @@ fn error_code(frames: &[Frame]) -> ErrorCode {
     }
 }
 
-const TURN: &[u8] = b"{\"kind\":\"turn\",\"messages\":[{\"role\":\"user\",\"text\":\"hi\"}]}\n";
+const TURN: &[u8] = b"{\"kind\":\"turn\",\"tools\":[{\"name\":\"bash\",\"description\":\"shell\",\"parameters\":{\"type\":\"object\"}}],\"messages\":[{\"role\":\"user\",\"text\":\"hi\"}]}\n";
+const NO_TOOLS: &[u8] = b"{\"kind\":\"turn\",\"messages\":[{\"role\":\"user\",\"text\":\"hi\"}]}\n";
+const EMPTY_TOOLS: &[u8] =
+    b"{\"kind\":\"turn\",\"tools\":[],\"messages\":[{\"role\":\"user\",\"text\":\"hi\"}]}\n";
 
 #[test]
 fn a_turn_roundtrip_streams_text_tool_and_done() {
@@ -165,18 +176,57 @@ fn a_turn_roundtrip_streams_text_tool_and_done() {
 }
 
 #[test]
-fn a_legacy_turn_is_forwarded_without_offer_validation() {
-    let proxy = proxy_at("legacy-turn");
-    let backend = scripted(vec![text("привет"), bash_call()]);
+fn a_turn_without_tools_is_refused() {
+    let proxy = proxy_at("no-tools");
+    let backend = scripted(vec![text("привет")]);
     let handle = serve(&proxy, Arc::clone(&backend) as Arc<dyn ModelBackend>);
-    let frames = exchange(&proxy, TURN);
+    let frames = exchange(&proxy, NO_TOOLS);
+
+    assert_eq!(served(handle), Served::Refused);
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(error_code(&frames), ErrorCode::Schema);
+    let Frame::Error { message, .. } = &frames[0] else {
+        panic!("ожидался error-кадр, а не {frames:?}");
+    };
+    assert!(
+        message.contains("turn has no `tools` field"),
+        "причина не названа: {message}"
+    );
+}
+
+#[test]
+fn an_empty_tool_set_is_an_explicit_choice() {
+    let proxy = proxy_at("empty-tools-choice");
+    let backend = scripted(vec![text("привет")]);
+    let handle = serve(&proxy, Arc::clone(&backend) as Arc<dyn ModelBackend>);
+    let frames = exchange(&proxy, EMPTY_TOOLS);
 
     assert_eq!(served(handle), Served::Turn);
     assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(frames.len(), 3);
-    assert!(matches!(&frames[0], Frame::Text { text } if text == "привет"));
-    assert!(matches!(&frames[1], Frame::ToolCall { name, .. } if name == "bash"));
-    assert!(matches!(&frames[2], Frame::Done { reason } if reason == "tool_use"));
+    assert_eq!(
+        frames,
+        vec![
+            text("привет"),
+            Frame::Done {
+                reason: "stop".to_owned()
+            }
+        ]
+    );
+}
+
+#[test]
+fn an_unknown_field_is_still_refused_first() {
+    let proxy = proxy_at("extra-before-tools");
+    let backend = scripted(vec![]);
+    let handle = serve(&proxy, Arc::clone(&backend) as Arc<dyn ModelBackend>);
+    let frames = exchange(
+        &proxy,
+        b"{\"kind\":\"turn\",\"messages\":[],\"url\":\"http://x.invalid\"}\n",
+    );
+
+    assert_eq!(served(handle), Served::Refused);
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(error_code(&frames), ErrorCode::UnexpectedField);
 }
 
 #[test]
@@ -343,7 +393,7 @@ fn a_frame_at_the_size_limit_is_served_not_refused() {
     let proxy = proxy_at("at-limit");
     let backend = scripted(vec![text("предел")]);
     let handle = serve(&proxy, Arc::clone(&backend) as Arc<dyn ModelBackend>);
-    let mut payload = b"{\"kind\":\"turn\",\"messages\":[]}".to_vec();
+    let mut payload = b"{\"kind\":\"turn\",\"tools\":[],\"messages\":[]}".to_vec();
     payload.resize(512 * 1024 - 1, b' ');
     payload.push(b'\n');
     let frames = exchange(&proxy, &payload);
@@ -383,8 +433,8 @@ fn a_second_turn_on_one_connection_is_not_served() {
     let handle = serve(&proxy, Arc::clone(&backend) as Arc<dyn ModelBackend>);
     let frames = exchange(
         &proxy,
-        b"{\"kind\":\"turn\",\"messages\":[{\"role\":\"user\",\"text\":\"1\"}]}\n\
-          {\"kind\":\"turn\",\"messages\":[{\"role\":\"user\",\"text\":\"2\"}]}\n",
+        b"{\"kind\":\"turn\",\"tools\":[],\"messages\":[{\"role\":\"user\",\"text\":\"1\"}]}\n\
+          {\"kind\":\"turn\",\"tools\":[],\"messages\":[{\"role\":\"user\",\"text\":\"2\"}]}\n",
     );
 
     assert_eq!(served(handle), Served::Turn);

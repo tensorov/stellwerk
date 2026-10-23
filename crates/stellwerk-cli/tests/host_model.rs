@@ -48,6 +48,7 @@ fn exchange(socket: &Path, text: &str) -> Vec<serde_json::Value> {
         "{}\n",
         serde_json::json!({
             "kind": "turn",
+            "tools": [],
             "messages": [{ "role": "user", "text": text }],
         })
     );

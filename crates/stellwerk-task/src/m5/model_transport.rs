@@ -312,7 +312,9 @@ fn parse(text: &str) -> Result<TurnRequest, Refusal> {
         ));
     }
     let tools = match object.get("tools") {
-        None => None,
+        None => {
+            return Err(refusal(ErrorCode::Schema, "turn has no `tools` field"));
+        }
         Some(serde_json::Value::Array(_)) => {
             let tools: Vec<ToolDef> = serde_json::from_value(object["tools"].clone())
                 .map_err(|error| refusal(ErrorCode::Schema, error.to_string()))?;
