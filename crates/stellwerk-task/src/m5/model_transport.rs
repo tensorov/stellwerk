@@ -52,6 +52,7 @@ pub enum ErrorCode {
     Schema,
     OversizeFrame,
     BackendError,
+    ToolNotOffered,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,10 +69,39 @@ pub enum Role {
     Assistant,
 }
 
+/// Определение инструмента, предложенного модели. `parameters` — JSON-схема объекта.
+#[derive(Debug, Deserialize)]
+pub struct ToolDef {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+/// Заявка на ход: необязательный набор инструментов и сообщения.
+///
+/// `tools: None` — legacy, набор неизвестен; `Some([])` — сознательное «инструментов нет»;
+/// `Some(list)` — предложенный список. Три состояния не сливаются в одно.
+#[derive(Debug)]
+pub struct TurnRequest {
+    pub tools: Option<Vec<ToolDef>>,
+    pub messages: Vec<TurnMessage>,
+}
+
 /// Ответ backend'а: текстовые дельты и запрошенные вызовы. Терминальный `done` добавляет
 /// прокси — backend не решает, закончился ли ход.
 pub trait ModelBackend: Send + Sync {
     fn turn(&self, messages: &[TurnMessage]) -> Result<Vec<Frame>, BackendError>;
+
+    /// Ход с явным набором инструментов. Backend без поддержки инструментов отвергает
+    /// непустой набор, а `None` и `Some([])` проводит через `turn`.
+    fn turn_request(&self, request: &TurnRequest) -> Result<Vec<Frame>, BackendError> {
+        match &request.tools {
+            Some(tools) if !tools.is_empty() => Err(BackendError {
+                message: "backend does not accept tools".to_owned(),
+            }),
+            _ => self.turn(&request.messages),
+        }
+    }
 }
 
 /// Backend не смог ответить. Отдельно от «ответил пустым ходом».
@@ -128,18 +158,51 @@ impl ModelProxy {
                 write_frame(&mut writer, &Frame::Error { code, message })?;
                 Served::Refused
             }
-            Ok(messages) => match backend.turn(&messages) {
+            Ok(request) => match backend.turn_request(&request) {
                 Ok(frames) => {
-                    for frame in frames {
-                        write_frame(&mut writer, &frame)?;
+                    let known = request.tools.as_ref().map(|tools| {
+                        tools
+                            .iter()
+                            .map(|tool| tool.name.as_str())
+                            .collect::<Vec<_>>()
+                    });
+                    let refused = known.as_ref().and_then(|known| {
+                        frames.iter().find_map(|frame| match frame {
+                            Frame::ToolCall { name, .. } if !known.contains(&name.as_str()) => {
+                                Some(name.clone())
+                            }
+                            _ => None,
+                        })
+                    });
+                    if let Some(name) = refused {
+                        write_frame(
+                            &mut writer,
+                            &Frame::Error {
+                                code: ErrorCode::ToolNotOffered,
+                                message: format!("tool `{name}` was not offered"),
+                            },
+                        )?;
+                        Served::Refused
+                    } else {
+                        let reason = if frames
+                            .iter()
+                            .any(|frame| matches!(frame, Frame::ToolCall { .. }))
+                        {
+                            "tool_use"
+                        } else {
+                            "stop"
+                        };
+                        for frame in frames {
+                            write_frame(&mut writer, &frame)?;
+                        }
+                        write_frame(
+                            &mut writer,
+                            &Frame::Done {
+                                reason: reason.to_owned(),
+                            },
+                        )?;
+                        Served::Turn
                     }
-                    write_frame(
-                        &mut writer,
-                        &Frame::Done {
-                            reason: "stop".to_owned(),
-                        },
-                    )?;
-                    Served::Turn
                 }
                 Err(error) => {
                     write_frame(
@@ -205,7 +268,7 @@ fn read_frame(reader: &mut BufReader<UnixStream>) -> io::Result<ReadOutcome> {
     }
 }
 
-fn parse(text: &str) -> Result<Vec<TurnMessage>, Refusal> {
+fn parse(text: &str) -> Result<TurnRequest, Refusal> {
     let value: serde_json::Value = serde_json::from_str(text)
         .map_err(|error| refusal(ErrorCode::MalformedJson, format!("not valid JSON: {error}")))?;
     let Some(object) = value.as_object() else {
@@ -223,18 +286,47 @@ fn parse(text: &str) -> Result<Vec<TurnMessage>, Refusal> {
     }
     let extra = object
         .keys()
-        .find(|key| !matches!(key.as_str(), "kind" | "messages"));
+        .find(|key| !matches!(key.as_str(), "kind" | "tools" | "messages"));
     if let Some(field) = extra {
         return Err(refusal(
             ErrorCode::UnexpectedField,
             format!("unexpected field `{field}`"),
         ));
     }
+    let tools = match object.get("tools") {
+        None => None,
+        Some(serde_json::Value::Array(_)) => {
+            let tools: Vec<ToolDef> = serde_json::from_value(object["tools"].clone())
+                .map_err(|error| refusal(ErrorCode::Schema, error.to_string()))?;
+            for tool in &tools {
+                if tool.name.is_empty() {
+                    return Err(refusal(
+                        ErrorCode::Schema,
+                        "tool definition has an empty `name`",
+                    ));
+                }
+                if !tool.parameters.is_object() {
+                    return Err(refusal(
+                        ErrorCode::Schema,
+                        format!("tool `{}` parameters are not an object", tool.name),
+                    ));
+                }
+            }
+            Some(tools)
+        }
+        Some(_) => {
+            return Err(refusal(
+                ErrorCode::Schema,
+                "`tools` is present but not an array",
+            ));
+        }
+    };
     let messages = object
         .get("messages")
         .ok_or_else(|| refusal(ErrorCode::Schema, "frame has no `messages`"))?;
-    serde_json::from_value(messages.clone())
-        .map_err(|error| refusal(ErrorCode::Schema, error.to_string()))
+    let messages = serde_json::from_value(messages.clone())
+        .map_err(|error| refusal(ErrorCode::Schema, error.to_string()))?;
+    Ok(TurnRequest { tools, messages })
 }
 
 fn write_frame(writer: &mut UnixStream, frame: &Frame) -> io::Result<()> {

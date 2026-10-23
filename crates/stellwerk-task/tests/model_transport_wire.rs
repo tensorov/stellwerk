@@ -3,10 +3,11 @@ use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use stellwerk_task::m5::model_transport::{
-    BackendError, ErrorCode, Frame, ModelBackend, ModelProxy, Served, TurnMessage, MAX_FRAME_BYTES,
+    BackendError, ErrorCode, Frame, ModelBackend, ModelProxy, Served, TurnMessage, TurnRequest,
+    MAX_FRAME_BYTES,
 };
 
 struct Scripted {
@@ -28,6 +29,56 @@ impl ModelBackend for Failing {
         Err(BackendError {
             message: "no route configured".to_owned(),
         })
+    }
+}
+
+/// Запоминает имена предложенных инструментов: сам `TurnRequest` не `Clone`.
+struct Recording {
+    frames: Vec<Frame>,
+    offered: Mutex<Vec<Vec<String>>>,
+}
+
+impl Recording {
+    fn new(frames: Vec<Frame>) -> Arc<Self> {
+        Arc::new(Self {
+            frames,
+            offered: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn offered(&self) -> Vec<Vec<String>> {
+        self.offered.lock().expect("журнал предложений").clone()
+    }
+}
+
+impl ModelBackend for Recording {
+    fn turn(&self, _messages: &[TurnMessage]) -> Result<Vec<Frame>, BackendError> {
+        Ok(self.frames.clone())
+    }
+
+    fn turn_request(&self, request: &TurnRequest) -> Result<Vec<Frame>, BackendError> {
+        let names = request.tools.as_ref().map_or_else(Vec::new, |tools| {
+            tools.iter().map(|tool| tool.name.clone()).collect()
+        });
+        self.offered.lock().expect("журнал предложений").push(names);
+        Ok(self.frames.clone())
+    }
+}
+
+/// Реализует только `turn`: проверяет умолчание `turn_request`.
+struct TurnOnly;
+
+impl ModelBackend for TurnOnly {
+    fn turn(&self, _messages: &[TurnMessage]) -> Result<Vec<Frame>, BackendError> {
+        Ok(vec![])
+    }
+}
+
+fn bash_call() -> Frame {
+    Frame::ToolCall {
+        id: "call-1".to_owned(),
+        name: "bash".to_owned(),
+        input: serde_json::json!({ "command": "true" }),
     }
 }
 
@@ -110,7 +161,126 @@ fn a_turn_roundtrip_streams_text_tool_and_done() {
     assert_eq!(frames.len(), 3);
     assert!(matches!(&frames[0], Frame::Text { text } if text == "привет"));
     assert!(matches!(&frames[1], Frame::ToolCall { name, .. } if name == "bash"));
-    assert!(matches!(&frames[2], Frame::Done { reason } if reason == "stop"));
+    assert!(matches!(&frames[2], Frame::Done { reason } if reason == "tool_use"));
+}
+
+#[test]
+fn a_legacy_turn_is_forwarded_without_offer_validation() {
+    let proxy = proxy_at("legacy-turn");
+    let backend = scripted(vec![text("привет"), bash_call()]);
+    let handle = serve(&proxy, Arc::clone(&backend) as Arc<dyn ModelBackend>);
+    let frames = exchange(&proxy, TURN);
+
+    assert_eq!(served(handle), Served::Turn);
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(frames.len(), 3);
+    assert!(matches!(&frames[0], Frame::Text { text } if text == "привет"));
+    assert!(matches!(&frames[1], Frame::ToolCall { name, .. } if name == "bash"));
+    assert!(matches!(&frames[2], Frame::Done { reason } if reason == "tool_use"));
+}
+
+#[test]
+fn an_explicit_empty_tool_set_refuses_any_call() {
+    let proxy = proxy_at("empty-tools");
+    let backend = scripted(vec![bash_call()]);
+    let handle = serve(&proxy, Arc::clone(&backend) as Arc<dyn ModelBackend>);
+    let frames = exchange(
+        &proxy,
+        b"{\"kind\":\"turn\",\"tools\":[],\"messages\":[{\"role\":\"user\",\"text\":\"hi\"}]}\n",
+    );
+
+    assert_eq!(served(handle), Served::Refused);
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(error_code(&frames), ErrorCode::ToolNotOffered);
+}
+
+#[test]
+fn a_call_outside_the_offered_set_is_refused() {
+    let proxy = proxy_at("outside-offer");
+    let backend = Recording::new(vec![text("сначала текст"), bash_call()]);
+    let handle = serve(&proxy, Arc::clone(&backend) as Arc<dyn ModelBackend>);
+    let frames = exchange(
+        &proxy,
+        b"{\"kind\":\"turn\",\"tools\":[{\"name\":\"read\",\"description\":\"read\",\"parameters\":{}}],\"messages\":[{\"role\":\"user\",\"text\":\"hi\"}]}\n",
+    );
+
+    assert_eq!(served(handle), Served::Refused);
+    assert_eq!(backend.offered(), vec![vec!["read".to_owned()]]);
+    assert_eq!(error_code(&frames), ErrorCode::ToolNotOffered);
+}
+
+#[test]
+fn a_call_inside_the_offered_set_is_forwarded() {
+    let proxy = proxy_at("inside-offer");
+    let backend = Recording::new(vec![text("привет"), bash_call()]);
+    let handle = serve(&proxy, Arc::clone(&backend) as Arc<dyn ModelBackend>);
+    let frames = exchange(
+        &proxy,
+        b"{\"kind\":\"turn\",\"tools\":[{\"name\":\"bash\",\"description\":\"shell\",\"parameters\":{}}],\"messages\":[{\"role\":\"user\",\"text\":\"hi\"}]}\n",
+    );
+
+    assert_eq!(served(handle), Served::Turn);
+    assert_eq!(backend.offered(), vec![vec!["bash".to_owned()]]);
+    assert_eq!(frames.len(), 3);
+    assert!(matches!(&frames[2], Frame::Done { reason } if reason == "tool_use"));
+}
+
+#[test]
+fn a_text_only_turn_still_ends_with_stop() {
+    let proxy = proxy_at("text-only");
+    let backend = scripted(vec![text("только текст")]);
+    let handle = serve(&proxy, Arc::clone(&backend) as Arc<dyn ModelBackend>);
+    let frames = exchange(&proxy, TURN);
+
+    assert_eq!(served(handle), Served::Turn);
+    assert_eq!(frames.len(), 2);
+    assert!(matches!(&frames[1], Frame::Done { reason } if reason == "stop"));
+}
+
+#[test]
+fn a_backend_without_tool_support_refuses_offered_tools() {
+    let proxy = proxy_at("turn-only");
+    let handle = serve(&proxy, Arc::new(TurnOnly));
+    let frames = exchange(
+        &proxy,
+        b"{\"kind\":\"turn\",\"tools\":[{\"name\":\"read\",\"description\":\"read\",\"parameters\":{}}],\"messages\":[]}\n",
+    );
+
+    assert_eq!(served(handle), Served::Refused);
+    assert_eq!(error_code(&frames), ErrorCode::BackendError);
+}
+
+#[test]
+fn tool_definitions_are_validated_before_the_backend() {
+    let payloads = [
+        b"{\"kind\":\"turn\",\"tools\":[{\"name\":\"\",\"description\":\"read\",\"parameters\":{}}],\"messages\":[]}\n".as_slice(),
+        b"{\"kind\":\"turn\",\"tools\":[{\"name\":\"read\",\"description\":\"read\",\"parameters\":[]}],\"messages\":[]}\n".as_slice(),
+    ];
+    for (index, payload) in payloads.into_iter().enumerate() {
+        let proxy = proxy_at(&format!("tool-schema-{index}"));
+        let backend = scripted(vec![]);
+        let handle = serve(&proxy, Arc::clone(&backend) as Arc<dyn ModelBackend>);
+        let frames = exchange(&proxy, payload);
+
+        assert_eq!(served(handle), Served::Refused);
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(error_code(&frames), ErrorCode::Schema);
+    }
+}
+
+#[test]
+fn a_null_tool_set_is_schema_not_absence() {
+    let proxy = proxy_at("null-tools");
+    let backend = scripted(vec![]);
+    let handle = serve(&proxy, Arc::clone(&backend) as Arc<dyn ModelBackend>);
+    let frames = exchange(
+        &proxy,
+        b"{\"kind\":\"turn\",\"tools\":null,\"messages\":[]}\n",
+    );
+
+    assert_eq!(served(handle), Served::Refused);
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(error_code(&frames), ErrorCode::Schema);
 }
 
 #[test]
