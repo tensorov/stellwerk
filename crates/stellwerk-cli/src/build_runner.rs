@@ -67,6 +67,15 @@ pub const BUILD_TOOLS: &[ToolEntry] = &[
 
 pub const BUILD_REGISTRY: StaticRegistry = StaticRegistry(BUILD_TOOLS);
 
+/// Что модель видит в `--tools`. Оболочки здесь нет: предлагать инструмент, который
+/// политика заведомо отклонит, — это обещание, которого прогон не выполнит.
+pub const BUILD_OFFERED: &[&str] = &["read", "edit", "write"];
+
+/// Что гейт держит в наборе сессии. `bash` остаётся здесь, хотя модели не предлагается:
+/// R5 — это отказ по уровню, а не отсутствие инструмента, и эти два состояния должны
+/// быть различимы в решении гейта.
+pub const BUILD_HELD: &[&str] = &["read", "bash", "edit", "write"];
+
 /// Копия дерева для песочницы. `.git` не копируется: `Sandbox::preflight` отвергает
 /// историю внутри `work`, и это единственный способ её там не иметь — не удалять после,
 /// а не класть.
@@ -333,6 +342,12 @@ pub fn prompt(request: &crate::plan::BuildRequest) -> String {
     out
 }
 
+/// Аргументы запуска Pi для Build: предлагаемый набор — [`BUILD_OFFERED`], а не набор
+/// гейта. Публичная, потому что контракт «что предложено» проверяется из `tests/`.
+pub fn build_args(extension: &Path) -> Vec<String> {
+    pi_transport_args(extension, BUILD_OFFERED)
+}
+
 /// Один прогон: копия дерева, `pi` внутри `bwrap`, наши каналы и политика C.
 ///
 /// Возвращает [`BuildOutcome`] и тогда, когда агент ничего не сделал: отказ гейта виден в
@@ -359,7 +374,7 @@ pub fn run_build(run: BuildRun<'_>, backend: &dyn ModelBackend) -> Result<BuildO
     let held = stellwerk_task::m5::session_identity::SessionDescription::new(
         "build",
         &tmp,
-        stellwerk_task::m5::session_identity::ToolSet::listed(&["read", "bash", "edit", "write"])
+        stellwerk_task::m5::session_identity::ToolSet::listed(BUILD_HELD)
             .map_err(|e| format!("набор инструментов: {e}"))?,
         BUILD_WINDOW,
         stellwerk_task::m5::session_identity::CodemodeState::AbsentAfterConfigLoad,
@@ -380,7 +395,7 @@ pub fn run_build(run: BuildRun<'_>, backend: &dyn ModelBackend) -> Result<BuildO
         window: BUILD_WINDOW,
     };
 
-    let mut args = pi_transport_args(&extension, &["bash", "read", "edit", "write"]);
+    let mut args = build_args(&extension);
     for tail in [
         "--provider",
         "stellwerk",

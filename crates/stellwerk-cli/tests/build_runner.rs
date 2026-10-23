@@ -8,8 +8,9 @@ use std::sync::Mutex;
 
 use serde_json::json;
 use stellwerk_cli::build_runner::{
-    answer_text, copy_workspace, gate_summary, prompt, run_build, serve_gate_until_stopped,
-    serve_model_until_stopped, wake, BuildPolicy, BuildRun, BUILD_MODULE,
+    answer_text, build_args, copy_workspace, gate_summary, prompt, run_build,
+    serve_gate_until_stopped, serve_model_until_stopped, wake, BuildPolicy, BuildRun, BUILD_HELD,
+    BUILD_MODULE, BUILD_OFFERED,
 };
 use stellwerk_cli::plan::BuildRequest;
 use stellwerk_gateway::gate::decide;
@@ -239,44 +240,52 @@ fn the_build_runs_pi_through_our_channels() {
     );
 }
 
-/// C целиком: оболочка запрещена до эффекта — канарейка не создана, причина названа.
+/// Модели предлагается ровно то, что она вправе вызвать: оболочки в списке нет.
 #[test]
-fn the_shell_is_denied_before_it_touches_anything() {
-    let (repo, root) = repo("deny");
-    let canary = root.join("work/canary");
-    let call = Frame::ToolCall {
-        id: "call-1".to_string(),
-        name: "bash".to_string(),
-        input: json!({ "command": format!("touch {}", canary.display()) }),
-    };
-    let backend = Scripted(Mutex::new(VecDeque::from([
-        vec![call],
-        vec![Frame::Text {
-            text: "ok".to_string(),
-        }],
-    ])));
-    let outcome = run_build(
-        BuildRun {
-            request: &request(),
-            repo: &repo,
-            root: &root,
-            extension: &extension(),
-            pi: &pi(),
-        },
-        &backend,
-    )
-    .expect("прогон");
+fn the_build_does_not_offer_bash() {
+    assert_eq!(BUILD_OFFERED.to_vec(), vec!["read", "edit", "write"]);
 
-    assert!(!canary.exists(), "эффекта нет: {}", outcome.output);
-    assert!(
-        outcome.output.contains("gate_denied"),
-        "причина deny: {}",
-        outcome.output
+    let args = build_args(Path::new("/tmp/stellwerk_transport.ts"));
+    let at = args
+        .iter()
+        .position(|arg| arg == "--tools")
+        .expect("--tools назван явно");
+    assert_eq!(
+        args.get(at + 1).map(String::as_str),
+        Some("read,edit,write"),
+        "аргументы: {args:?}"
     );
     assert!(
-        outcome.gate_requests >= 1,
-        "заявок в гейт: {}",
-        outcome.gate_requests
+        !args.iter().any(|arg| arg == "bash"),
+        "оболочка не предложена: {args:?}"
+    );
+}
+
+/// Оболочка не предлагается, но гейт её помнит: R5 — это отказ по уровню, отличимый
+/// от «инструмента нет в наборе». Иначе неизвестное стало бы разрешением.
+#[test]
+fn bash_stays_a_gate_level_deny() {
+    assert!(
+        BUILD_HELD.contains(&"bash"),
+        "гейт держит bash: {BUILD_HELD:?}"
+    );
+
+    let policy = BuildPolicy { model: binding() };
+    let call = session(BUILD_HELD)
+        .adjudicate("bash", None)
+        .expect("bash есть в наборе гейта");
+    let PolicyVerdict::Evaluated { request, .. } = policy.decide_call(&call, None) else {
+        panic!("ожидалось решение для bash");
+    };
+    let denied = decide(&request);
+    assert!(
+        matches!(denied, stellwerk_gateway::gate::Verdict::Deny { .. }),
+        "bash: {denied:?}"
+    );
+
+    assert!(
+        session(BUILD_HELD).adjudicate("nope", None).is_err(),
+        "инструмент вне набора — отсутствие, а не R5-отказ"
     );
 }
 
