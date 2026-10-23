@@ -16,7 +16,7 @@ use stellwerk_cli::plan::BuildRequest;
 use stellwerk_gateway::gate::decide;
 use stellwerk_task::m5::gate_channel::{GateAnswer, GateChannel, GatePolicy, PolicyVerdict};
 use stellwerk_task::m5::model_transport::{
-    BackendError, Frame, ModelBackend, ModelProxy, TurnMessage,
+    BackendError, Frame, ModelBackend, ModelProxy, TurnMessage, TurnRequest,
 };
 use stellwerk_task::m5::session_identity::{CodemodeState, SessionDescription, ToolSet};
 
@@ -165,6 +165,11 @@ impl ModelBackend for Scripted {
                 text: "готово".to_string(),
             }]
         }))
+    }
+
+    // Build предлагает read/edit/write: сценарий принимает ход вместе с набором.
+    fn turn_request(&self, request: &TurnRequest) -> Result<Vec<Frame>, BackendError> {
+        self.turn(&request.messages)
     }
 }
 

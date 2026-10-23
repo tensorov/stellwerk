@@ -1,6 +1,8 @@
 // N2-00f: единственное расширение Pi внутри песочницы: два хостовых AF_UNIX, без сети и ключа.
 import { connect, type Socket } from "node:net";
 import {
+  getCurrentSystemPrompt,
+  getCurrentTools,
   type AssistantMessage,
   type AssistantMessageEventStream,
   type Model,
@@ -10,12 +12,17 @@ import {
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const MAX_FRAME_BYTES = 64 * 1024;
+const MAX_FRAME_BYTES = 512 * 1024;
 const PROVIDER = "stellwerk";
 const API = "stellwerk-uds";
 
 type Frame = { kind: string } & Record<string, unknown>;
-type TurnMessage = { role: "user" | "assistant"; text: string };
+type WireCall = { id: string; name: string; arguments: Record<string, unknown> };
+type TurnMessage =
+  | { role: "system"; text: string }
+  | { role: "user"; text: string }
+  | { role: "assistant"; text: string | null; tool_calls?: WireCall[] }
+  | { role: "tool"; tool_call_id: string; name: string; text: string; is_error: boolean };
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -94,25 +101,84 @@ async function authorize(tool: string, path: string | undefined, signal?: AbortS
 }
 
 type Block = { type?: unknown; text?: unknown };
-type ContentBlock = { role?: unknown; content?: unknown };
+type RawMessage = {
+  role?: unknown;
+  content?: unknown;
+  toolCallId?: unknown;
+  toolName?: unknown;
+  isError?: unknown;
+};
 
-function textOf(content: unknown): string {
+function textOf(content: unknown, represented: (block: Block) => boolean = () => false): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
-  return content
-    .map((block) => block as Block)
-    .filter((block) => block.type === "text" && typeof block.text === "string")
-    .map((block) => block.text as string)
-    .join("");
+  const parts: string[] = [];
+  let omitted = 0;
+  for (const block of content as Block[]) {
+    if (block.type === "text" && typeof block.text === "string") parts.push(block.text);
+    else if (!represented(block)) omitted += 1;
+  }
+  const text = parts.join("");
+  if (omitted === 0) return text;
+  return `${text}${text.length > 0 ? " " : ""}[non-text content omitted: ${omitted}]`;
+}
+
+function callsOf(content: unknown): WireCall[] {
+  if (!Array.isArray(content)) return [];
+  const calls: WireCall[] = [];
+  for (const block of content as (Block & { id?: unknown; name?: unknown; arguments?: unknown })[]) {
+    if (block.type !== "toolCall") continue;
+    calls.push({
+      id: String(block.id),
+      name: String(block.name),
+      arguments: (block.arguments ?? {}) as Record<string, unknown>,
+    });
+  }
+  return calls;
+}
+
+function toolsOf(context: TranscriptContext): { name: string; description: string; parameters: unknown }[] {
+  return getCurrentTools(context.messages).map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+  }));
 }
 
 function transcript(context: TranscriptContext): TurnMessage[] {
   const messages: TurnMessage[] = [];
-  for (const raw of context.messages as unknown as ContentBlock[]) {
+  const system = getCurrentSystemPrompt(context.messages);
+  if (system.length > 0) messages.push({ role: "system", text: system });
+  for (const raw of context.messages as unknown as RawMessage[]) {
+    if (raw.role === "system") continue;
+    if (raw.role === "toolResult") {
+      messages.push({
+        role: "tool",
+        tool_call_id: String(raw.toolCallId ?? ""),
+        name: String(raw.toolName ?? ""),
+        text: textOf(raw.content),
+        is_error: raw.isError === true,
+      });
+      continue;
+    }
+    if (raw.role === "assistant") {
+      const calls = callsOf(raw.content);
+      const text = textOf(raw.content, (block) => block.type === "toolCall");
+      if (text.length === 0 && calls.length === 0) continue;
+      messages.push({
+        role: "assistant",
+        text: text.length === 0 ? null : text,
+        ...(calls.length > 0 ? { tool_calls: calls } : {}),
+      });
+      continue;
+    }
     const text = textOf(raw.content);
-    if (text.length === 0) continue;
-    if (raw.role === "user" || raw.role === "assistant") messages.push({ role: raw.role, text });
-    else messages.push({ role: "user", text: `[${String(raw.role ?? "unknown")}] ${text}` });
+    if (raw.role === "user") {
+      messages.push({ role: "user", text });
+      continue;
+    }
+    const role = String(raw.role ?? "unknown");
+    messages.push({ role: "user", text: text.length > 0 ? `[${role}] ${text}` : `[${role}]` });
   }
   return messages;
 }
@@ -140,7 +206,11 @@ function streamStellwerk(model: Model<string>, context: TranscriptContext, optio
   void (async () => {
     try {
       stream.push({ type: "start", partial: output });
-      const frames = await exchange(MODEL_SOCK, { kind: "turn", messages: transcript(context) }, (frame) => frame.kind === "done" || frame.kind === "error");
+      const frames = await exchange(
+        MODEL_SOCK,
+        { kind: "turn", tools: toolsOf(context), messages: transcript(context) },
+        (frame) => frame.kind === "done" || frame.kind === "error",
+      );
       let called = false;
       for (const frame of frames) {
         if (frame.kind === "text" && typeof frame.text === "string") {
@@ -166,8 +236,16 @@ function streamStellwerk(model: Model<string>, context: TranscriptContext, optio
         if (frame.kind === "error") throw new Error(`stellwerk: ${String(frame.code)}: ${String(frame.message)}`);
       }
       if (options?.signal?.aborted) throw new Error("stellwerk: turn aborted");
-      if (frames.at(-1)?.kind !== "done") throw new Error("stellwerk: model channel closed before `done`");
-      finish(called ? "toolUse" : "stop");
+      const done = frames.at(-1);
+      if (done?.kind !== "done") throw new Error("stellwerk: model channel closed before `done`");
+      const reason = done.reason;
+      if (reason !== "stop" && reason !== "tool_use") {
+        throw new Error(`stellwerk: invalid done.reason: ${String(reason)}`);
+      }
+      if ((reason === "tool_use") !== called) {
+        throw new Error(`stellwerk: done.reason ${reason} contradicts the frames`);
+      }
+      finish(reason === "tool_use" ? "toolUse" : "stop");
     } catch (error) {
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
       output.errorMessage = describe(error);
