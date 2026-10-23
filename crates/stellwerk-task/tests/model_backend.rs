@@ -492,7 +492,7 @@ impl ModelBackend for Capturing {
 }
 
 fn turn(messages: &str) -> String {
-    format!("{{\"kind\":\"turn\",\"messages\":{messages}}}\n")
+    format!("{{\"kind\":\"turn\",\"tools\":[],\"messages\":{messages}}}\n")
 }
 
 fn read_until_terminal(stream: &UnixStream) -> Vec<Frame> {
