@@ -17,8 +17,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Предел одного кадра: больше — отказ, не дожидаясь конца строки.
-pub const MAX_FRAME_BYTES: usize = 64 * 1024;
+/// 512 КиБ, общий для model proxy и gate channel: больше — отказ, не дожидаясь
+/// конца строки.
+pub const MAX_FRAME_BYTES: usize = 512 * 1024;
 
 /// Кадр хоста клиенту. `done` и `error` — разные терминальные состояния.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

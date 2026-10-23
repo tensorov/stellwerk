@@ -14,6 +14,7 @@ use stellwerk_gateway::permission::ToolRisk;
 use stellwerk_task::m5::gate_channel::{
     AllowBasis, GateAnswer, GateChannel, GatePolicy, GateServed, PolicyVerdict, RefusalCode,
 };
+use stellwerk_task::m5::model_transport::MAX_FRAME_BYTES;
 use stellwerk_task::m5::session_identity::{
     Adjudication, CallSource, CodemodeState, SessionDescription, ToolSet,
 };
@@ -255,10 +256,10 @@ fn a_connection_without_a_request_is_no_request() {
 }
 
 #[test]
-fn an_oversize_gate_frame_is_refused() {
+fn a_gate_frame_over_the_limit_is_refused() {
     let gate = channel("oversize");
     let mut payload = b"{\"kind\":\"tool_call\",\"tool\":\"read\"}".to_vec();
-    payload.resize(70_000, b'a');
+    payload.resize(MAX_FRAME_BYTES + 1, b'a');
     let (answers, served) = exchange(&gate, scripted(None, true), &payload);
     assert_eq!(served, GateServed::Refused);
     assert_eq!(*refused(&answers).0, RefusalCode::OversizeFrame);

@@ -161,7 +161,7 @@ fn an_oversize_frame_is_refused_before_it_is_buffered() {
     let proxy = proxy_at("oversize");
     let handle = serve(&proxy, Arc::new(Failing));
     let mut payload = b"{\"kind\":\"turn\",\"messages\":[]}".to_vec();
-    payload.resize(70_000, b'a');
+    payload.resize(MAX_FRAME_BYTES + 1, b'a');
     let stream = connect(&proxy, &payload);
 
     assert_eq!(served(handle), Served::Refused);
@@ -174,7 +174,7 @@ fn a_frame_at_the_size_limit_is_served_not_refused() {
     let backend = scripted(vec![text("предел")]);
     let handle = serve(&proxy, Arc::clone(&backend) as Arc<dyn ModelBackend>);
     let mut payload = b"{\"kind\":\"turn\",\"messages\":[]}".to_vec();
-    payload.resize(MAX_FRAME_BYTES - 1, b' ');
+    payload.resize(512 * 1024 - 1, b' ');
     payload.push(b'\n');
     let frames = exchange(&proxy, &payload);
 
