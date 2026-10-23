@@ -158,6 +158,20 @@ fn the_token_never_appears_in_the_refusal() {
     assert!(!text.contains(TOKEN_VALUE), "токен в отказе: {text}");
 }
 
+/// П. 7: инструменты планировщика не уходят сервису: в HTTP-теле нет ключа `tools`.
+#[test]
+fn the_planner_does_not_forward_tools_to_the_service() {
+    let (planner, worker) = planner("notools", vec![(200, choice("план без инструментов"))]);
+    let text = planner.ask("цель").expect("ход состоялся");
+    let requests = worker.join().expect("сервис завершился");
+    assert_eq!(text, "план без инструментов");
+    assert!(
+        !requests[0].contains("\"tools\""),
+        "тело несёт tools: {}",
+        requests[0]
+    );
+}
+
 /// П. 6 (запас): отсутствующий сокет — отказ канала, а не паника и не пустой план.
 #[test]
 fn a_missing_socket_is_a_channel_error() {

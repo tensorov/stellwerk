@@ -88,10 +88,7 @@ impl PlannerHost {
             let mut writer = stream
                 .try_clone()
                 .map_err(|why| PlannerError::Channel(format!("clone: {why}")))?;
-            let request = serde_json::json!({
-                "kind": "turn",
-                "messages": [{ "role": "user", "text": prompt }],
-            });
+            let request = turn_frame(prompt);
             writer
                 .write_all(format!("{request}\n").as_bytes())
                 .map_err(|why| PlannerError::Channel(format!("write: {why}")))?;
@@ -101,6 +98,16 @@ impl PlannerHost {
             read_reply(stream)
         })
     }
+}
+
+/// Кадр хода планировщика. `tools: []` — сознательное «инструментов нет», а не отсутствие
+/// поля: иначе планировщик был бы неотличим от legacy-клиента с неизвестным набором.
+fn turn_frame(prompt: &str) -> Value {
+    serde_json::json!({
+        "kind": "turn",
+        "tools": [],
+        "messages": [{ "role": "user", "text": prompt }],
+    })
 }
 
 fn read_reply(stream: UnixStream) -> Result<String, PlannerError> {
@@ -143,4 +150,43 @@ fn read_reply(stream: UnixStream) -> Result<String, PlannerError> {
         ));
     }
     Ok(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_reply, turn_frame};
+    use crate::planner_host::PlannerError;
+    use serde_json::json;
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+
+    /// Планировщик не молчит про инструменты: кадр несёт явный пустой набор, чтобы
+    /// «инструментов нет» отличалось от legacy-клиента, который их не называл.
+    #[test]
+    fn the_planner_sends_an_explicit_empty_tool_set() {
+        let frame = turn_frame("цель: добавить тест");
+        assert_eq!(frame["kind"], json!("turn"));
+        assert_eq!(frame["tools"], json!([]));
+        assert_eq!(frame["messages"][0]["role"], json!("user"));
+        assert_eq!(frame["messages"][0]["text"], json!("цель: добавить тест"));
+    }
+
+    /// `tool_call` остаётся ошибкой: инструмент, которого не предлагали, — неверный маршрут,
+    /// а не кадр, который можно пропустить.
+    #[test]
+    fn a_tool_call_is_still_unexpected() {
+        let (reader, mut writer) = UnixStream::pair().expect("пара сокетов");
+        writer
+            .write_all(
+                b"{\"kind\":\"tool_call\",\"id\":\"call-1\",\"name\":\"bash\",\"input\":{}}\n",
+            )
+            .expect("кадр записан");
+        writer.flush().expect("кадр отправлен");
+        drop(writer);
+        let refused = read_reply(reader).expect_err("tool_call — не текст");
+        assert!(
+            matches!(refused, PlannerError::UnexpectedTool),
+            "{refused:?}"
+        );
+    }
 }
