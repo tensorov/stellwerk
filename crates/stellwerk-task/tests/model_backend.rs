@@ -12,7 +12,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use stellwerk_task::m5::model_backend::HttpBackend;
-use stellwerk_task::m5::model_transport::{Frame, ModelBackend, Role, TurnMessage};
+use stellwerk_task::m5::model_transport::{
+    Frame, ModelBackend, Role, ToolDef, TurnMessage, TurnRequest,
+};
 use stellwerk_task::m5::secrets::{Token, TokenProxy};
 
 const VALUE: &str = "nd-t0ken-for-backend-tests";
@@ -210,4 +212,135 @@ fn empty_choices_are_an_error_not_a_finished_turn() {
         .expect_err("пустой выбор — отказ");
     served.worker.join().expect("сервер завершился");
     assert!(refused.message.contains("choices"), "{}", refused.message);
+}
+
+/// Тело запроса как JSON: заголовки отделены пустой строкой, разбор один для всех тестов.
+fn body(request: &str) -> serde_json::Value {
+    let raw = request.split("\r\n\r\n").nth(1).expect("тело запроса");
+    serde_json::from_str(raw).expect("тело — JSON")
+}
+
+/// П. 6: непустой набор уезжает в тело как `tools`, и определение не теряет схему.
+#[test]
+fn the_request_offers_the_turn_tools() {
+    let served = serve(200, |_| {
+        r#"{"choices":[{"message":{"content":"ok"}}]}"#.to_owned()
+    });
+    let request = TurnRequest {
+        tools: Some(vec![ToolDef {
+            name: "bash".to_owned(),
+            description: "run a shell command".to_owned(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"cmd": {"type": "string"}},
+                "required": ["cmd"],
+            }),
+        }]),
+        messages: vec![user("go")],
+    };
+    let frames = backend(&served.url)
+        .turn_request(&request)
+        .expect("ход с инструментами");
+    let raw = served.worker.join().expect("сервер завершился");
+    let json = body(&raw);
+
+    let tools = json["tools"].as_array().expect("tools — массив");
+    assert_eq!(tools.len(), 1);
+    let function = &tools[0]["function"];
+    assert_eq!(function["name"], "bash");
+    assert_eq!(function["description"], "run a shell command");
+    assert_eq!(function["parameters"]["type"], "object");
+    assert_eq!(
+        function["parameters"]["properties"]["cmd"]["type"],
+        "string"
+    );
+    assert!(matches!(&frames[0], Frame::Text { text } if text == "ok"));
+}
+
+/// П. 7: `Some([])` — сознательное «инструментов нет», а не `"tools":[]`: ключа нет.
+#[test]
+fn an_empty_tool_set_sends_no_tools_key() {
+    let served = serve(200, |_| {
+        r#"{"choices":[{"message":{"content":"ok"}}]}"#.to_owned()
+    });
+    let request = TurnRequest {
+        tools: Some(Vec::new()),
+        messages: vec![user("go")],
+    };
+    backend(&served.url)
+        .turn_request(&request)
+        .expect("ход без инструментов");
+    let raw = served.worker.join().expect("сервер завершился");
+    assert!(body(&raw).get("tools").is_none(), "{raw}");
+}
+
+/// П. 8: legacy `None` не порождает ключ `tools` — набор неизвестен, а не пуст.
+#[test]
+fn a_legacy_turn_sends_no_tools_key() {
+    let served = serve(200, |_| {
+        r#"{"choices":[{"message":{"content":"ok"}}]}"#.to_owned()
+    });
+    let request = TurnRequest {
+        tools: None,
+        messages: vec![user("go")],
+    };
+    backend(&served.url)
+        .turn_request(&request)
+        .expect("legacy-ход");
+    let raw = served.worker.join().expect("сервер завершился");
+    assert!(body(&raw).get("tools").is_none(), "{raw}");
+}
+
+/// П. 9: каждый инструмент — ровно обёртка `function` с тремя полями, порядок сохранён.
+#[test]
+fn tools_render_as_function_definitions() {
+    let served = serve(200, |_| {
+        r#"{"choices":[{"message":{"content":"ok"}}]}"#.to_owned()
+    });
+    let request = TurnRequest {
+        tools: Some(vec![
+            ToolDef {
+                name: "read".to_owned(),
+                description: "read a file".to_owned(),
+                parameters: serde_json::json!({"type": "object", "properties": {}}),
+            },
+            ToolDef {
+                name: "write".to_owned(),
+                description: "write a file".to_owned(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                }),
+            },
+        ]),
+        messages: vec![user("go")],
+    };
+    backend(&served.url)
+        .turn_request(&request)
+        .expect("ход с двумя инструментами");
+    let raw = served.worker.join().expect("сервер завершился");
+    let json = body(&raw);
+    let tools = json["tools"].as_array().expect("tools — массив");
+
+    assert_eq!(tools.len(), 2);
+    let names: Vec<&str> = tools
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().expect("имя строкой"))
+        .collect();
+    assert_eq!(names, ["read", "write"]);
+    for tool in tools {
+        let wrapper = tool.as_object().expect("обёртка — объект");
+        assert_eq!(wrapper.len(), 2);
+        assert_eq!(wrapper["type"], "function");
+        let function = wrapper["function"].as_object().expect("function — объект");
+        assert_eq!(function.len(), 3);
+        assert!(function.contains_key("name"));
+        assert!(function.contains_key("description"));
+        assert!(function.contains_key("parameters"));
+    }
+    assert_eq!(tools[0]["function"]["description"], "read a file");
+    assert_eq!(
+        tools[1]["function"]["parameters"],
+        serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}})
+    );
 }

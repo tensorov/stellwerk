@@ -7,7 +7,9 @@
 use serde::Deserialize;
 
 use super::http_wire::BaseUrl;
-use super::model_transport::{BackendError, Frame, ModelBackend, Role, TurnMessage};
+use super::model_transport::{
+    BackendError, Frame, ModelBackend, Role, ToolDef, TurnMessage, TurnRequest,
+};
 use super::secrets::{ProxyRequest, TokenProxy};
 
 /// Ходовой backend: адрес и модель заданы при сборке, токен живёт в прокси.
@@ -28,10 +30,14 @@ impl HttpBackend {
             token,
         })
     }
-}
 
-impl ModelBackend for HttpBackend {
-    fn turn(&self, messages: &[TurnMessage]) -> Result<Vec<Frame>, BackendError> {
+    /// Общий путь хода: `None` и пустой набор не порождают ключ `tools`, потому что
+    /// «набор неизвестен» и «сознательно пуст» не должны выглядеть как предложение.
+    fn send(
+        &self,
+        messages: &[TurnMessage],
+        tools: Option<&[ToolDef]>,
+    ) -> Result<Vec<Frame>, BackendError> {
         let turns: Vec<serde_json::Value> = messages
             .iter()
             .map(|message| {
@@ -44,12 +50,29 @@ impl ModelBackend for HttpBackend {
                 })
             })
             .collect();
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.model,
             "messages": turns,
             "stream": false,
-        })
-        .to_string();
+        });
+        if let Some(tools) = tools.filter(|tools| !tools.is_empty()) {
+            body["tools"] = serde_json::Value::Array(
+                tools
+                    .iter()
+                    .map(|tool| {
+                        serde_json::json!({
+                            "type": "function",
+                            "function": {
+                                "name": tool.name,
+                                "description": tool.description,
+                                "parameters": tool.parameters,
+                            },
+                        })
+                    })
+                    .collect(),
+            );
+        }
+        let body = body.to_string();
         let (authority, path) = (self.base.authority(), self.base.path("/chat/completions"));
         let request = ProxyRequest::new(
             "POST",
@@ -70,6 +93,16 @@ impl ModelBackend for HttpBackend {
             )));
         }
         parse(&response.body)
+    }
+}
+
+impl ModelBackend for HttpBackend {
+    fn turn(&self, messages: &[TurnMessage]) -> Result<Vec<Frame>, BackendError> {
+        self.send(messages, None)
+    }
+
+    fn turn_request(&self, request: &TurnRequest) -> Result<Vec<Frame>, BackendError> {
+        self.send(&request.messages, request.tools.as_deref())
     }
 }
 
