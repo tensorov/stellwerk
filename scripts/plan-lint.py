@@ -64,6 +64,9 @@ TEST_LINES_DEFAULT = 250
 INVERT_MARKERS = ('! cargo', '!bash -c', 'падает', 'ожидается падение',
                   'не должен проходить', 'должен упасть', 'не зелёный')
 KEY_RE = re.compile(r'^([a-z_][a-z0-9_]*):\s*(.*)$')
+# N1/TUI и ранние N2 пишут поля жирным: `**depends_on:** [..]`. На одной строке
+# их бывает несколько, разделённых `·`, поэтому строку делят перед разбором.
+BOLD_KEY_RE = re.compile(r'^\*\*([a-z_][a-z0-9_]*):\*\*\s*(.*)$')
 
 
 def parse(path):
@@ -73,13 +76,99 @@ def parse(path):
     Разрыв по пустой строке означал, что валидный пакет с пустой строкой между
     заголовком и метаданными не разбирался вовсе: `parse()` возвращал пусто, пакет
     выпадал из выборки, а линт печатал «пакетов нет» вместо результата проверки.
-    Проверка, которая не ловит то, для чего написана, хуже её отсутствия.
 
     Продолжение значения — строка без `ключ:` — присоединяется к предыдущему полю,
     поэтому длинное поле не усекается до первой строки. Свёрнутый блок (`>` или `|`)
     по-прежнему НЕ разворачивается: его разворот меняет контракт линта шире этой
     починки, и за него отвечает C4.
     """
+    with open(path, encoding='utf-8') as fh:
+        raw = fh.read()
+
+    data = {}
+    folded = []
+
+    # Check for N2 YAML frontmatter format (starts with ---)
+    if raw.strip().startswith('---'):
+        # Parse YAML frontmatter
+        # Find end of frontmatter
+        parts = raw.split('---', 2)
+        if len(parts) >= 3:
+            frontmatter = parts[1]
+            body = parts[2]
+            # Parse frontmatter
+            prev = None
+            for line in frontmatter.splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith('#'):
+                    continue
+                # Check for list item
+                if stripped.startswith('- '):
+                    if prev and prev in data:
+                        # Append to previous list
+                        item = stripped[2:].strip().strip('"\'').strip("'")
+                        if data[prev] and data[prev] != '[]':
+                            # If it's already a list representation
+                            if data[prev].startswith('['):
+                                data[prev] = data[prev][:-1] + ', ' + item + ']'
+                            else:
+                                data[prev] = '[' + data[prev] + ', ' + item + ']'
+                        else:
+                            data[prev] = '[' + item + ']'
+                    continue
+                m = KEY_RE.match(stripped)
+                if m:
+                    key, val = m.group(1), m.group(2).strip()
+                    prev = key
+                    if val in ('>', '|'):
+                        folded.append(key)
+                    if val == '':
+                        data[key] = '[]'  # Will be filled by list items
+                    else:
+                        data[key] = val
+                elif line.startswith((' ', '\t')) and prev is not None and stripped != '':
+                    # Continuation
+                    if data.get(prev, '').startswith('[') and data[prev].endswith(']'):
+                        # Try to add as list item
+                        item = stripped.strip().strip('- ').strip().strip('"\'').strip("'")
+                        if item and not item.startswith('-'):
+                            data[prev] = data[prev][:-1] + ', ' + item + ']'
+                    else:
+                        data[prev] = (data[prev] + ' ' + stripped).strip()
+            # Parse body sections
+            # goal from ## Зачем
+            m_goal = re.search(r'##\s*Зачем\s*\n(.*?)(?=\n##\s|\Z)', body, re.DOTALL)
+            if m_goal:
+                goal_text = m_goal.group(1).strip()
+                # Get first non-empty line
+                for gl in goal_text.splitlines():
+                    gls = gl.strip()
+                    if gls and not gls.startswith('#'):
+                        data['goal'] = gls
+                        break
+                if 'goal' not in data and goal_text:
+                    # Take first paragraph
+                    data['goal'] = goal_text.split('\n\n')[0].strip().replace('\n', ' ')
+            # acceptance: ## RED when present, else ## Приёмка
+            m_red = re.search(r'##\s*RED\s*\n(.*?)(?=\n##\s|\Z)', body, re.DOTALL)
+            if m_red:
+                red_text = m_red.group(1).strip()
+                data['acceptance'] = red_text.replace('\n', ' ')
+                data['_phase_red'] = True
+            else:
+                m_acc = re.search(r'##\s*Приёмка\s*\n(.*?)(?=\n##\s|\Z)', body, re.DOTALL)
+                if m_acc:
+                    acc_text = m_acc.group(1).strip()
+                    # Extract code block content if present
+                    m_code = re.search(r'```\n(.*?)```', acc_text, re.DOTALL)
+                    if m_code:
+                        acc_text = m_code.group(1).strip()
+                    data['acceptance'] = acc_text.replace('\n', ' ')
+            if folded:
+                data['_folded'] = folded
+            return data or None
+
+    # Original format
     head = []
     with open(path, encoding='utf-8') as fh:
         for line in fh:
@@ -108,6 +197,52 @@ def parse(path):
             # Пустая строка внутри блока и отступ — продолжение предыдущего поля.
             if prev is not None and line.strip() != '':
                 data[prev] = (data[prev] + ' ' + line.strip()).strip()
+    # N1/TUI и ранние N2 задают поля жирным и разделами, а не YAML-frontmatter.
+    # Сканируется весь текст: limit_waiver стоит в теле, а не в шапке.
+    for line in raw.splitlines():
+        for seg in line.split('·'):
+            m = BOLD_KEY_RE.match(seg.strip())
+            if m:
+                data.setdefault(m.group(1), m.group(2).strip())
+
+    def section(name):
+        m = re.search(r'^##\s*%s\b[^\n]*\n(.*?)(?=\n##\s|\Z)' % name,
+                      raw, re.DOTALL | re.MULTILINE)
+        return m.group(1).strip() if m else None
+
+    files_text = section('files_allowed')
+    if files_text is not None:
+        paths = []
+        for line in files_text.splitlines():
+            s = line.strip()
+            if not s.startswith('- '):
+                continue
+            item = s[2:].strip()
+            m = re.match(r'`([^`]+)`', item)
+            paths.append(m.group(1) if m else item.split(' — ')[0].strip())
+        if paths:
+            data.setdefault('files_allowed', ', '.join(paths))
+
+    goal_text = section('Цель') or section('Зачем')
+    if goal_text:
+        for gl in goal_text.splitlines():
+            gls = gl.strip()
+            if gls and not gls.startswith('#'):
+                data.setdefault('goal', gls)
+                break
+
+    red_text = section('RED')
+    if red_text is not None:
+        data.setdefault('acceptance', red_text.replace('\n', ' '))
+        data['_phase_red'] = True
+    else:
+        acc_text = section('Приёмка')
+        if acc_text is not None:
+            m_code = re.search(r'```\n(.*?)```', acc_text, re.DOTALL)
+            acc = m_code.group(1).strip() if m_code else acc_text
+            data.setdefault('acceptance', acc.replace('\n', ' '))
+    if folded:
+        data['_folded'] = folded
     return data or None
 
 
@@ -186,9 +321,9 @@ EXEMPT = re.compile(r'раньше стояло|было |было$|запрещ
 def is_red(p):
     if RED_LEAD_RE.match(p.get('acceptance', '')):
         return True
-    # RED_RE регистрозависим, а goal пишут как «RED: …» — приводим регистр,
-    # иначе объявление перестаёт узнаваться.
-    return bool(RED_RE.search(p.get('goal', '').lower()))
+    if RED_LEAD_RE.match(p.get('goal', '')):
+        return True
+    return False
 
 
 def norm_dep(value, known):
@@ -337,8 +472,10 @@ def _collect_packets(root):
     if not os.path.isdir(base):
         return out
     for ms in sorted(os.listdir(base)):
+        if ms in ('_archive', '.omo') or ms.startswith('.'):
+            continue
         d = os.path.join(base, ms)
-        if not os.path.isdir(d) or not ms.startswith('M'):
+        if not os.path.isdir(d):
             continue
         for fn in sorted(os.listdir(d)):
             if PACKET_RE.match(fn):
@@ -367,34 +504,68 @@ def _deps_of(ms, text):
         raw = raw.strip()
         if not raw or raw == '\u2014':
             continue
-        if '-' in raw and raw.split('-')[0].startswith('M'):
-            out.add('%s/packet-%s' % (raw.split('-')[0], raw.split('-', 1)[1]))
-        else:
-            out.add('%s/packet-%s' % (ms, raw))
+        if '/' in raw:
+            parts = raw.split('/')
+            if len(parts) == 2:
+                dep_ms = parts[0]
+                dep_id = parts[1]
+                out.add('%s/packet-%s' % (dep_ms, dep_id))
+                continue
+        if '-' in raw:
+            prefix = raw.split('-')[0]
+            if re.match(r'^(M\d*|N\d*|TUI|H\d*)$', prefix):
+                out.add('%s/packet-%s' % (prefix, raw.split('-', 1)[1]))
+                continue
+        out.add('%s/packet-%s' % (ms, raw))
     return out
 
 
 def check_cross_milestone_overlap(root):
-    """C9 — файл заявлен пакетами РАЗНЫХ milestone без объявленного порядка.
-
-    Тот же класс, что C8 и F-12: проверка смотрит только туда, куда её
-    направили. C1 сравнивает пакеты ВНУТРИ одного milestone, поэтому пересечение
-    `runner.rs` между M2-09/10/11 и M4-02/03/05 было невидимо, при том что оба
-    milestone проходили линт чисто. Шесть пакетов претендовали на один файл, и
-    `depends_on` у M4-02 был `[01]` — без единой ссылки на M2-09, создающий этот
-    файл. Воркер получил бы M4-02 первым, а M2-09 потом переписал бы его молча.
-
-    Требуется, чтобы ХОТЯ БЫ ОДИН из претендентов объявлял другого в depends_on.
-    Пересечение без взаимного упорядочивания — нарушение.
-    """
+    """C9 — файл заявлен пакетами РАЗНЫХ milestone без объявленного порядка."""
     packets = _collect_packets(root)
     claims = {}
     for ms, name, text in packets:
-        m = FILES_RE.search(text)
-        if not m:
-            continue
-        for path in m.group(1).split(','):
-            path = path.strip()
+        files = []
+        parsed = None
+        try:
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as tf:
+                tf.write(text)
+                tfname = tf.name
+            parsed = parse(tfname)
+            os.unlink(tfname)
+        except Exception:
+            parsed = None
+        if parsed:
+            files = split_list(parsed.get('files_allowed') or parsed.get('allowed_changes') or '')
+        if not files:
+            m = FILES_RE.search(text)
+            if m:
+                for path in m.group(1).split(','):
+                    path = path.strip()
+                    if path:
+                        files.append(path)
+            m2 = re.search(r'^allowed_changes:\s*\[(.*?)\]', text, re.M)
+            if m2:
+                for path in m2.group(1).split(','):
+                    path = path.strip().strip('"\'')
+                    if path:
+                        files.append(path)
+            for section_name in ('files_allowed', 'allowed_changes'):
+                sec = re.search(r'^##\s*%s\b[^\n]*\n(.*?)(?=\n##\s|\Z)' % section_name,
+                                text, re.DOTALL | re.MULTILINE)
+                if sec:
+                    for line in sec.group(1).splitlines():
+                        s = line.strip()
+                        if s.startswith('- '):
+                            item = s[2:].strip()
+                            mm = re.match(r'`([^`]+)`', item)
+                            if mm:
+                                files.append(mm.group(1))
+                            else:
+                                files.append(item.split(' — ')[0].strip())
+        for path in files:
+            path = path.strip().strip('`"\'')
             if path.startswith('crates/'):
                 claims.setdefault(path, []).append((ms, name, text))
     bad = []
@@ -660,9 +831,11 @@ def self_test():
     # (зафиксирован как FINDING), а не следствие починки. Перечисление явное, чтобы
     # новое непроверяемое правило всё равно роняло тест.
     known_unparsed = {"M2/packet-12.md", "M3/packet-12.md"}
+    known_present = {n for n in known_unparsed
+                     if os.path.exists(os.path.join(plans_root, n))}
     unexpected = sorted(set(unreadable) - known_unparsed)
     expect(
-        physical > 0 and parsed_count + len(known_unparsed) == physical and not unexpected,
+        physical > 0 and parsed_count + len(known_present) == physical and not unexpected,
         "все пакеты кроме известных нечитаемых разобраны: %d из %d%s"
         % (parsed_count, physical, ("; неожиданно не прочитаны: " + ", ".join(unexpected)) if unexpected else ""),
     )
@@ -968,8 +1141,13 @@ def main():
         if not os.path.isdir(base):
             print('plan-lint: нет %s' % base, file=sys.stderr)
             return 2
-        targets = [os.path.join(base, d) for d in sorted(os.listdir(base))
-                   if os.path.isdir(os.path.join(base, d))]
+        targets = []
+        for d in sorted(os.listdir(base)):
+            pdir = os.path.join(base, d)
+            if not os.path.isdir(pdir) or d in ('_archive', '.omo') or d.startswith('.'):
+                continue
+            if any(re.match(r'^packet-[\w-]+\.md$', fn) for fn in os.listdir(pdir)):
+                targets.append(pdir)
 
     total = 0
     # Каталог без пакетов — это не «всё чисто», а «проверять было нечего».
