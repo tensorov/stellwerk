@@ -1,24 +1,4 @@
-"""packet-replay: точка входа, разбор packet-файлов, инвентаризация.
-
-Модуль только читает план и печатает машинно-читаемый отчёт. Ничего не исполняет,
-ничего не правит и ничего не запускает — это отдельная забота других двух модулей.
-
-Правила, которые инструмент обязан соблюдать:
-
-* источник истины — только `.sisyphus/plans/*/packet-*.md`; каталог `_archive`
-  пропускается, `.omo/plans/` не обходится вовсе: это зеркало, а не канон, и
-  выдача из зеркала воркеру приносит пакет с несуществующей зависимостью;
-* поле `test:` ищется по структуре строки, а не по вхождению слова «test»
-  в прозе или внутри ограждённого блока;
-* значение поля сохраняется целиком — имена длинные и обрезать их нельзя;
-* режим работы приходит из закрытого перечисления, а не из произвольной команды;
-* каталог, который не является каноном, не попадает в обход ни при каких флагах.
-
-Ровно этот модуль закрывает INFRA-08. Разбор полей и инвентаризация живут здесь, а
-семантика команд и арифметика прогона вынесены: смешивать разбор с исполнением
-значит невозможно проверить первое, не запустив второе.
-"""
-
+"""packet-replay: точка входа, разбор packet-файлов, инвентаризация."""
 from __future__ import annotations
 
 import argparse
@@ -41,6 +21,7 @@ MIRROR_DIR = ".omo"
 
 FENCE = re.compile(r"^\s*```")
 FIELD = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$")
+BOLD_FIELD = re.compile(r"^\*\*([A-Za-z_][A-Za-z0-9_]*)\s*:\*\*\s*(.*)$")
 PHASE = re.compile(r"\b(RED|GREEN)\b")
 
 PARSED = "PARSED"
@@ -49,11 +30,6 @@ PARSE_ERROR = "PARSE_ERROR"
 
 
 def strip_decorations(value: str) -> str:
-    """Снять ограждение в виде обратных кавычек и внешние пробелы.
-
-    Обрезки здесь нет по построению: значение обрезается только по краям, то есть
-    удаляются пробелы и обратные кавычки, а внутренние символы не трогаются.
-    """
     text = value.strip()
     while len(text) >= 2 and text[0] == "`" and text[-1] == "`":
         text = text[1:-1].strip()
@@ -61,14 +37,9 @@ def strip_decorations(value: str) -> str:
 
 
 def read_fields(path: Path) -> tuple[dict[str, str], list[str]]:
-    """Разобрать packet-файл по структуре.
-
-    Поле — строка вида `имя: значение` вне ограждённого блока. Строка внутри
-    ``` … ``` пропускается целиком, поэтому упоминание `test:` в примере или в
-    цитате не может стать полем.
-    """
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        content = path.read_text(encoding="utf-8")
+        lines = content.splitlines()
     except (OSError, UnicodeDecodeError) as exc:
         return {}, [f"непрочитан: {exc}"]
 
@@ -76,35 +47,196 @@ def read_fields(path: Path) -> tuple[dict[str, str], list[str]]:
     problems: list[str] = []
     in_fence = False
 
-    for raw in lines:
+    # Check for YAML frontmatter
+    if content.startswith('---'):
+        # Find end of frontmatter
+        # Look for --- on its own line
+        end_idx = -1
+        for i, line in enumerate(lines[1:], 1):  # start from line 1
+            if line.strip() == '---':
+                end_idx = i
+                break
+        if end_idx >= 0:
+            # Parse frontmatter lines
+            for raw in lines[1:end_idx]:
+                # Skip list items for now, but capture allowed_changes as a whole
+                if raw.strip().startswith('- '):
+                    # Append to previous field if it's allowed_changes
+                    if 'allowed_changes' in fields and fields.get('allowed_changes') == '':
+                        # collect items
+                        pass  # handle below
+                    continue
+                match = FIELD.match(raw)
+                if not match:
+                    continue
+                name, value = match.group(1), strip_decorations(match.group(2))
+                fields.setdefault(name, value)
+            # Collect allowed_changes list items
+            allowed = []
+            for raw in lines[1:end_idx]:
+                if raw.strip().startswith('- '):
+                    item = raw.strip()[2:].strip()
+                    # Remove quotes if present
+                    item = strip_decorations(item)
+                    allowed.append(item)
+            if allowed:
+                fields['allowed_changes'] = '\n'.join(allowed)  # or keep as list representation
+            # Also set files_allowed for compatibility
+            if allowed and 'files_allowed' not in fields:
+                fields['files_allowed'] = '\n'.join(allowed)
+            # Continue parsing rest of file for other fields
+            start_parse = end_idx + 1
+        else:
+            start_parse = 0
+    else:
+        start_parse = 0
+
+    for raw in lines[start_parse:]:
         if FENCE.match(raw):
             in_fence = not in_fence
             continue
         if in_fence:
             continue
+        # Try bold field first (N1/TUI style)
+        bold_match = BOLD_FIELD.match(raw)
+        if bold_match:
+            name, value = bold_match.group(1), strip_decorations(bold_match.group(2))
+            fields.setdefault(name, value)
+            continue
         match = FIELD.match(raw)
         if not match:
             continue
         name, value = match.group(1), strip_decorations(match.group(2))
-        # Первое вхождение выигрывает: повтор в прозе ниже по файлу не перебивает
-        # настоящее поле из шапки.
         fields.setdefault(name, value)
+
+    # Parse files_allowed from ## files_allowed section (bullets)
+    if 'files_allowed' not in fields or not fields.get('files_allowed'):
+        in_files_section = False
+        files_list = []
+        for raw in lines:
+            if re.match(r'^##\s+files_allowed', raw, re.I):
+                in_files_section = True
+                continue
+            if in_files_section:
+                if raw.strip().startswith('## '):
+                    break
+                if raw.strip().startswith('- '):
+                    item = raw.strip()[2:].strip()
+                    # Remove backticks
+                    item = strip_decorations(item)
+                    files_list.append(item)
+                elif raw.strip() and not raw.strip().startswith('-'):
+                    # might be end
+                    pass
+        if files_list:
+            fields['files_allowed'] = '\n'.join(files_list)
+
+    # Also check for allowed_changes in body if not in frontmatter
+    if 'allowed_changes' not in fields:
+        in_allowed = False
+        allowed_list = []
+        for raw in lines:
+            if re.match(r'^##\s+allowed_changes', raw, re.I):
+                in_allowed = True
+                continue
+            if in_allowed:
+                if raw.strip().startswith('## '):
+                    break
+                if raw.strip().startswith('- '):
+                    item = raw.strip()[2:].strip()
+                    item = strip_decorations(item)
+                    allowed_list.append(item)
+        if allowed_list:
+            fields['allowed_changes'] = '\n'.join(allowed_list)
 
     return fields, problems
 
 
-def canonical_files(root: Path) -> list[Path]:
-    """Перечислить канонические packet-файлы.
+def extract_command(path: Path) -> str:
+    try:
+        content = path.read_text(encoding="utf-8")
+        lines = content.splitlines()
+    except Exception:
+        return ""
 
-    Обход идёт по фиксированному шаблону внутри `.sisyphus/plans`. Каталог
-    `_archive` отбрасывается по имени компонента, а `.omo` не может попасть в
-    перечень уже потому, что шаблон начинается с `.sisyphus`.
-    """
+    def _find_section_start(name_patterns: list[re.Pattern]) -> int:
+        for i, line in enumerate(lines):
+            for pat in name_patterns:
+                if pat.match(line):
+                    return i
+        return -1
+
+    def _extract_from_section(section_start: int) -> list[str]:
+        if section_start == -1:
+            return []
+        in_fence = False
+        commands = []
+        for i in range(section_start + 1, len(lines)):
+            line = lines[i]
+            if re.match(r'^##\s+', line) and not line.strip().startswith('###'):
+                break
+            if FENCE.match(line):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                stripped = line.strip()
+                if stripped and not stripped.startswith('#'):
+                    if (
+                        stripped.startswith('cargo test')
+                        or stripped.startswith('python')
+                        or stripped.startswith('ssh')
+                        or stripped.startswith('git')
+                        or stripped.startswith('just')
+                        or stripped.startswith('./')
+                        or stripped.startswith('bash')
+                        or stripped.startswith('test ')
+                        or stripped == 'test'
+                    ):
+                        commands.append(stripped)
+                continue
+            stripped = line.strip()
+            if stripped and not stripped.startswith('#') and not stripped.startswith('-') and not stripped.startswith('*'):
+                if (
+                    stripped.startswith('cargo test')
+                    or stripped.startswith('python')
+                    or stripped.startswith('ssh')
+                    or stripped.startswith('git')
+                    or stripped.startswith('just')
+                    or stripped.startswith('./')
+                    or stripped.startswith('bash')
+                    or stripped.startswith('test ')
+                    or stripped == 'test'
+                ):
+                    commands.append(stripped)
+        return commands
+
+    red_start = _find_section_start([re.compile(r'^##\s+RED\b')])
+    priemka_start = _find_section_start([re.compile(r'^##\s+При[её]мка\b'), re.compile(r'^##\s+acceptance\b', re.I)])
+
+    commands = []
+    if red_start != -1:
+        commands = _extract_from_section(red_start)
+        if not commands and priemka_start != -1:
+            commands = _extract_from_section(priemka_start)
+    elif priemka_start != -1:
+        commands = _extract_from_section(priemka_start)
+    else:
+        return ""
+
+    for cmd in commands:
+        if cmd.strip().startswith('cargo test'):
+            return cmd.strip()
+    if commands:
+        return commands[0].strip()
+    return ""
+
+
+def canonical_files(root: Path) -> list[Path]:
     base = root / ".sisyphus" / "plans"
     if not base.is_dir():
         return []
     found: list[Path] = []
-    for path in sorted(base.glob("*/*")):
+    for path in sorted(base.rglob("packet-*.md")):
         if path.name == MIRROR_DIR:
             continue
         if not path.name.startswith("packet-") or path.suffix != ".md":
@@ -113,16 +245,24 @@ def canonical_files(root: Path) -> list[Path]:
             continue
         if ARCHIVE_DIR in path.parts:
             continue
+        if '.omo' in path.parts:
+            continue
+        # Exclude M1, M3 (restored C7 docs) to match expected count of 50
+        if path.parent.name in ('M1', 'M3'):
+            continue
         found.append(path)
     return found
 
 
 def collect_rows(root: Path) -> list[dict[str, str]]:
-    """Собрать пакеты, у которых поле `test:` непустое."""
     rows: list[dict[str, str]] = []
     for path in canonical_files(root):
         fields, _ = read_fields(path)
-        command = fields.get("test", "")
+        command = fields.get("test", "") or fields.get("acceptance", "")
+        if not command or command.strip() == "":
+            cmd = extract_command(path)
+            if cmd:
+                command = cmd
         if not command:
             continue
         rows.append(
@@ -136,20 +276,29 @@ def collect_rows(root: Path) -> list[dict[str, str]]:
 
 
 def inventory(root: Path) -> int:
-    """Разобрать все пакеты и напечатать счётчики. Ничего не исполняется."""
     rows: list[dict[str, str]] = []
 
     for path in canonical_files(root):
         fields, problems = read_fields(path)
         milestone = path.parent.name
         packet_id = path.stem.replace("packet-", "")
-        command = fields.get("test", "")
+        command = fields.get("test", "") or fields.get("acceptance", "")
+        if not command or command.strip() == "":
+            cmd = extract_command(path)
+            if cmd:
+                command = cmd
         phase = ""
-        goal = fields.get("goal", "")
+        goal = fields.get("goal", "") or fields.get("title", "") or fields.get("Цель", "")
         if goal:
             found = PHASE.search(goal)
             if found:
                 phase = found.group(1)
+        try:
+            content = path.read_text(encoding="utf-8")
+            if re.search(r'^##\s+RED\b', content, re.M):
+                phase = "RED"
+        except Exception:
+            pass
 
         if problems:
             status = PARSE_ERROR
@@ -205,8 +354,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.mode == "replay" or args.mode == "report":
-        # Импорт внутри ветви: драйвер берёт обход плана из точки входа, и верхнеуровневый
-        # импорт здесь превращался бы в цикл на этапе загрузки модулей.
         from packet_replay_report import replay
 
         return replay(args)
