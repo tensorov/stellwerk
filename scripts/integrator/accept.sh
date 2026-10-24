@@ -40,25 +40,139 @@ bad()  { fails=$((fails+1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; }
 [ -d "$SANDBOX" ]      || { echo "accept: нет песочницы $SANDBOX" >&2; exit 1; }
 
 field() { grep -m1 "^$1:" "$PKT_FILE" | sed "s/^$1: *//"; }
-TEST_CMD="$(field test)"
-FILES_ALLOWED="$(field files_allowed)"
+
+# Тело markdown-секции: от `## <heading>` до следующего `## `. Заголовок может
+# иметь уточнение в скобках (`## Приёмка (владелец запускает сам)`).
+has_section() { grep -qE "^## $1" "$PKT_FILE"; }
+section_body() {
+  awk -v pat="$1" '
+    $0 ~ ("^## " pat) { inside = 1; next }
+    inside && /^## / { exit }
+    inside { print }
+  ' "$PKT_FILE"
+}
+first_cargo_test() {
+  awk '{
+    line = $0
+    sub(/^[[:space:]]+/, "", line)
+    sub(/^\$[[:space:]]+/, "", line)
+    if (line ~ /^cargo test([[:space:]]|$)/) {
+      sub(/[[:space:]]*;.*$/, "", line)
+      print line
+      exit
+    }
+  }'
+}
+join_lines() {
+  awk 'NF { out = (out == "" ? $0 : out ", " $0) } END { print out }'
+}
+# N2: frontmatter `allowed_changes:` — multiline `- path` или inline `[a, b]`.
+files_from_frontmatter() {
+  awk '
+    /^---[[:space:]]*$/ { fm++; next }
+    fm == 1 && /^allowed_changes:/ {
+      line = $0
+      sub(/^allowed_changes:[[:space:]]*/, "", line)
+      if (line ~ /^\[/) {
+        gsub(/[\[\]]/, "", line)
+        n = split(line, a, ",")
+        for (i = 1; i <= n; i++) {
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", a[i])
+          if (a[i] != "") print a[i]
+        }
+        next
+      }
+      inlist = 1
+      next
+    }
+    fm == 1 && inlist && /^[[:space:]]+-[[:space:]]/ {
+      line = $0
+      sub(/^[[:space:]]+-[[:space:]]*/, "", line)
+      print line
+      next
+    }
+    fm == 1 && inlist && /^[^[:space:]]/ { inlist = 0 }
+  ' "$PKT_FILE"
+}
+# N1/TUI: `## files_allowed` — bullets, путь в backticks или до «—».
+files_from_section() {
+  section_body "files_allowed" | awk '
+    /^[[:space:]]*-[[:space:]]/ {
+      line = $0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+      if (match(line, /`[^`]+`/)) {
+        line = substr(line, RSTART + 1, RLENGTH - 2)
+      } else {
+        sub(/[[:space:]]+—.*$/, "", line)
+      }
+      print line
+    }'
+}
+
+TEST_CMD=""
+FILES_ALLOWED=""
 WAIVER="$(field limit_waiver)"
 GOAL="$(field goal)"
 ACCEPT="$(field acceptance)"
 
+if has_section "files_allowed"; then
+  FILES_ALLOWED="$(files_from_section | join_lines)"
+elif grep -q '^allowed_changes:' "$PKT_FILE"; then
+  FILES_ALLOWED="$(files_from_frontmatter | join_lines)"
+else
+  FILES_ALLOWED="$(field files_allowed)"
+fi
+# N1/TUI пишут waiver жирным: `**limit_waiver:** ...`.
+if [ -z "$WAIVER" ]; then
+  WAIVER="$(grep -m1 '^\*\*limit_waiver:\*\*' "$PKT_FILE" \
+            | sed 's/^\*\*limit_waiver:\*\*[[:space:]]*//')"
+fi
+
+# ── (a)+(b) критерий RED/GREEN ──────────────────────────────────────────────
+# RED: есть секция `## RED` либо legacy goal/acceptance начинается с RED.
+is_red=0
+if has_section "RED"; then
+  is_red=1
+else
+  case "$(printf '%s' "$GOAL" | tr '[:lower:]' '[:upper:]')" in
+    RED*) is_red=1 ;;
+  esac
+  case "$(printf '%s' "$ACCEPT" | tr '[:lower:]' '[:upper:]')" in
+    RED*) is_red=1 ;;
+  esac
+fi
+
+# Команда: RED — первая `cargo test` из `## RED`; GREEN — из `## Приёмка`.
+# Legacy-пакеты без секций читают поле `test:`.
+if [ "$is_red" = 1 ]; then
+  if has_section "RED"; then
+    TEST_CMD="$(section_body "RED" | first_cargo_test)"
+  else
+    TEST_CMD="$(field test)"
+  fi
+else
+  if has_section "Приёмка"; then
+    TEST_CMD="$(section_body "Приёмка" | first_cargo_test)"
+  else
+    TEST_CMD="$(field test)"
+  fi
+fi
+
 echo "=== accept: $MILESTONE/$PACKET ==="
-echo "  test:        $TEST_CMD"
+echo "  test:        ${TEST_CMD:-NO_TEST_COMMAND}"
 echo "  files:       $FILES_ALLOWED"
 [ -n "$WAIVER" ] && echo "  limit_waiver: $WAIVER"
 
-# ── (a)+(b) критерий RED/GREEN ──────────────────────────────────────────────
-is_red=0
-case "$(printf '%s %s' "$GOAL" "$ACCEPT" | tr '[:upper:]' '[:lower:]')" in
-  *red*) is_red=1 ;;
-esac
+# Нет `cargo test` — это отдельное состояние, а не «принято по умолчанию».
+if [ -z "$TEST_CMD" ]; then
+  bad "(a/b) NO_TEST_COMMAND: в пакете нет cargo test — приёмка невозможна"
+  printf '\naccept: ОТКЛОНЕНО (NO_TEST_COMMAND)\n'
+  exit 1
+fi
 
 RUNDIR=$(mktemp -d /tmp/accept-XXXXXX)
-if (cd "$SANDBOX" && eval "$TEST_CMD") > "$RUNDIR/test.log" 2>&1; then
+read -r -a TEST_ARGV <<< "$TEST_CMD"
+if (cd "$SANDBOX" && "${TEST_ARGV[@]}") > "$RUNDIR/test.log" 2>&1; then
   TEST_RC=0
 else
   TEST_RC=$?
