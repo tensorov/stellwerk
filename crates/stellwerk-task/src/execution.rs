@@ -90,12 +90,11 @@ impl EngineRegistry {
     }
 }
 
-/// Профили, разрешённые в этой сборке. `pi` — настоящий движок (запуск — N2-00);
-/// `fixture-engine` — фикстура приёмки N1. Список задан здесь, в коде.
-pub const ALLOWED_PROFILES: &[EngineProfile] = &[
-    EngineProfile::new("pi", &[]),
-    EngineProfile::new("fixture-engine", &[]),
-];
+/// Профили, разрешённые в этой сборке. `pi` — единственный разрешённый профиль (запуск —
+/// N2-00). Второй живой профиль сделал бы недоказуемым утверждение «исполнялся именно
+/// авторизованный движок»: запуск перестал бы называть ровно один движок. Список задан
+/// здесь, в коде, и живёт здесь как данные, а не как ветка в `resolve`.
+pub const ALLOWED_PROFILES: &[EngineProfile] = &[EngineProfile::new("pi", &[])];
 
 /// Реестр этой сборки.
 pub const REGISTRY: EngineRegistry = EngineRegistry::of(ALLOWED_PROFILES);

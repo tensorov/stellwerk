@@ -171,12 +171,33 @@ fn a_registry_that_holds_nothing_refuses_every_engine() {
 #[test]
 fn the_registry_rejects_a_profile_it_does_not_hold() {
     assert!(
-        resolve(Some(&spec("/bin/true", "fixture-engine")), &REGISTRY).is_ok(),
-        "зарегистрированный движок разрешается"
+        resolve(Some(&spec("/bin/true", "fixture-engine")), &REGISTRY).is_err(),
+        "`fixture-engine` больше не в реестре и обязан быть отвергнут"
     );
     let refusal = resolve(Some(&spec("/bin/true", "fixture")), &REGISTRY)
         .expect_err("движок, которого нет, обязан быть отвергнут");
     assert!(matches!(refusal, ExecutionRefusal::UnknownProfile { .. }));
+}
+
+#[test]
+fn rejects_every_profile_except_pi() {
+    assert!(
+        resolve(Some(&spec("/bin/true", "pi")), &REGISTRY).is_ok(),
+        "`pi` — единственный разрешённый профиль"
+    );
+    let refusal = resolve(Some(&spec("/bin/true", "fixture-engine")), &REGISTRY)
+        .expect_err("второй профиль отвергается, а не живёт рядом с pi");
+    match refusal {
+        ExecutionRefusal::UnknownProfile { engine, known } => {
+            assert_eq!(engine, "fixture-engine", "виновник назван");
+            assert_eq!(
+                known,
+                vec!["pi".to_owned()],
+                "реестр держит только `pi`, и отказ это называет"
+            );
+        }
+        other => panic!("второй профиль — UnknownProfile, а не {other:?}"),
+    }
 }
 
 // ── Отказ ДО запуска: ни одного процесса не стартует ──────────────────────────────────
