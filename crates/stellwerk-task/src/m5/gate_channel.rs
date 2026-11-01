@@ -15,12 +15,15 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use stellwerk_gateway::gate::{decide, CallRequest, Verdict};
+use stellwerk_gateway::gate::{
+    authorize_write, decide, writes_content, CallDecision, CallRequest, ContentDigest,
+    RequestedCall, Verdict,
+};
 
 use super::model_transport::MAX_FRAME_BYTES;
 use super::session_identity::{Adjudication, IdentityError, SessionDescription};
 
-/// Заявка песочницы. Ровно три ключа: риск и полномочия хост берёт из своей политики.
+/// Заявка песочницы. Риск и полномочия хост берёт из своей политики, а не из кадра.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GateRequest {
@@ -32,6 +35,14 @@ pub struct GateRequest {
     /// а не «путь не нужен».
     #[serde(default)]
     pub path: Option<String>,
+    /// Полный аргумент вызова. `None` — аргумента не было; для пишущего инструмента
+    /// с путём это отсутствие данных, а не «тело пустое».
+    #[serde(default)]
+    pub argument: Option<String>,
+    /// Заявленный SHA-256 содержимого. Хост сверяет его с фактическими байтами
+    /// аргумента; `None` для пишущего инструмента с путём — названный отказ.
+    #[serde(default)]
+    pub content_digest: Option<String>,
 }
 
 /// Ответ хоста. Один кадр на соединение, терминальный.
@@ -236,21 +247,90 @@ fn answer_for(
         }
     };
     let tool = call.tool.clone();
+    let requested = match requested_write(request) {
+        Ok(requested) => requested,
+        Err(reason) => return GateAnswer::Deny { tool, reason },
+    };
     match policy.decide_call(&call, request.path.as_deref()) {
         PolicyVerdict::Unclassified => GateAnswer::Unclassified { tool },
         PolicyVerdict::Refused { reason } => GateAnswer::Deny { tool, reason },
-        PolicyVerdict::Evaluated { request, basis } => match decide(&request) {
+        PolicyVerdict::Evaluated {
+            request: policy_request,
+            basis,
+        } => match decide(&policy_request) {
             // База только аннотирует разрешение таблицы и никогда его не подменяет:
             // если таблица сказала Ask или Deny, основание не превращает это в Allow.
             Verdict::Allow => match basis {
                 AllowBasis::RiskTable => GateAnswer::Allow { tool },
-                AllowBasis::ApprovedPlan { scope } => GateAnswer::Authorized { tool, scope },
+                // Разрешение записи выдаётся только через `AuthorizedCall`: он
+                // связан с digest проверенного содержимого, поэтому замена файла
+                // после авторизации не пройдёт под тем же `scope`.
+                AllowBasis::ApprovedPlan { scope } => match requested.as_ref() {
+                    Some(requested) => match authorize_write(requested, &scope) {
+                        CallDecision::Authorized(authorized) => GateAnswer::Authorized {
+                            tool,
+                            scope: authorized.scope().to_owned(),
+                        },
+                        CallDecision::Refused { reason } => GateAnswer::Deny { tool, reason },
+                    },
+                    // Пишущий вызов с путём, но без digest, не получает разрешения:
+                    // план одобрил путь, а не содержимое, и «нет digest» здесь —
+                    // отсутствие данных, а не «файл не менялся».
+                    None if writes_content(&request.tool) && request.path.is_some() => {
+                        let path = request.path.as_deref().unwrap_or_default();
+                        GateAnswer::Deny {
+                            tool,
+                            reason: format!("write_without_content_digest: `{}` with path `{path}` cannot be authorized without a content digest", request.tool),
+                        }
+                    }
+                    None => GateAnswer::Authorized { tool, scope },
+                },
             },
             Verdict::Ask => GateAnswer::Ask { tool },
             Verdict::Suspended => GateAnswer::Suspended { tool },
             Verdict::Deny { reason } => GateAnswer::Deny { tool, reason },
         },
     }
+}
+
+/// Проверенный пишущий вызов. Неполный новый контракт (аргумент без digest или
+/// digest без аргумента) и digest, не описывающий переданные байты, — названные
+/// отказы: «путь есть» не значит «содержимое то же».
+///
+/// Кадр без аргумента и digest для `edit` — старый `tool_call` Pi, который пока
+/// исполняет встроенный инструмент: `Ok(None)` не разрешение, а «typed-запроса
+/// не было». Такой вызов всё равно не получит `AuthorizedCall` (см. `answer_for`),
+/// а R03 переводит встроенные инструменты на `registerTool` с полным аргументом.
+/// `write`/`write_note` без аргумента и digest — отказ: у них нет legacy-пути.
+fn requested_write(request: &GateRequest) -> Result<Option<RequestedCall>, String> {
+    if !writes_content(&request.tool) {
+        return Ok(None);
+    }
+    let Some(path) = request.path.as_deref() else {
+        return Ok(None);
+    };
+    if request.tool == "edit" && request.argument.is_none() && request.content_digest.is_none() {
+        return Ok(None);
+    }
+    let (Some(argument), Some(claimed)) = (request.argument.as_deref(), request.content_digest.as_deref())
+    else {
+        let reason = if request.content_digest.is_none() {
+            format!("write_without_content_digest: `{}` with path `{path}` came without a content digest; a path alone does not say what will be written", request.tool)
+        } else {
+            format!("write_without_argument: `{}` with path `{path}` came without its argument", request.tool)
+        };
+        return Err(reason);
+    };
+    let claimed = ContentDigest::parse(claimed)
+        .map_err(|error| format!("malformed_content_digest: {error}"))?;
+    RequestedCall::new(
+        request.tool.clone(),
+        Some(path.to_owned()),
+        argument.as_bytes().to_vec(),
+        &claimed,
+    )
+    .map(Some)
+    .map_err(|error| format!("content_digest_mismatch: {error}"))
 }
 
 fn read_request(reader: &mut BufReader<UnixStream>) -> io::Result<ReadOutcome> {
@@ -306,7 +386,7 @@ fn parse_request(text: &str) -> Result<GateRequest, (RefusalCode, String)> {
     let extra = object.keys().find(|key| {
         !matches!(
             key.as_str(),
-            "kind" | "tool" | "parent_tool_call_id" | "path"
+            "kind" | "tool" | "parent_tool_call_id" | "path" | "argument" | "content_digest"
         )
     });
     if let Some(field) = extra {

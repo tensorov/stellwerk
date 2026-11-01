@@ -10,7 +10,10 @@
 //! `tests/gate_ask.rs` — см. M3/packet-03b.
 
 use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, RetentionClass, RiskClass};
-use stellwerk_gateway::gate::{decide, CallRequest, Verdict};
+use stellwerk_gateway::gate::{
+    authorize_write, decide, CallDecision, CallRequest, ContentDigest, RequestRefusal,
+    RequestedCall, Verdict,
+};
 use stellwerk_gateway::permission::ToolRisk;
 
 fn binding(data_class: DataClass, retention: RetentionClass) -> ModelBinding {
@@ -140,4 +143,98 @@ fn personal_data_to_third_party_is_deny_even_at_r0_l5() {
 fn public_data_to_third_party_is_not_denied_by_data() {
     let v = decide(&routed(DataClass::Public, RetentionClass::ThirdParty));
     assert!(!is_deny(&v), "Public допускает внешнего исполнителя: {v:?}");
+}
+
+/// Собирает пишущий вызов из фактических байтов содержимого: digest считается
+/// здесь же по `content`, а не берётся из текста модели.
+fn write_call(path: &str, content: &[u8]) -> RequestedCall {
+    let digest = ContentDigest::of(content);
+    RequestedCall::new(
+        "write",
+        Some(path.to_owned()),
+        content.to_vec(),
+        &digest,
+    )
+    .expect("digest посчитан по тем же байтам")
+}
+
+#[test]
+fn same_tool_path_different_content_gets_different_decision() {
+    // Дано: один инструмент и один путь, но разное содержимое.
+    let first = write_call("notes/a.md", b"alpha");
+    let second = write_call("notes/a.md", b"beta");
+    assert_eq!(first.tool(), second.tool());
+    assert_eq!(first.path(), second.path());
+    assert_ne!(
+        first.content_digest(),
+        second.content_digest(),
+        "разное содержимое — разные digest"
+    );
+
+    // Когда: гейт авторизует оба вызова по одному и тому же основанию.
+    let authorized_first = authorize_write(&first, "plan:1");
+    let authorized_second = authorize_write(&second, "plan:1");
+
+    // Тогда: решения не совпадают. Если бы решение принималось по `(tool, path)`,
+    // они были бы равны, и подмена содержимого прошла бы под тем же разрешением.
+    assert_ne!(
+        authorized_first, authorized_second,
+        "одна пара (tool, path) с разным содержимым — разные решения"
+    );
+    let (CallDecision::Authorized(first), CallDecision::Authorized(second)) =
+        (&authorized_first, &authorized_second)
+    else {
+        panic!("оба вызова с верным digest обязаны быть Authorized: {authorized_first:?} / {authorized_second:?}");
+    };
+    assert_ne!(
+        first.scope(),
+        second.scope(),
+        "scope связан с digest, иначе он не различает содержимое"
+    );
+    assert!(first.scope().contains(first.content_digest().as_hex()));
+    assert!(second.scope().contains(second.content_digest().as_hex()));
+}
+
+#[test]
+fn content_replaced_after_authorization_is_refused() {
+    // Дано: авторизован вызов с содержимым `alpha`.
+    let digest = ContentDigest::of(b"alpha");
+    let authorized = authorize_write(&write_call("notes/a.md", b"alpha"), "plan:1");
+    let CallDecision::Authorized(authorized) = authorized else {
+        panic!("верный digest авторизуется");
+    };
+
+    // Когда: после авторизации содержимое заменили на `beta`.
+    let replaced = authorized.verify_content(b"beta");
+
+    // Тогда: сверка digest отказывает и называет оба дайджеста — подмена не проходит.
+    let error = replaced.expect_err("подмена после авторизации обязана быть отказом");
+    assert!(error.to_string().contains(digest.as_hex()));
+}
+
+#[test]
+fn a_claim_that_disagrees_with_the_bytes_is_refused() {
+    // Дано: заявлен digest от `alpha`, а байты — `beta` (так выглядит подмена
+    // содержимого до решения гейта).
+    let claimed = ContentDigest::of(b"alpha");
+
+    // Когда: из этих байтов собирают запрос.
+    let built = RequestedCall::new(
+        "write",
+        Some("notes/a.md".to_owned()),
+        b"beta".to_vec(),
+        &claimed,
+    );
+
+    // Тогда: запрос не собирается — digest считается по байтам, а не принимается на слово.
+    assert!(matches!(built, Err(RequestRefusal::DigestMismatch { .. })));
+}
+
+#[test]
+fn content_digest_is_sha256_of_the_bytes() {
+    // sha256("abc") из coreutils — независимый от реализации ориентир.
+    assert_eq!(
+        ContentDigest::of(b"abc").as_hex(),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
 }

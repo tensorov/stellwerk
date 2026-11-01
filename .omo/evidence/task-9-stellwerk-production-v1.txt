@@ -1,0 +1,90 @@
+task: 9 (A01) — типизированный RequestedCall с digest содержимого
+packet: .sisyphus/plans/V1/packet-a01.md
+date: 2026-11-01
+head_at_start: 447df5d (feat(contract): human validation and refutation states)
+verdict: PARTIAL — [~], не GREEN. Причина: п. «Запрещено» №1 не выполнен
+         полностью, закрытие требует файлов вне files_allowed (см. FINDING).
+
+## Что сделано
+crates/stellwerk-gateway/src/gate.rs
+  + writes_content(tool) -> bool          `write` | `edit` | `write_note`, имя названо явно
+  + ContentDigest::of(bytes)              SHA-256 по фактическим байтам (sha2, workspace dep)
+  + ContentDigest::parse(hex)             64 hex, иначе DigestError::Malformed
+  + RequestedCall::new(tool, path, arg, claimed)
+        digest пересчитывается по `arg` и сверяется с `claimed`;
+        расхождение — RequestRefusal::DigestMismatch { claimed, actual }
+  + RequestedCall поля закрыты, доступ только геттерами
+  + AuthorizedCall      поля закрыты, конструктор `fn issue` (не pub) — снаружи модуля
+                        собрать значение нельзя; scope = "{basis}#sha256:{digest}"
+  + AuthorizedCall::verify_content(current) -> Result<(), ContentMismatch>
+  + CallDecision { Authorized(AuthorizedCall) | Refused { reason } }
+  + authorize_write(requested, basis_scope)
+
+crates/stellwerk-task/src/m5/gate_channel.rs
+  + GateRequest: `argument: Option<String>`, `content_digest: Option<String>`
+    (serde default, parse_request whitelist расширен этими двумя ключами)
+  + requested_write(&GateRequest) -> Result<Option<RequestedCall>, String>
+        named refusals: write_without_content_digest, write_without_argument,
+                        malformed_content_digest, content_digest_mismatch
+  + answer_for: AllowBasis::ApprovedPlan выдаёт Authorized только через
+    AuthorizedCall (scope несёт digest); пишущий инструмент с путём без digest — Deny
+
+crates/stellwerk-gateway/tests/gate.rs (+4 теста)
+  same_tool_path_different_content_gets_different_decision
+  content_replaced_after_authorization_is_refused
+  a_claim_that_disagrees_with_the_bytes_is_refused
+  content_digest_is_sha256_of_the_bytes   (sha256("abc") = ba7816bf...15ad)
+
+## RED
+Поведенческого RED нет: до пакета в API гейта отсутствовало само понятие
+содержимого (`decide(&CallRequest)`, `CallRequest { action, binding,
+interactive }`, gate.rs:16-33 на 447df5d), поэтому тесты на digest не
+компилируются, а не падают. Честно: RED здесь — отсутствие типа, не красный
+ассерт. Поведенческая часть закрыта GREEN-тестами ниже.
+
+## GREEN
+cargo test -p stellwerk-gateway --test gate
+  test result: ok. 15 passed; 0 failed; 0 ignored; finished in 0.00s
+
+cargo test -p stellwerk-gateway
+  все targets ok, 0 failed  (5, 15, 7, 9, 9, 12, 4, 5, 18, 10, 0 passed)
+
+cargo test -p stellwerk-task
+  все targets ok, 0 failed  (~295 passed суммарно по targets)
+
+cargo test -p stellwerk-cli
+  все targets ok, 0 failed  (в т.ч. build_runner: an_edit_reaches_the_copy_and_the_gate_authorizes_it)
+
+cargo build --workspace
+  Finished `dev` profile [unoptimized + debuginfo] target(s)
+
+cargo clippy -p stellwerk-gateway -p stellwerk-task --all-targets
+  единственная ошибка — pre-existing baseline P00: `manual implementation of a
+  no-op waker` в crates/stellwerk-gateway/src/session.rs:613 (P01, todo 3).
+  Новый код gate.rs / gate_channel.rs предупреждений не добавил.
+
+## Зависимости
+sha2 уже был в [workspace.dependencies] (Cargo.toml:19) и уже подключён в
+stellwerk-gateway/Cargo.toml:14 и stellwerk-task/Cargo.toml:16 — новых
+зависимостей нет, `cargo add` не выполнялся.
+
+## НЕ выполнено (причина [~])
+packet-a01.md, «Запрещено» п.1: «нельзя принимать `path` без digest для
+пишущего инструмента».
+
+  gate_channel.rs:264  AllowBasis::RiskTable => GateAnswer::Allow { tool }
+  cli/src/build_runner.rs:149  production policy возвращает AllowBasis::RiskTable
+  cli/tests/build_runner.rs:386-437  ждёт Allow для `edit` с путём и без digest
+
+То есть на RiskTable-ветке пишущий инструмент с путём и БЕЗ digest по-прежнему
+получает Allow: решение принимается по паре (tool, path). Закрыть это можно
+только правкой crates/stellwerk-cli/src/build_runner.rs и/или
+crates/stellwerk-cli/tests/build_runner.rs — вне files_allowed пакета a01.
+Отказ на этой ветке сейчас уронил бы живой build-прогон `an_edit_reaches_the_copy…`
+(встроенный `edit` Pi не присылает аргумент до R03). Зафиксировано FINDING,
+пакет помечен [~]; закрытие — вместе с R03 (todo 11) либо отдельным пакетом
+с меткой contract-change.
+
+Что именно закрыто: ветка ApprovedPlan больше не выдаёт разрешение по паре
+(tool, path) — только AuthorizedCall, побайтово связанный с digest; подмена
+содержимого после авторизации ловится verify_content.
