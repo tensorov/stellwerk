@@ -414,6 +414,10 @@ fn the_run_gate_closes_only_with_attestation_and_validation() {
         command: "cargo test -p stellwerk-task --test vertical".to_owned(),
         result_hash: format!("hash-{id}"),
         ts: "2026-10-01T00:00:00Z".to_owned(),
+        recipe_digest: None,
+        policy_digest: None,
+        model_fingerprint: None,
+        commit_sha: None,
     };
 
     let closed = evaluate(

@@ -195,12 +195,24 @@ pub enum TaskStatus {
     Running,
     /// Приостановлен с сохранением состояния.
     Suspended,
+    /// Приостановленная задача явно передана человеку на проверку. Отличается от
+    /// «никто не ответил»: ожидание объявлено, а не выведено из тишины.
+    AwaitingHumanValidation,
     /// Доказательства приложены, ожидают проверки.
     EvidenceSubmitted,
     /// Доказательства проверены инструментом.
     Verified,
     /// Валидировано человеком или gate'ом.
     Validated,
+    /// Человек явно принял результат. Закрыта человеческим решением, а не
+    /// отсутствием отказа.
+    HumanValidated,
+    /// Человек явно отверг предъявленные доказательства. Опровержение — это
+    /// решение, а не отсутствие подтверждения.
+    Refuted,
+    /// Отменена явным решением. Не путать с `Failed`: отмена — не вердикт о
+    /// качестве прогона.
+    Cancelled,
     /// Закрыта успешно.
     Done,
     /// Провалилась.
@@ -219,7 +231,11 @@ impl TaskStatus {
     pub fn can_transition_to(self, next: TaskStatus) -> bool {
         match (self, next) {
             // Терминальные состояния: исходящих переходов нет.
-            (TaskStatus::Done, _) | (TaskStatus::Failed, _) => false,
+            (TaskStatus::Done, _)
+            | (TaskStatus::Failed, _)
+            | (TaskStatus::HumanValidated, _)
+            | (TaskStatus::Refuted, _)
+            | (TaskStatus::Cancelled, _) => false,
 
             // Переход в себя запрещён.
             (s, next) if s == next => false,
@@ -236,6 +252,24 @@ impl TaskStatus {
 
             // Delegated → Suspended (приостановка до старта прогона)
             (TaskStatus::Delegated, TaskStatus::Suspended) => true,
+
+            // Приостановленная задача явно передана человеку; человек явно принял.
+            (TaskStatus::Suspended, TaskStatus::AwaitingHumanValidation) => true,
+            (TaskStatus::AwaitingHumanValidation, TaskStatus::HumanValidated) => true,
+
+            // Отмена — явный конец из любого активного состояния, но не из
+            // терминального и не из уже предъявленных доказательств.
+            (TaskStatus::Draft, TaskStatus::Cancelled)
+            | (TaskStatus::Planned, TaskStatus::Cancelled)
+            | (TaskStatus::Reviewed, TaskStatus::Cancelled)
+            | (TaskStatus::Delegated, TaskStatus::Cancelled)
+            | (TaskStatus::Running, TaskStatus::Cancelled)
+            | (TaskStatus::Suspended, TaskStatus::Cancelled)
+            | (TaskStatus::AwaitingHumanValidation, TaskStatus::Cancelled)
+            | (TaskStatus::Blocked, TaskStatus::Cancelled) => true,
+
+            // Refuted выносится по предъявленным доказательствам, а не по прогону.
+            (TaskStatus::EvidenceSubmitted, TaskStatus::Refuted) => true,
 
             // EvidenceSubmitted достижим только из Running/Suspended
             (TaskStatus::Running, TaskStatus::EvidenceSubmitted) => true,
@@ -265,9 +299,17 @@ impl TaskStatus {
         }
     }
 
-    /// Терминальный ли статус.
+    /// Терминальный ли статус. `HumanValidated`, `Refuted` и `Cancelled` —
+    /// явные концы жизненного цикла, а не промежуточные состояния.
     pub fn is_terminal(self) -> bool {
-        matches!(self, TaskStatus::Done | TaskStatus::Failed)
+        matches!(
+            self,
+            TaskStatus::Done
+                | TaskStatus::Failed
+                | TaskStatus::HumanValidated
+                | TaskStatus::Refuted
+                | TaskStatus::Cancelled
+        )
     }
 }
 
@@ -443,6 +485,31 @@ pub enum EvidenceKind {
     Validation,
 }
 
+/// Digest рецепта исполнения (SHA-256 в hex). Отдельный тип, чтобы хеш рецепта
+/// нельзя было перепутать с хешем политики: совпадение типов стирает разницу
+/// между двумя понятиями.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RecipeDigest(pub String);
+
+/// Digest политики (SHA-256 в hex). Отдельный тип по той же причине, что и
+/// `RecipeDigest`: две одинаковые строки с разным смыслом — две разные вещи.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PolicyDigest(pub String);
+
+/// Отпечаток модели, породившей запись. Отдельный тип: отпечаток модели не
+/// является ни digest'ом рецепта, ни хешем коммита.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ModelFingerprint(pub String);
+
+/// SHA коммита, к которому привязана запись. Отдельный тип: коммит нельзя
+/// передать в поле digest'а, не заметив подмены.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct CommitSha(pub String);
+
 /// Запись цепочки доказательств.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -459,6 +526,16 @@ pub struct EvidenceEntry {
     pub result_hash: String,
     /// Время в RFC 3339 (UTC).
     pub ts: String,
+    /// Digest рецепта, по которому получена запись. `None` — привязка неприменима
+    /// к этой записи; это явное отсутствие, а не пустая строка и не выдуманный хеш.
+    pub recipe_digest: Option<RecipeDigest>,
+    /// Digest политики, под которой получена запись. `None` — то же явное отсутствие.
+    pub policy_digest: Option<PolicyDigest>,
+    /// Отпечаток модели, породившей запись. `None` — модель к записи неприменима
+    /// (например, решение человека).
+    pub model_fingerprint: Option<ModelFingerprint>,
+    /// Коммит, к которому привязана запись. `None` — привязка к коммиту неприменима.
+    pub commit_sha: Option<CommitSha>,
 }
 
 /// Итог проверки этапного gate'а.

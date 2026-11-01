@@ -8,19 +8,33 @@ use stellwerk_core::contract::TaskStatus;
 
 /// Полный список статусов: тест перечисляет их явно, чтобы добавление нового
 /// статуса в контракт заставляло автора обновить этот файл.
-const ALL: [TaskStatus; 12] = [
+const ALL: [TaskStatus; 16] = [
     TaskStatus::Draft,
     TaskStatus::Planned,
     TaskStatus::Reviewed,
     TaskStatus::Delegated,
     TaskStatus::Running,
     TaskStatus::Suspended,
+    TaskStatus::AwaitingHumanValidation,
     TaskStatus::EvidenceSubmitted,
     TaskStatus::Verified,
     TaskStatus::Validated,
+    TaskStatus::HumanValidated,
+    TaskStatus::Refuted,
+    TaskStatus::Cancelled,
     TaskStatus::Done,
     TaskStatus::Failed,
     TaskStatus::Blocked,
+];
+
+/// Терминальные статусы перечислены явно: `is_terminal` не имеет права быть
+/// единственным источником этого списка, иначе тест проверял бы предикат им же.
+const TERMINAL: [TaskStatus; 5] = [
+    TaskStatus::Done,
+    TaskStatus::Failed,
+    TaskStatus::HumanValidated,
+    TaskStatus::Refuted,
+    TaskStatus::Cancelled,
 ];
 
 #[test]
@@ -92,7 +106,7 @@ fn evidence_requires_a_run_first() {
 
 #[test]
 fn terminal_states_have_no_exits() {
-    for terminal in [TaskStatus::Done, TaskStatus::Failed] {
+    for terminal in TERMINAL {
         for target in ALL {
             assert!(
                 !terminal.can_transition_to(target),
@@ -109,7 +123,7 @@ fn terminal_states_have_no_exits() {
 #[test]
 fn non_terminal_states_are_not_reported_terminal() {
     for status in ALL {
-        if status == TaskStatus::Done || status == TaskStatus::Failed {
+        if TERMINAL.contains(&status) {
             continue;
         }
         assert!(
@@ -152,4 +166,57 @@ fn status_serializes_in_pascal_case() {
     );
     let restored: TaskStatus = serde_json::from_str("\"EvidenceSubmitted\"").expect("must parse");
     assert_eq!(restored, TaskStatus::EvidenceSubmitted);
+}
+
+#[test]
+fn human_validation_and_refutation_are_explicit_states() {
+    assert!(TaskStatus::Suspended.can_transition_to(TaskStatus::AwaitingHumanValidation));
+    assert!(TaskStatus::AwaitingHumanValidation.can_transition_to(TaskStatus::HumanValidated));
+    assert!(TaskStatus::EvidenceSubmitted.can_transition_to(TaskStatus::Refuted));
+
+    // Отмена — явный конец из активных состояний, а не молчаливое исчезновение.
+    assert!(TaskStatus::Running.can_transition_to(TaskStatus::Cancelled));
+    assert!(TaskStatus::Blocked.can_transition_to(TaskStatus::Cancelled));
+
+    // Прогон не является решением человека: обойти ожидание нельзя.
+    assert!(
+        !TaskStatus::Running.can_transition_to(TaskStatus::HumanValidated),
+        "Running → HumanValidated обязан быть запрещён: прогон не заменяет решение человека"
+    );
+    // Опровержение выносится по доказательствам, а не по идущему прогону.
+    assert!(
+        !TaskStatus::Running.can_transition_to(TaskStatus::Refuted),
+        "Running → Refuted обязан быть запрещён: опровергать нечего до EvidenceSubmitted"
+    );
+}
+
+#[test]
+fn evidence_bindings_are_typed_and_absent_explicitly() {
+    use stellwerk_core::contract::{
+        CommitSha, EvidenceEntry, EvidenceKind, PolicyDigest, RecipeDigest,
+    };
+
+    let entry = EvidenceEntry {
+        id: "e-1".to_owned(),
+        task_id: "t-1".to_owned(),
+        kind: EvidenceKind::ModelClaim,
+        command: String::new(),
+        result_hash: "h".to_owned(),
+        ts: "2026-01-01T00:00:00Z".to_owned(),
+        recipe_digest: Some(RecipeDigest("r".to_owned())),
+        policy_digest: Some(PolicyDigest("p".to_owned())),
+        model_fingerprint: None,
+        commit_sha: Some(CommitSha("c".to_owned())),
+    };
+
+    let json = serde_json::to_value(&entry).expect("serialize");
+    assert_eq!(json["recipe_digest"], serde_json::json!("r"));
+    assert_eq!(json["policy_digest"], serde_json::json!("p"));
+    assert_eq!(
+        json["model_fingerprint"],
+        serde_json::Value::Null,
+        "неприменимая привязка — явный null, а не пустая строка"
+    );
+    let restored: EvidenceEntry = serde_json::from_value(json).expect("parse");
+    assert_eq!(restored, entry);
 }

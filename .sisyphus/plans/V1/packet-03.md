@@ -3,7 +3,8 @@ id: 03
 milestone: V1
 status: GREEN
 depends_on: [02]
-files_allowed: [crates/stellwerk-core/src/contract.rs, docs/adr/0022-task-status-human-and-refutation.md, crates/stellwerk-core/tests/task_lifecycle.rs]
+files_allowed: [crates/stellwerk-core/src/contract.rs, docs/adr/0022-task-status-human-and-refutation.md, crates/stellwerk-core/tests/task_lifecycle.rs, crates/stellwerk-store/src/sqlite.rs, crates/stellwerk-task/src/evidence.rs, crates/stellwerk-task/tests/vertical.rs]
+limit_waiver: C2 — 6 файлов вместо 3, пакет остаётся зелёным между коммитами (src ≈ +20, tests ≈ +4)
 overlap_waiver: C9 — M1/05, M1/06 — `contract.rs`, последовательное исполнение
 acceptance: cargo test -p stellwerk-core --test task_lifecycle
 ---

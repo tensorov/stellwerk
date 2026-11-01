@@ -66,6 +66,10 @@ pub fn model_claim(task_id: &str, id: &str, result_hash: &str, ts: &str) -> Evid
         command: String::new(),
         result_hash: result_hash.to_owned(),
         ts: ts.to_owned(),
+        recipe_digest: None,
+        policy_digest: None,
+        model_fingerprint: None,
+        commit_sha: None,
     }
 }
 
@@ -92,6 +96,10 @@ pub fn tool_attestation(
         command: command.to_owned(),
         result_hash: result_hash.to_owned(),
         ts: ts.to_owned(),
+        recipe_digest: None,
+        policy_digest: None,
+        model_fingerprint: None,
+        commit_sha: None,
     }
 }
 
@@ -103,7 +111,7 @@ pub const FIXTURE_VALIDATION_LABEL: &str = "fixture: not a human decision";
 
 /// Запись `Validation` — ОТДЕЛЬНОЕ, ЯВНОЕ решение человека. `subject` — кто и как
 /// решил; он кладётся в `command`, потому что поля «кто проверял» у `EvidenceEntry`
-/// нет, а контракт (`contract.rs`) этот пакет не расширяет.
+/// по-прежнему нет: P03 добавил bindings, но не автора решения.
 ///
 /// Тестовая `Validation` допустима только как явно помеченная фикстура — с
 /// `FIXTURE_VALIDATION_LABEL` в `subject`; `evidence_status` такую запись решением
@@ -122,6 +130,10 @@ pub fn validation(
         command: subject.to_owned(),
         result_hash: result_hash.to_owned(),
         ts: ts.to_owned(),
+        recipe_digest: None,
+        policy_digest: None,
+        model_fingerprint: None,
+        commit_sha: None,
     }
 }
 

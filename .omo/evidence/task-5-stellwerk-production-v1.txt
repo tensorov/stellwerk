@@ -1,0 +1,147 @@
+P03 — feat(contract): human validation and refutation states
+Repository: /home/izyabretatel/gits/stellwerk
+Branch: main
+Base HEAD before commit: 32f8323 refactor(cli): single authorized execution path
+
+===========================================================================
+RED (as measured, before the enum/struct extension took effect in the build)
+===========================================================================
+$ cargo test -p stellwerk-core --test task_lifecycle
+error[E0599]: no variant, associated function, or constant named `AwaitingHumanValidation` found for enum `TaskStatus` in the current scope
+  --> crates/stellwerk-core/tests/task_lifecycle.rs:18:17
+error[E0599]: no variant, associated function, or constant named `HumanValidated` found for enum `TaskStatus` in the current scope
+  --> crates/stellwerk-core/tests/task_lifecycle.rs:22:17
+error[E0599]: no variant, associated function, or constant named `Refuted` found for enum `TaskStatus` in the current scope
+  --> crates/stellwerk-core/tests/task_lifecycle.rs:23:17
+error[E0599]: no variant, associated function, or constant named `Cancelled` found for enum `TaskStatus` in the current scope
+  --> crates/stellwerk-core/tests/task_lifecycle.rs:24:17
+error[E0560]: struct `EvidenceEntry` has no field named `policy_digest`
+   --> crates/stellwerk-core/tests/task_lifecycle.rs:207:9
+error[E0560]: struct `EvidenceEntry` has no field named `model_fingerprint`
+   --> crates/stellwerk-core/tests/task_lifecycle.rs:208:9
+error[E0560]: struct `EvidenceEntry` has no field named `commit_sha`
+   --> crates/stellwerk-core/tests/task_lifecycle.rs:209:9
+error: could not compile `stellwerk-core` (test "task_lifecycle") due to 20 previous errors
+
+===========================================================================
+GREEN
+===========================================================================
+$ cargo test -p stellwerk-core --test task_lifecycle
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ cargo test -p stellwerk-core
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ cargo test -p stellwerk-store
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ cargo test -p stellwerk-task
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.56s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+(stderr "error: not found: t-1" is emitted by a CLI test asserting that message; no failure)
+
+$ cargo build --workspace
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.73s
+exit=0
+
+===========================================================================
+DIFF STAT (packet paths only)
+===========================================================================
+$ git diff --stat -- crates/stellwerk-core/src/contract.rs \
+    crates/stellwerk-core/tests/task_lifecycle.rs crates/stellwerk-store/src/sqlite.rs \
+    crates/stellwerk-task/src/evidence.rs crates/stellwerk-task/tests/vertical.rs \
+    .sisyphus/plans/V1/packet-03.md
+ .sisyphus/plans/V1/packet-03.md               |  3 +-
+ crates/stellwerk-core/src/contract.rs         | 83 ++++++++++++++++++++++++++-
+ crates/stellwerk-core/tests/task_lifecycle.rs | 73 ++++++++++++++++++++++-
+ crates/stellwerk-store/src/sqlite.rs          |  8 +++
+ crates/stellwerk-task/src/evidence.rs         | 14 ++++-
+ crates/stellwerk-task/tests/vertical.rs       |  4 ++
+ 6 files changed, 177 insertions(+), 8 deletions(-)
+
+Additional new (untracked) file in this packet:
+ docs/adr/0022-task-status-human-and-refutation.md  (108 lines, new)
+
+===========================================================================
+SCOPE CHECK
+===========================================================================
+Staged before commit: none (`git diff --cached --name-only` empty).
+Committed paths (explicit `git add <path>`, no -A / no directory adds):
+  crates/stellwerk-core/src/contract.rs
+  crates/stellwerk-core/tests/task_lifecycle.rs
+  crates/stellwerk-store/src/sqlite.rs
+  crates/stellwerk-task/src/evidence.rs
+  crates/stellwerk-task/tests/vertical.rs
+  docs/adr/0022-task-status-human-and-refutation.md
+  .sisyphus/plans/V1/packet-03.md
+  .omo/evidence/task-5-stellwerk-production-v1.txt   (git check-ignore: not ignored)
+
+Owner WIP left untouched and unstaged (status stayed " M"/"??"):
+  .gitignore
+  .omo/omo.jsonc
+  crates/stellwerk-gateway/src/shaping.rs
+  crates/stellwerk-gateway/tests/gate.rs
+  crates/stellwerk-gateway/tests/mount.rs
+  crates/stellwerk-gateway/tests/session_failure.rs
+  crates/stellwerk-gateway/tests/shaping.rs
+  crates/stellwerk-gateway/mutants.out/
+  crates/stellwerk-gateway/mutants2.out/
+  crates/stellwerk-registry/src/cmd_add.rs
+  crates/stellwerk-task/src/cli.rs
+
+Not staged: .omo/plans/, .omo/start-work/, mutants.out/, mutants.out.old/,
+.playwright-mcp/, .omo/archive/, .omo/drafts/.
+Existing stash `r02-parked-profile` untouched (stash@{0}).
+No #[allow] / #[ignore] / serde(default) / #[non_exhaustive] added.
