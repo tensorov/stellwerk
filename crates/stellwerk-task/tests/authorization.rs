@@ -7,8 +7,10 @@ use stellwerk_store::{EventStore, SqliteStore};
 use stellwerk_task::m5::sandbox_bwrap::Sandbox;
 use stellwerk_task::m5::secrets::{agent_argv, AgentEnv, SecretError, Token};
 use stellwerk_task::m5::FixtureEngine;
-use stellwerk_task::orchestrator::SandboxWorker;
-use stellwerk_task::runner::{run_once, Call, CallAttempt, CallVerdict, RiskRegistry, Worker};
+use stellwerk_task::orchestrator::{SandboxWorker, StaticRegistry, ToolEntry};
+use stellwerk_task::runner::{
+    authorize, run_once, Call, CallAttempt, CallVerdict, RiskRegistry, Worker,
+};
 
 const WINDOW: Duration = Duration::from_secs(60);
 const BUDGET: Duration = Duration::from_secs(30);
@@ -16,6 +18,16 @@ const TOKEN_NAME: &str = "GITHUB_TOKEN";
 const TOKEN_VALUE: &str = "ghp-n1-09-never-in-the-agent-reach";
 const R0: ToolRisk = ToolRisk::Classified(RiskClass::R0);
 const R5: ToolRisk = ToolRisk::Classified(RiskClass::R5);
+
+/// Хостовый реестр для проверки авторитета классификации: `bash` в нём — `R5`.
+/// Это `StaticRegistry`, то есть та же дверь, что production-реестр; `bash` не
+/// добавляется в `TOOL_REGISTRY` (там только production-инструменты), а тест
+/// подаёт реестр явно — ровно так же, как это делает `with_registry`.
+static HOST_RISK: &[ToolEntry] = &[ToolEntry {
+    module: "fs",
+    tool: "bash",
+    class: RiskClass::R5,
+}];
 
 /// Доверенный реестр: класс инструмента приходит ОТСЮДА, а не из `call.risk`.
 /// `bash`/`fs` — чтение R0, `r5`/`fs` — необратимое разрушение. Без него
@@ -262,4 +274,74 @@ async fn stdout_is_data_not_auth() {
     let m = w.last_outcome().unwrap();
     assert_eq!(m.tool_steps, 1);
     assert_eq!(s.list_by_task("t-s").await.unwrap().len(), 1);
+}
+
+/// Авторитет классификации риска принадлежит ХОСТУ, а не вызывающему.
+///
+/// Вызывающий заявляет `R0` для `bash`, но хостовый реестр знает `bash` как `R5`:
+/// решение обязано взять класс `R5` и отказать, а не согласиться с самодекларацией
+/// агента. Неизвестный инструмент даёт `Unclassified` — отдельное состояние: у него
+/// нет класса вовсе, тогда как у `R5` класс есть и он запрещён таблицей. Слить эти
+/// два исхода в один `Deny` значило бы потерять разницу между «политика запретила
+/// класс» и «никто не классифицировал».
+///
+/// На текущем HEAD `runner::authorize` уже читает риск только из реестра, поэтому
+/// тест зелёный и красным сам по себе не становится. Страж доказан мутацией:
+/// подмена `registry.risk_of(..)` на `call.risk` в `authorize` делает его красным
+/// (вывод падения приложен к `.omo/evidence/task-10-stellwerk-production-v1.txt`).
+#[test]
+fn host_classifies_risk_not_caller() {
+    let host = StaticRegistry(HOST_RISK);
+    let claimed = call();
+    assert_eq!(
+        claimed.risk, R0,
+        "предусловие: вызывающий заявляет именно R0"
+    );
+
+    let classified = authorize(&claimed, PolicyLevel::L2Contributor, &host);
+    assert_eq!(
+        classified.risk, R5,
+        "класс инструмента обязан прийти из реестра хоста, а не из `call.risk`"
+    );
+    assert!(
+        matches!(classified.verdict, CallVerdict::Deny { .. }),
+        "заявленный R0 не должен давать Allow: хост классифицировал bash как R5, решение {:?}",
+        classified.verdict
+    );
+
+    let unknown = Call {
+        tool: "not_in_host_registry".into(),
+        ..call()
+    };
+    let unclassified = authorize(&unknown, PolicyLevel::L2Contributor, &host);
+    assert_eq!(
+        unclassified.risk,
+        ToolRisk::Unclassified,
+        "инструмент вне реестра — Unclassified, а не R0 и не класс известного инструмента"
+    );
+
+    let (CallVerdict::Deny { reason: unknown_reason }, CallVerdict::Deny { reason: r5_reason }) =
+        (&unclassified.verdict, &classified.verdict)
+    else {
+        panic!(
+            "оба отказа обязаны остаться Deny, получено {:?} и {:?}",
+            unclassified.verdict, classified.verdict
+        );
+    };
+    assert_ne!(
+        unclassified.risk, classified.risk,
+        "Unclassified и Classified(R5) — разные состояния риска, а не одно"
+    );
+    assert!(
+        unknown_reason.contains("unclassified_tool"),
+        "причина отказа неизвестного инструмента обязана называть неизвестность, получено {unknown_reason:?}"
+    );
+    assert!(
+        r5_reason.contains("risk_denied"),
+        "причина отказа R5 обязана называть запрет класса, получено {r5_reason:?}"
+    );
+    assert_ne!(
+        unknown_reason, r5_reason,
+        "«неизвестен» и «запрещён политикой» — разные причины, не одна строка"
+    );
 }
