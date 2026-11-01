@@ -25,7 +25,7 @@ use stellwerk_task::ledger_sqlite::SqliteEvidenceLedger;
 use stellwerk_task::m5::sandbox_bwrap::Sandbox;
 use stellwerk_task::m5::FixtureEngine;
 use stellwerk_task::orchestrator::{SandboxWorker, StaticRegistry, ToolEntry};
-use stellwerk_task::runner::{run_once, Call, CallAttempt, CallVerdict, Verdict};
+use stellwerk_task::runner::{run_once, Call, CallAttempt, CallVerdict, Verdict, Worker};
 use stellwerk_task::taskfile::TaskFile;
 
 /// Агент лежит рядом с task-файлом, как и у `run`: схема `TaskFile`
@@ -48,6 +48,19 @@ pub struct RunResult {
     pub store_path: PathBuf,
     pub gate: String,
     pub risk: String,
+}
+
+/// Единственный путь исполнения для Run и Plan-Build.
+///
+/// Решение выносит `run_once`, то есть `authorize` по доверенному реестру воркера;
+/// чек пишется на каждый вызов, включая отказ. Отсутствие чека поэтому означает
+/// «авторизации не было», а не «прошло без замечаний».
+pub(crate) async fn execute(
+    attempt: &CallAttempt,
+    worker: &dyn Worker,
+    store: &SqliteStore,
+) -> Result<CallVerdict, String> {
+    run_once(attempt, worker, store).await.map_err(|e| e.0)
 }
 
 pub fn run_task(path: &Path) -> Result<RunResult, String> {
@@ -125,7 +138,7 @@ pub fn run_task(path: &Path) -> Result<RunResult, String> {
     };
 
     let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {e}"))?;
-    let outcome = runtime.block_on(run_once(&attempt, &worker, &store));
+    let outcome = runtime.block_on(execute(&attempt, &worker, &store));
 
     let receipt = runtime.block_on(receipt(&store, &attempt.task_id));
 
@@ -182,7 +195,7 @@ pub fn run_task(path: &Path) -> Result<RunResult, String> {
                 Ok((id, _, _, _)) => eprintln!("receipt={} store={}", id, db_path.display()),
                 Err(receipt_err) => eprintln!("receipt_error={receipt_err}"),
             }
-            Err(format!("run failed: {}", err.0))
+            Err(format!("run failed: {}", err))
         }
     }
 }

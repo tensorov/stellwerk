@@ -7,14 +7,18 @@
 //! команд: фильтра команд в этом срезе нет, и изображать его было бы хуже, чем назвать
 //! отсутствующим.
 
+use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, RetentionClass, RiskClass};
 use stellwerk_gateway::gate::CallRequest;
 use stellwerk_gateway::permission::ToolRisk;
+use stellwerk_store::SqliteStore;
 use stellwerk_task::m5::gate_channel::{
     AllowBasis, GateAnswer, GateChannel, GatePolicy, GateServed, PolicyVerdict,
 };
@@ -24,7 +28,9 @@ use stellwerk_task::m5::session_identity::{Adjudication, SessionDescription};
 use stellwerk_task::m5::FixtureEngine;
 use stellwerk_task::orchestrator::{pi_transport_args, SandboxWorker};
 use stellwerk_task::orchestrator::{StaticRegistry, ToolEntry};
-use stellwerk_task::runner::{Call, Worker};
+use stellwerk_task::runner::{
+    Call, CallAttempt, CallVerdict, ExecOutcome, RiskRegistry, Worker, WorkerError,
+};
 
 /// Модуль, от имени которого гейт видит инструменты агента.
 pub const BUILD_MODULE: &str = "stellwerk-build";
@@ -231,6 +237,53 @@ pub struct BuildRun<'a> {
     pub pi: &'a Path,
 }
 
+/// Идентичность Build: task-файла нет, но есть дерево, которое собирают. Идентификатор —
+/// функция от репозитория, а не случайный id, поэтому повторный прогон того же дерева
+/// остаётся тем же прогоном.
+pub fn build_task_id(repo: &Path) -> String {
+    format!("build:{}", repo.display())
+}
+
+/// Чек Build лежит внутри его `run.root`: путь выводится из данных прогона и удаляется
+/// вместе с ним, а не оседает в общем каталоге.
+pub fn build_receipt_store(root: &Path) -> PathBuf {
+    root.join("receipts.db")
+}
+
+/// Обёртка воркера, запоминающая вывод: `run_once` пишет в чек только хеш, а Build
+/// показывает ответ агента. Решение по-прежнему выносит `run_once`, поэтому здесь нет
+/// второго пути авторизации — только сохранение результата запуска.
+struct OutputRecording<'a, W: Worker + Sync> {
+    inner: &'a W,
+    output: Mutex<String>,
+}
+
+impl<W: Worker + Sync> Worker for OutputRecording<'_, W> {
+    fn exec(
+        &self,
+        workspace_ref: &str,
+        call: &Call,
+    ) -> Pin<Box<dyn Future<Output = Result<ExecOutcome, WorkerError>> + Send + '_>> {
+        let inner = self.inner;
+        let output = &self.output;
+        let workspace = workspace_ref.to_string();
+        let call = call.clone();
+        Box::pin(async move {
+            let outcome = inner.exec(&workspace, &call).await?;
+            *output.lock().expect("output mutex poisoned") = outcome.output.clone();
+            Ok(outcome)
+        })
+    }
+
+    fn spawned(&self) -> usize {
+        self.inner.spawned()
+    }
+
+    fn registry(&self) -> &dyn RiskRegistry {
+        self.inner.registry()
+    }
+}
+
 /// Что стало известно после прогона. Числа, а не «получилось»: ходов модели и заявок в гейт
 /// может быть ноль, и это факт, а не оттенок успеха.
 pub struct BuildOutcome {
@@ -240,6 +293,12 @@ pub struct BuildOutcome {
     pub gate: Vec<GateAnswer>,
     /// Что напечатал агент. Отказ гейта виден здесь же, в его собственном выводе.
     pub output: String,
+    /// Решение общего пути исполнения по внешнему вызову Build. Несёт `Allow`/`Deny`/
+    /// `Suspended`/`Ask` из единственного `authorize`; `Deny`/`Suspended`/`Ask` при этом
+    /// записаны в чек как `status=Denied|Suspended|Asked` с причиной. Отличие отказа от
+    /// «агент ничего не сделал» сегодня видно в чеке, а не на экране: plan TUI поле пока
+    /// не читает, и его показ — отдельный follow-up.
+    pub decision: CallVerdict,
 }
 
 /// Краткая запись решений гейта: что разрешено и на каком основании, что отклонено и
@@ -435,13 +494,25 @@ pub fn run_build(run: BuildRun<'_>, backend: &dyn ModelBackend) -> Result<BuildO
     .map_err(|e| format!("сокеты: {}", e.0))?
     .with_registry(BUILD_REGISTRY);
 
-    let call = Call {
-        tool: "build".to_string(),
-        module: BUILD_MODULE.to_string(),
-        risk: ToolRisk::Classified(RiskClass::R0),
-        data: DataClass::Public,
-        model: build_binding(),
-        interactive: false,
+    let attempt = CallAttempt {
+        task_id: build_task_id(run.repo),
+        call: Call {
+            tool: "build".to_string(),
+            module: BUILD_MODULE.to_string(),
+            risk: ToolRisk::Classified(RiskClass::R0),
+            data: DataClass::Public,
+            model: build_binding(),
+            interactive: false,
+        },
+        caller: PolicyLevel::L2Contributor,
+        workspace_ref: "workspace".to_string(),
+    };
+    let store_path = build_receipt_store(run.root);
+    let store = SqliteStore::open(&store_path)
+        .map_err(|e| format!("чек Build `{}`: {e}", store_path.display()))?;
+    let recording = OutputRecording {
+        inner: &worker,
+        output: Mutex::new(String::new()),
     };
     let stop = AtomicBool::new(false);
     std::thread::scope(|scope| -> Result<BuildOutcome, String> {
@@ -452,9 +523,10 @@ pub fn run_build(run: BuildRun<'_>, backend: &dyn ModelBackend) -> Result<BuildO
             .enable_all()
             .build()
             .map_err(|e| format!("runtime: {e}"))?;
-        let outcome = runtime
-            .block_on(worker.exec("workspace", &call))
-            .map_err(|e| format!("запуск pi: {}", e.0))?;
+        // `run_once` останавливает оба слуги только после возврата, поэтому остановка и
+        // пробуждение выполняются ДО разбора результата: отказ авторизации не должен
+        // оставлять потоки в `accept`.
+        let result = runtime.block_on(crate::execute(&attempt, &recording, &store));
         stop.store(true, Ordering::SeqCst);
         for socket in [model.socket(), gate.socket()] {
             wake(socket).map_err(|e| format!("пробуждение {}: {e}", socket.display()))?;
@@ -467,11 +539,18 @@ pub fn run_build(run: BuildRun<'_>, backend: &dyn ModelBackend) -> Result<BuildO
             .join()
             .map_err(|_| "поток гейта упал".to_string())?
             .map_err(|e| format!("канал гейта: {e}"))?;
+        let decision = result.map_err(|e| format!("запуск pi: {e}"))?;
+        let output = recording
+            .output
+            .lock()
+            .map_err(|_| "вывод прогона отравлен".to_string())?
+            .clone();
         Ok(BuildOutcome {
             model_turns,
             gate_requests,
             gate,
-            output: outcome.output,
+            output,
+            decision,
         })
     })
 }
