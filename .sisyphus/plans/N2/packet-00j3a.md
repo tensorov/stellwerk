@@ -2,7 +2,7 @@
 id: N2/00j3a
 milestone: N2
 title: Планировщик явно не предлагает инструменты
-depends_on: [N2/00j3]
+depends_on: [N2/00j3, 00h2a]
 allowed_changes:
   - crates/stellwerk-cli/src/planner_host.rs
   - crates/stellwerk-cli/tests/planner_host.rs

@@ -2,7 +2,7 @@
 id: N2/00j3
 milestone: N2
 title: Ход несёт определения инструментов и честную причину
-depends_on: [N2/00j1, N2/00j2]
+depends_on: [N2/00j1, N2/00j2, 00j2]
 allowed_changes:
   - crates/stellwerk-task/src/m5/model_transport.rs
   - crates/stellwerk-task/tests/model_transport_wire.rs

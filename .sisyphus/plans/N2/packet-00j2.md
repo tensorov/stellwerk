@@ -2,7 +2,7 @@
 id: N2/00j2
 milestone: N2
 title: Кадр вмещает транскрипт с инструментами
-depends_on: []
+depends_on: [00d, 00i1]
 allowed_changes:
   - crates/stellwerk-task/src/m5/model_transport.rs
   - crates/stellwerk-task/tests/model_transport_wire.rs

@@ -2,7 +2,7 @@
 id: N2/00j1
 milestone: N2
 title: Build больше не предлагает bash, но гейт помнит R5
-depends_on: []
+depends_on: [00h3c, 00h3d]
 allowed_changes:
   - crates/stellwerk-cli/src/build_runner.rs
   - crates/stellwerk-cli/tests/build_runner.rs

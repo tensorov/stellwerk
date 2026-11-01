@@ -2,7 +2,7 @@
 id: N2/00j4
 milestone: N2
 title: Backend предлагает инструменты сервису
-depends_on: [N2/00j3a]
+depends_on: [N2/00j3a, 00g3b]
 allowed_changes:
   - crates/stellwerk-task/src/m5/model_backend.rs
   - crates/stellwerk-task/tests/model_backend.rs

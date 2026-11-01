@@ -2,7 +2,7 @@
 id: N2/00j5
 milestone: N2
 title: Результат инструмента возвращается в разговор
-depends_on: [N2/00j4]
+depends_on: [N2/00j4, 00j3, 00j4]
 allowed_changes:
   - crates/stellwerk-task/src/m5/model_transport.rs
   - crates/stellwerk-task/src/m5/model_backend.rs

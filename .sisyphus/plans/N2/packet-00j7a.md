@@ -2,7 +2,7 @@
 id: N2/00j7a
 milestone: N2
 title: Тестовый wire-хелпер model_backend объявляет пустой набор
-depends_on: [N2/00j7]
+depends_on: [N2/00j7, 00j5]
 allowed_changes:
   - crates/stellwerk-task/tests/model_backend.rs
 ---

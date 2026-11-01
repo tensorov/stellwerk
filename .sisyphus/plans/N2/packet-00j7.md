@@ -2,7 +2,7 @@
 id: N2/00j7
 milestone: N2
 title: Ход без tools отвергается
-depends_on: [N2/00j6]
+depends_on: [N2/00j6, 00h1, 00j3, 00j5]
 allowed_changes:
   - crates/stellwerk-task/src/m5/model_transport.rs
   - crates/stellwerk-task/tests/model_transport_wire.rs

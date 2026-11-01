@@ -2,7 +2,7 @@
 id: N2/00j6
 milestone: N2
 title: Pi перестаёт быть текстовым реле
-depends_on: [N2/00j5]
+depends_on: [N2/00j5, 00f, 00i1, 00j1]
 allowed_changes:
   - crates/stellwerk-task/pi/stellwerk_transport.ts
   - crates/stellwerk-task/tests/pi_transport.rs
