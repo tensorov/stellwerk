@@ -217,7 +217,9 @@ pub enum CallDecision {
 /// одним путём не дают одно и то же разрешение.
 pub fn authorize_write(requested: &RequestedCall, basis_scope: &str) -> CallDecision {
     AuthorizedCall::issue(requested, basis_scope).map_or_else(
-        || CallDecision::Refused { reason: "write_without_path: запись без пути не к чему применить".to_owned() },
+        || CallDecision::Refused {
+            reason: "write_without_path: запись без пути не к чему применить".to_owned(),
+        },
         CallDecision::Authorized,
     )
 }

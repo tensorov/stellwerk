@@ -5,7 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use stellwerk_cli::build_runner::{BuildRun, run_build};
+use stellwerk_cli::build_runner::{run_build, BuildRun};
 use stellwerk_cli::plan::BuildRequest;
 use stellwerk_store::{EventStore, SqliteStore};
 use stellwerk_task::m5::model_transport::{BackendError, Frame, ModelBackend, TurnMessage};

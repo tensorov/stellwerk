@@ -312,12 +312,17 @@ fn requested_write(request: &GateRequest) -> Result<Option<RequestedCall>, Strin
     if request.tool == "edit" && request.argument.is_none() && request.content_digest.is_none() {
         return Ok(None);
     }
-    let (Some(argument), Some(claimed)) = (request.argument.as_deref(), request.content_digest.as_deref())
-    else {
+    let (Some(argument), Some(claimed)) = (
+        request.argument.as_deref(),
+        request.content_digest.as_deref(),
+    ) else {
         let reason = if request.content_digest.is_none() {
             format!("write_without_content_digest: `{}` with path `{path}` came without a content digest; a path alone does not say what will be written", request.tool)
         } else {
-            format!("write_without_argument: `{}` with path `{path}` came without its argument", request.tool)
+            format!(
+                "write_without_argument: `{}` with path `{path}` came without its argument",
+                request.tool
+            )
         };
         return Err(reason);
     };

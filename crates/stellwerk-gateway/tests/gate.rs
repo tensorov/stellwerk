@@ -149,13 +149,8 @@ fn public_data_to_third_party_is_not_denied_by_data() {
 /// здесь же по `content`, а не берётся из текста модели.
 fn write_call(path: &str, content: &[u8]) -> RequestedCall {
     let digest = ContentDigest::of(content);
-    RequestedCall::new(
-        "write",
-        Some(path.to_owned()),
-        content.to_vec(),
-        &digest,
-    )
-    .expect("digest посчитан по тем же байтам")
+    RequestedCall::new("write", Some(path.to_owned()), content.to_vec(), &digest)
+        .expect("digest посчитан по тем же байтам")
 }
 
 #[test]

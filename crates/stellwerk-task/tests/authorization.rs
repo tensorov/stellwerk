@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, RetentionClass, RiskClass};
@@ -320,8 +321,12 @@ fn host_classifies_risk_not_caller() {
         "инструмент вне реестра — Unclassified, а не R0 и не класс известного инструмента"
     );
 
-    let (CallVerdict::Deny { reason: unknown_reason }, CallVerdict::Deny { reason: r5_reason }) =
-        (&unclassified.verdict, &classified.verdict)
+    let (
+        CallVerdict::Deny {
+            reason: unknown_reason,
+        },
+        CallVerdict::Deny { reason: r5_reason },
+    ) = (&unclassified.verdict, &classified.verdict)
     else {
         panic!(
             "оба отказа обязаны остаться Deny, получено {:?} и {:?}",
@@ -343,5 +348,25 @@ fn host_classifies_risk_not_caller() {
     assert_ne!(
         unknown_reason, r5_reason,
         "«неизвестен» и «запрещён политикой» — разные причины, не одна строка"
+    );
+}
+
+/// Формат дерева держится тестом, а не памятью: расхождения возвращаются молча.
+#[test]
+fn workspace_is_rustfmt_clean() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("crate lives two levels below the workspace root");
+    let output = Command::new(env!("CARGO"))
+        .args(["fmt", "--all", "--", "--check"])
+        .current_dir(root)
+        .output()
+        .expect("cargo fmt should spawn");
+    assert!(
+        output.status.success(),
+        "cargo fmt --all -- --check failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
