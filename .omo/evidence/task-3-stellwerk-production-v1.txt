@@ -147,3 +147,29 @@ CANON TEST NAME (post-verification rename)
   name required by `.sisyphus/plans/V1/packet-01.md:22`,
   `woken_task_continues_after_waker_replacement`; body, `WakesOnce`, poll bound and
   watchdog are unchanged. Current run: that name appears as `... ok`, 5 passed.
+
+FMT HALF — P01-OWNED FILES (2026-11-02, re-measured by orchestrator)
+  4 of the 4 non-owner files named by packet-01 / plan todo 3 are now cargo-fmt clean:
+    crates/stellwerk-gateway/src/session.rs        clean (since 2b35575)
+    crates/stellwerk-gateway/tests/session.rs      clean (since 2b35575)
+    crates/stellwerk-task/tests/http_wire.rs       formatted now (accept_within chain split)
+    crates/stellwerk-task/tests/model_backend.rs   formatted now (same split, same function)
+  $ cargo fmt --all -- --check | grep -E 'http_wire\.rs|model_backend\.rs'   -> no output
+  $ cargo test -p stellwerk-task --test http_wire        -> 5 passed, 0 failed
+  $ cargo test -p stellwerk-task --test model_backend    -> 18 passed, 0 failed
+  $ cargo clippy --workspace --all-targets -- -D warnings -> exit 0
+  $ sha256sum -c /tmp/opencode/pre-fmt-p01b.sha256       -> all 8 owner-WIP files OK
+
+BLOCKING RESIDUE — NOT fixable inside packet-01's files_allowed
+  `cargo fmt --all -- --check` is still exit 1 on 7 files, and packet-01 may touch none of them:
+    owner WIP (forbidden, uncommitted): gateway/tests/session_failure.rs, gateway/tests/shaping.rs
+    merged packets, outside files_allowed/limit_waiver:
+      crates/stellwerk-cli/tests/run.rs          (R01)
+      crates/stellwerk-gateway/src/gate.rs       (A01)
+      crates/stellwerk-gateway/tests/gate.rs     (A01)
+      crates/stellwerk-task/src/m5/gate_channel.rs (A01)
+      crates/stellwerk-task/tests/authorization.rs (A03)
+  Consequence: P01's acceptance `cargo fmt --all -- --check` exit 0 is UNREACHABLE within
+  packet-01 as written. Closing it needs either an owner commit (2 files) plus a packet
+  amendment covering the 5 merged-packet files, or a new style packet sized 5 files.
+  Recorded as FINDING in .omo/notepads/stellwerk-production-v1/issues.md.

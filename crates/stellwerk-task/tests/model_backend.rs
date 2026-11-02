@@ -64,7 +64,9 @@ fn read_request(stream: &mut TcpStream) -> String {
 /// Соединение принимается с потолком: backend, который никуда не пошёл, обязан провалить
 /// тест за секунды, а не держать поток `accept` до таймаута всего прогона.
 fn accept_within(listener: &TcpListener) -> TcpStream {
-    listener.set_nonblocking(true).expect("неблокирующий слушатель");
+    listener
+        .set_nonblocking(true)
+        .expect("неблокирующий слушатель");
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         match listener.accept() {

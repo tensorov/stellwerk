@@ -14,7 +14,9 @@ use stellwerk_task::m5::http_wire::BaseUrl;
 /// Соединение принимается с потолком: обмен, который не состоялся, обязан провалить тест,
 /// а не держать поток `accept` до таймаута всего прогона.
 fn accept_within(listener: &TcpListener) -> std::net::TcpStream {
-    listener.set_nonblocking(true).expect("неблокирующий слушатель");
+    listener
+        .set_nonblocking(true)
+        .expect("неблокирующий слушатель");
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         match listener.accept() {
