@@ -124,7 +124,7 @@ fn shown(value: &Option<String>) -> &str {
 pub fn run_tui(task_file: &Path) -> Result<(), String> {
     let state = State {
         task_file: task_file.to_path_buf(),
-        agent: agent_path(task_file),
+        agent: agent_path()?,
         phase: Phase::Ready,
         verdict: None,
         receipt: None,
@@ -138,13 +138,11 @@ pub fn run_tui(task_file: &Path) -> Result<(), String> {
     result.and(restored)
 }
 
-/// Агент лежит рядом с task-файлом, как и у `run`: схема `TaskFile` программу не
-/// несёт, её расположение задаёт каталог файла.
-fn agent_path(task_file: &Path) -> PathBuf {
-    task_file
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("pi-fixture.sh")
+/// Тот же Pi, что запускает `run`: `PI_BIN`, затем `$HOME/.pi/agent/bin/pi`.
+/// Здесь путь только показывается; запуск — по `START`. Отсутствие Pi — названный
+/// `MissingEngine`, а не фикстура.
+fn agent_path() -> Result<PathBuf, String> {
+    crate::pi_program()
 }
 
 /// Вход в alternate screen и raw mode. Поломка на полпути откатывает уже

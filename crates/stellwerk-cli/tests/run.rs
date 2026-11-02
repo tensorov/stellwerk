@@ -4,6 +4,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use stellwerk_cli::build_runner::{run_build, BuildRun};
 use stellwerk_cli::plan::BuildRequest;
@@ -26,18 +27,78 @@ struct RunResult {
     stderr: String,
 }
 
-fn run_cli(task_path: &Path) -> RunResult {
-    let output = Command::new(env!("CARGO_BIN_EXE_stellwerk"))
+/// Свежий каталог на тест: тесты идут параллельно, pid+seq уникален.
+fn scratch_dir(name: &str) -> PathBuf {
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::SeqCst);
+    let dir =
+        std::env::temp_dir().join(format!("stellwerk-r04-{name}-{}-{seq}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    dir
+}
+
+/// Подставной Pi: берём ту же fixture-программу, что лежит в `examples`, но
+/// запускаем её как ПРОГРАММУ (`PI_BIN`), а не ищем рядом с task-файлом.
+fn fake_pi(dir: &Path, marker: &str) -> PathBuf {
+    let fixture = workspace_root().join("crates/stellwerk-cli/examples/pi-fixture.sh");
+    let source = std::fs::read_to_string(&fixture).expect("read example fixture");
+    let body = source.replacen("#!/bin/sh\n", &format!("#!/bin/sh\necho {marker} >&2\n"), 1);
+    let pi = dir.join("pi");
+    std::fs::write(&pi, body).expect("write fake pi");
+    let mut mode = std::fs::metadata(&pi).expect("pi metadata").permissions();
+    mode.set_mode(0o755);
+    std::fs::set_permissions(&pi, mode).expect("pi executable");
+    pi
+}
+
+/// Пробник вместо Pi: успешный `stderr` прогона не печатается, поэтому факт
+/// запуска доказуем отказом с маркером, а не нулевым кодом.
+fn probe_pi(dir: &Path, marker: &str) -> PathBuf {
+    let pi = dir.join("pi-probe");
+    std::fs::write(&pi, format!("#!/bin/sh\necho {marker} >&2\nexit 42\n"))
+        .expect("write pi probe");
+    let mut mode = std::fs::metadata(&pi)
+        .expect("probe metadata")
+        .permissions();
+    mode.set_mode(0o755);
+    std::fs::set_permissions(&pi, mode).expect("probe executable");
+    pi
+}
+
+/// Путь к транспорту Pi. Без него прогон отказывает названно, а не стартует
+/// движок без канала модели.
+fn pi_extension() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../stellwerk-task/pi/stellwerk_transport.ts")
+}
+
+fn run_cli_with(task_path: &Path, pi: Option<&Path>, home: &Path) -> RunResult {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_stellwerk"));
+    command
         .current_dir(workspace_root())
         .arg("run")
-        .arg(task_path)
-        .output()
-        .expect("cli binary should spawn");
+        .arg(task_path);
+    // Изоляция от машины разработчика: отсутствие Pi проверяется на пустом HOME,
+    // а не на установленном у владельца.
+    command.env_remove("PI_BIN");
+    command.env_remove("STELLWERK_PI_EXTENSION");
+    command.env("HOME", home);
+    if let Some(pi) = pi {
+        command.env("PI_BIN", pi);
+        command.env("STELLWERK_PI_EXTENSION", pi_extension());
+    }
+    let output = command.output().expect("cli binary should spawn");
     RunResult {
         status: output.status.code(),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     }
+}
+
+/// Успешные прогоны получают явный `PI_BIN`; production его больше не ищет.
+fn run_cli(task_path: &Path) -> RunResult {
+    let dir = scratch_dir("run-cli");
+    let pi = fake_pi(&dir, "FAKE_PI_INVOKED");
+    run_cli_with(task_path, Some(&pi), &dir)
 }
 
 /// Значение поля `key=value` из строки вывода.
@@ -104,17 +165,18 @@ fn run_writes_receipt_to_sqlite() {
 /// «успешно» превращался в `verdict=Allow` с пустым выводом.
 #[test]
 fn failed_run_is_not_reported_as_success() {
-    let dir = std::env::temp_dir().join(format!("stellwerk-n1-failtest-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create scratch dir");
-    let task_path = dir.join("no-fixture.toml");
-    let toml = "[task]\nid = \"n1-fail\"\ngoal = \"echo hello\"\nworkspace_ref = \"ws\"\nmodel_ref = \"m\"\npacket = \"N1-10\"\nevidence_policy = \"e\"\n\n[task.limits]\nmax_files = 1\nmax_diff_lines = 1\ntimeout_seconds = 30\nmax_retries = 0\ncontext_budget_tokens = 1\ndata_class = \"internal\"\n";
+    let dir = scratch_dir("no-engine");
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).expect("create home");
+    let task_path = dir.join("no-engine.toml");
+    let toml = "[task]\nid = \"n1-fail\"\ngoal = \"echo hello\"\nworkspace_ref = \"ws\"\nmodel_ref = \"m\"\npacket = \"N1-10\"\nprofile = \"pi\"\nevidence_policy = \"e\"\n\n[task.limits]\nmax_files = 1\nmax_diff_lines = 1\ntimeout_seconds = 30\nmax_retries = 0\ncontext_budget_tokens = 1\ndata_class = \"internal\"\n";
     std::fs::write(&task_path, toml).expect("write fixture");
 
-    let result = run_cli(&task_path);
+    let result = run_cli_with(&task_path, None, &home);
     assert_ne!(
         result.status,
         Some(0),
-        "a run without a fixture must fail; stdout: {}",
+        "a run without an engine must fail; stdout: {}",
         result.stdout
     );
     assert!(
@@ -128,13 +190,62 @@ fn failed_run_is_not_reported_as_success() {
         result.stderr
     );
     assert!(
-        result.stderr.contains("fixture"),
-        "stderr must name the missing fixture: {}",
+        result.stderr.contains("MissingEngine"),
+        "stderr must name the missing engine: {}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("fixture"),
+        "absence must not be described as a fixture: {}",
         result.stderr
     );
 
     let _ = std::fs::remove_file(&task_path);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Отсутствие Pi — названный отказ, а не тихий переход на фикстуру. Присутствие
+/// запускает именно `PI_BIN`, и это видно по маркеру из самого скрипта.
+#[test]
+fn missing_engine_is_named_refusal() {
+    let dir = scratch_dir("missing-engine");
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).expect("create home");
+    let task_path = dir.join("task.toml");
+    let toml = "[task]\nid = \"r04-engine\"\ngoal = \"echo hello\"\nworkspace_ref = \"ws\"\nmodel_ref = \"m\"\npacket = \"V1/r04\"\nprofile = \"pi\"\nevidence_policy = \"e\"\n\n[task.limits]\nmax_files = 1\nmax_diff_lines = 1\ntimeout_seconds = 30\nmax_retries = 0\ncontext_budget_tokens = 1\ndata_class = \"internal\"\n";
+    std::fs::write(&task_path, toml).expect("write task");
+
+    let absent = run_cli_with(&task_path, None, &home);
+    assert_ne!(absent.status, Some(0), "stdout: {}", absent.stdout);
+    assert!(
+        !absent.stdout.contains("verdict="),
+        "stdout: {}",
+        absent.stdout
+    );
+    assert!(
+        absent.stderr.contains("MissingEngine"),
+        "absence must be a named MissingEngine refusal: {}",
+        absent.stderr
+    );
+    assert!(
+        !absent.stderr.contains("pi-fixture.sh"),
+        "no fixture fallback may be named: {}",
+        absent.stderr
+    );
+
+    let pi = probe_pi(&dir, "FAKE_PI_INVOKED");
+    let present = run_cli_with(&task_path, Some(&pi), &home);
+    assert_ne!(present.status, Some(0), "probe must fail after speaking");
+    assert!(
+        present.stderr.contains("FAKE_PI_INVOKED"),
+        "the PI_BIN program must be the engine that ran: {}",
+        present.stderr
+    );
+    assert!(
+        !present.stderr.contains("pi-fixture.sh"),
+        "run must not name the fixture script: {}",
+        present.stderr
+    );
 }
 
 /// Отсутствующий файл задачи — операционная ошибка, ненулевой код и никакого вердикта.

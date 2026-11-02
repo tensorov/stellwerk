@@ -24,17 +24,62 @@ use stellwerk_task::evidence::{evidence_status, model_claim, tool_attestation, E
 use stellwerk_task::ledger_sqlite::SqliteEvidenceLedger;
 use stellwerk_task::m5::sandbox_bwrap::Sandbox;
 use stellwerk_task::m5::FixtureEngine;
-use stellwerk_task::orchestrator::{SandboxWorker, StaticRegistry, ToolEntry};
+use stellwerk_task::orchestrator::{pi_transport_args, SandboxWorker, StaticRegistry, ToolEntry};
 use stellwerk_task::runner::{run_once, Call, CallAttempt, CallVerdict, Verdict, Worker};
 use stellwerk_task::taskfile::TaskFile;
 
-/// Агент лежит рядом с task-файлом, как и у `run`: схема `TaskFile`
-/// программу не несёт, её расположение задаёт каталог файла.
+/// Реестр инструментов CLI-прогона. Движок — Pi по профилю `pi`; класс риска
+/// объявлен здесь, а не взят из production-реестра оркестратора.
 const CLI_AGENT_TOOLS: &[ToolEntry] = &[ToolEntry {
     module: "stellwerk-cli",
-    tool: "fixture",
+    tool: "pi",
     class: RiskClass::R0,
 }];
+
+const PI_BIN: &str = "PI_BIN";
+const PI_EXTENSION: &str = "STELLWERK_PI_EXTENSION";
+
+/// Найти Pi: `PI_BIN`, затем `$HOME/.pi/agent/bin/pi` — те же правила, что у
+/// `plan.rs::pi_program`. Отсутствие файла — названный `MissingEngine`, не фикстура.
+pub(crate) fn pi_program() -> Result<PathBuf, String> {
+    let candidate = match std::env::var_os(PI_BIN) {
+        Some(path) => PathBuf::from(path),
+        None => {
+            let home = std::env::var_os("HOME").ok_or_else(|| {
+                format!("MissingEngine: neither {PI_BIN} nor HOME is set, so Pi cannot be located")
+            })?;
+            PathBuf::from(home).join(".pi/agent/bin/pi")
+        }
+    };
+    if candidate.is_file() {
+        Ok(candidate)
+    } else {
+        Err(format!(
+            "MissingEngine: Pi program `{}` does not exist (set {PI_BIN} or install Pi under $HOME/.pi/agent/bin/pi)",
+            candidate.display()
+        ))
+    }
+}
+
+/// Путь к транспорту Stellwerk. Без расширения Pi не соединён с каналом модели,
+/// поэтому отсутствие — названный отказ, а не прогон по умолчанию.
+fn pi_extension() -> Result<PathBuf, String> {
+    let path = std::env::var_os(PI_EXTENSION)
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            format!(
+                "MissingPiExtension: {PI_EXTENSION} is not set (path to stellwerk_transport.ts)"
+            )
+        })?;
+    if path.is_file() {
+        Ok(path)
+    } else {
+        Err(format!(
+            "MissingPiExtension: `{}` is not a file",
+            path.display()
+        ))
+    }
+}
 
 static UNIQUE_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -69,16 +114,8 @@ pub fn run_task(path: &Path) -> Result<RunResult, String> {
         .into_spec()
         .map_err(|e| format!("task file `{}`: {e}", path.display()))?;
 
-    let fixture_src = path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("pi-fixture.sh");
-    if !fixture_src.is_file() {
-        return Err(format!(
-            "fixture `{}` not found next to the task file: N1 runs on the fixture agent",
-            fixture_src.display()
-        ));
-    }
+    let pi = pi_program()?;
+    let extension = pi_extension()?;
 
     let window = Duration::from_secs(spec.limits.timeout_seconds);
     let db_path = unique_temp_path("receipts", "db")?;
@@ -91,40 +128,57 @@ pub fn run_task(path: &Path) -> Result<RunResult, String> {
 
     let work = unique_temp_path("work", "")?;
     let tmp = unique_temp_path("tmp", "")?;
+    let home = work.join("home");
     std::fs::create_dir_all(&work).map_err(|e| format!("create work dir: {e}"))?;
     std::fs::create_dir_all(&tmp).map_err(|e| format!("create tmp dir: {e}"))?;
-    std::fs::copy(&fixture_src, work.join("pi-fixture.sh"))
-        .map_err(|e| format!("copy fixture into sandbox: {e}"))?;
+    std::fs::create_dir_all(&home).map_err(|e| format!("create agent home: {e}"))?;
+
+    let mut read_only: Vec<PathBuf> = SYSTEM_READ_ONLY.iter().map(PathBuf::from).collect();
+    if let Some(bin) = pi.parent().filter(|p| !p.as_os_str().is_empty()) {
+        read_only.push(bin.to_path_buf());
+        if let Some(install) = bin.parent().map(|agent| agent.join("install")) {
+            if install.is_dir() {
+                read_only.push(install);
+            }
+        }
+    }
+    if let Some(dir) = extension.parent().filter(|p| !p.as_os_str().is_empty()) {
+        read_only.push(dir.to_path_buf());
+    }
 
     let sandbox = Sandbox {
         work: work.clone(),
         tmp: tmp.clone(),
-        read_only: SYSTEM_READ_ONLY.iter().map(PathBuf::from).collect(),
+        read_only,
         window,
     };
 
-    let sh = in_system(&["/usr/bin/sh", "/bin/sh"])?;
+    let args = pi_transport_args(&extension, &[]);
     let worker = SandboxWorker::new(
-        FixtureEngine::new("/bin/true"),
+        FixtureEngine::new(pi.clone()),
         sandbox,
-        sh.clone(),
-        vec!["pi-fixture.sh".to_string()],
+        pi.clone(),
+        args.clone(),
         window,
-        Vec::new(),
+        vec![
+            ("HOME".to_string(), home.display().to_string()),
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            ("TMPDIR".to_string(), tmp.display().to_string()),
+        ],
     )
     .with_registry(StaticRegistry(CLI_AGENT_TOOLS));
 
     let attempt = CallAttempt {
         task_id: spec.id.clone(),
         call: Call {
-            tool: "fixture".to_string(),
+            tool: "pi".to_string(),
             module: "stellwerk-cli".to_string(),
             risk: ToolRisk::Classified(RiskClass::R0),
             data: spec.limits.data_class,
             model: ModelBinding {
                 id: spec.model_ref.clone(),
                 provider: "local".to_string(),
-                model_id: "fixture".to_string(),
+                model_id: "pi".to_string(),
                 data_class: spec.limits.data_class,
                 retention: RetentionClass::FirstParty,
                 context_window: 1_000,
@@ -160,7 +214,7 @@ pub fn run_task(path: &Path) -> Result<RunResult, String> {
                 ));
             }
 
-            let command = format!("{} pi-fixture.sh", sh.display());
+            let command = format!("{} {}", pi.display(), args.join(" "));
             let chain = vec![
                 model_claim(
                     &attempt.task_id,
@@ -233,14 +287,6 @@ pub(crate) fn verdict_name(verdict: &CallVerdict) -> String {
         CallVerdict::Suspended => "Suspended".to_string(),
         CallVerdict::Deny { reason } => format!("Deny reason={reason}"),
     }
-}
-
-pub(crate) fn in_system(names: &[&str]) -> Result<PathBuf, String> {
-    names
-        .iter()
-        .map(PathBuf::from)
-        .find(|p| p.is_file())
-        .ok_or_else(|| format!("none of {names:?} exists on this system"))
 }
 
 pub(crate) fn unique_temp_path(kind: &str, extension: &str) -> Result<PathBuf, String> {
