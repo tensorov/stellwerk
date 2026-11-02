@@ -8,6 +8,19 @@
 //! строка не-JSON обязана стать `MalformedLine`. Импорт — публичный API, не `#[path]`:
 //! тот собрал бы вторую копию модуля и оставил реэкспорт непроверенным (F-14).
 
+use std::cell::Cell;
+use std::future::{ready, Future};
+use std::path::Path;
+use std::pin::Pin;
+
+use stellwerk_core::contract::{
+    DataClass, Event, ModelBinding, PolicyLevel, RetentionClass, RiskClass,
+};
+use stellwerk_gateway::permission::{PermissionError, ToolRisk};
+use stellwerk_store::{EventStore, SqliteStore};
+use stellwerk_task::runner::{
+    run_once, Call, CallAttempt, CallVerdict, ExecOutcome, RiskRegistry, Worker, WorkerError,
+};
 use stellwerk_task::runner::{stop_reason_from, StopFacts};
 use stellwerk_task::runner::{verdict_for, Progress, StopReason, Verdict};
 use stellwerk_task::runner::{EventSource, RunnerError};
@@ -426,4 +439,149 @@ impl EventSource for Fake {
     fn next_line(&mut self) -> Option<String> {
         self.0.next()
     }
+}
+
+// --- O02: `Suspended` и `Deny` — разные состояния с разной причиной в evidence ---
+
+/// Запусков не должно быть ни в одном случае: счётчик отделён от факта записи, иначе
+/// «воркер не вызван» прошёл бы и при молчащем раннере.
+struct FakeWorker {
+    launches: Cell<usize>,
+    registry: TestRegistry,
+}
+
+impl FakeWorker {
+    fn new() -> Self {
+        Self {
+            launches: Cell::new(0),
+            registry: TestRegistry,
+        }
+    }
+}
+
+type Exec<'a> = Pin<Box<dyn Future<Output = Result<ExecOutcome, WorkerError>> + Send + 'a>>;
+
+impl Worker for FakeWorker {
+    fn exec(&self, _workspace_ref: &str, _call: &Call) -> Exec<'_> {
+        self.launches.set(self.launches.get() + 1);
+        Box::pin(ready(Ok(ExecOutcome {
+            output: String::new(),
+        })))
+    }
+
+    fn spawned(&self) -> usize {
+        self.launches.get()
+    }
+
+    fn registry(&self) -> &dyn RiskRegistry {
+        &self.registry
+    }
+}
+
+/// Доверенный реестр: эффективный риск приходит отсюда, а не из самодекларации вызова.
+struct TestRegistry;
+
+impl RiskRegistry for TestRegistry {
+    fn risk_of(&self, tool: &str, module: &str) -> Result<ToolRisk, PermissionError> {
+        match (tool, module) {
+            ("r2", "fs") => Ok(ToolRisk::Classified(RiskClass::R2)),
+            _ => Err(PermissionError::TableIncomplete {
+                risk: RiskClass::R0,
+            }),
+        }
+    }
+}
+
+/// Binding, пропускающий `Public`: иначе отказ по данным замаскировал бы различие
+/// между «некому спросить» и «запрещено политикой».
+fn holds_any_data() -> ModelBinding {
+    ModelBinding {
+        id: "b".into(),
+        provider: "neuraldeep".into(),
+        model_id: "m".into(),
+        data_class: DataClass::Public,
+        retention: RetentionClass::FirstParty,
+        context_window: 200_000,
+        max_output: 8_000,
+        budget_tokens_per_task: 43_000,
+    }
+}
+
+fn attempt(task: &str, interactive: bool, caller: PolicyLevel) -> CallAttempt {
+    CallAttempt {
+        task_id: task.into(),
+        call: Call {
+            tool: "r2".into(),
+            module: "fs".into(),
+            risk: ToolRisk::Classified(RiskClass::R2),
+            data: DataClass::Public,
+            model: holds_any_data(),
+            interactive,
+        },
+        caller,
+        workspace_ref: "ws-stellwerk".into(),
+    }
+}
+
+/// Один и тот же неинтерактивный вызов R2: у `L3Maintainer` спросить некого, поэтому
+/// `Suspended`; у `L2Contributor` уровня не хватает, поэтому `Deny` с другой причиной.
+/// Тест ловит именно схлопывание двух фактов, а не отдельный отказ.
+#[tokio::test]
+async fn suspended_and_deny_are_distinct() {
+    let store = SqliteStore::open(Path::new(":memory:")).expect("открыто");
+    let worker = FakeWorker::new();
+    let task = "t-o02";
+    let waiting = attempt(task, false, PolicyLevel::L3Maintainer);
+    let refused = attempt(task, false, PolicyLevel::L2Contributor);
+
+    let paused = run_once(&waiting, &worker, &store).await.expect("пауза");
+    let denied = run_once(&refused, &worker, &store).await.expect("отказ");
+    assert_eq!(paused, CallVerdict::Suspended, "некому ответить");
+    assert!(matches!(denied, CallVerdict::Deny { .. }), "{denied:?}");
+    assert_eq!(
+        worker.spawned(),
+        0,
+        "ни пауза, ни отказ не запускают воркер"
+    );
+
+    let seen = store.list_by_task(task).await.expect("выборка");
+    let event_for = |caller: &str| -> &Event {
+        seen.iter()
+            .find(|event| {
+                event.event_type == "run.call"
+                    && event.payload.get("caller").map(String::as_str) == Some(caller)
+            })
+            .unwrap_or_else(|| panic!("нет чека для {caller}: {seen:?}"))
+    };
+    let paused_event = event_for("L3Maintainer");
+    let denied_event = event_for("L2Contributor");
+
+    // Статусы — ровно те имена, которые пишет production (`CallStatus::name`).
+    assert_eq!(
+        paused_event.payload.get("status").map(String::as_str),
+        Some("Suspended"),
+        "пауза записана не своим статусом"
+    );
+    assert_eq!(
+        denied_event.payload.get("status").map(String::as_str),
+        Some("Denied"),
+        "отказ записан не своим статусом"
+    );
+    assert_ne!(
+        paused_event.payload.get("status"),
+        denied_event.payload.get("status"),
+        "статусы схлопнулись"
+    );
+
+    let paused_reason = paused_event
+        .payload
+        .get("reason")
+        .expect("пауза без причины");
+    let denied_reason = denied_event
+        .payload
+        .get("reason")
+        .expect("отказ без причины");
+    assert!(!paused_reason.trim().is_empty(), "причина паузы пуста");
+    assert!(!denied_reason.trim().is_empty(), "причина отказа пуста");
+    assert_ne!(paused_reason, denied_reason, "причины схлопнулись");
 }
