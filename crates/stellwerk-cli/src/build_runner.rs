@@ -7,6 +7,7 @@
 //! команд: фильтра команд в этом срезе нет, и изображать его было бы хуже, чем назвать
 //! отсутствующим.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -114,6 +115,68 @@ fn copy_entries(from: &Path, to: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Файл кандидата: путь относительно `work` и SHA-256 фактических байтов. Кандидат
+/// не знает о репозитории и его истории — только о том, что лежит в workspace сейчас.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateFile {
+    pub path: String,
+    pub digest: String,
+}
+
+/// Все обычные файлы под `root` с digest байтов, кроме `.git`. Симлинки не
+/// раскрываются: чтение «за» них вынесло бы в кандидат содержимое вне workspace.
+fn workspace_files(root: &Path) -> io::Result<BTreeMap<PathBuf, ContentDigest>> {
+    let mut files = BTreeMap::new();
+    collect_files(root, Path::new(""), &mut files)?;
+    Ok(files)
+}
+
+fn collect_files(
+    root: &Path,
+    relative: &Path,
+    files: &mut BTreeMap<PathBuf, ContentDigest>,
+) -> io::Result<()> {
+    for entry in std::fs::read_dir(root.join(relative))? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name == ".git" {
+            continue;
+        }
+        let path = relative.join(&name);
+        let kind = std::fs::symlink_metadata(entry.path())?.file_type();
+        if kind.is_dir() {
+            collect_files(root, &path, files)?;
+        } else if kind.is_file() {
+            files.insert(path, ContentDigest::of(&std::fs::read(entry.path())?));
+        }
+    }
+    Ok(())
+}
+
+/// Файлы, чьи байты отличаются от снимка, или новые. Пути относительны `work` и
+/// отсортированы; удалённые файлы не представимы парой «путь + digest» и сюда не
+/// входят. `.git` отсекается ещё раз здесь, на границе кандидата.
+fn changed_files(
+    work: &Path,
+    before: &BTreeMap<PathBuf, ContentDigest>,
+) -> io::Result<Vec<CandidateFile>> {
+    let mut changed: Vec<CandidateFile> = workspace_files(work)?
+        .into_iter()
+        .filter(|(path, digest)| {
+            !path
+                .components()
+                .any(|part| part.as_os_str() == std::ffi::OsStr::new(".git"))
+                && before.get(path) != Some(digest)
+        })
+        .map(|(path, digest)| CandidateFile {
+            path: path.to_string_lossy().into_owned(),
+            digest: digest.as_hex().to_owned(),
+        })
+        .collect();
+    changed.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(changed)
 }
 
 /// Политика гейта для canary C. Возвращает `Some` всегда: `Unclassified` — это тоже
@@ -483,6 +546,9 @@ pub struct BuildOutcome {
     /// «агент ничего не сделал» сегодня видно в чеке, а не на экране: plan TUI поле пока
     /// не читает, и его показ — отдельный follow-up.
     pub decision: CallVerdict,
+    /// Кандидат коммита: изменённые файлы `work` с digest фактических байтов. Считается
+    /// по workspace, а не по истории: в кандидат попадает только то, что сделала сессия.
+    pub candidate: Vec<CandidateFile>,
 }
 
 /// Краткая запись решений гейта: что разрешено и на каком основании, что отклонено и
@@ -608,6 +674,7 @@ pub fn run_build(run: BuildRun<'_>, backend: &dyn ModelBackend) -> Result<BuildO
     let extension = work.join("stellwerk_transport.ts");
     std::fs::copy(run.extension, &extension)
         .map_err(|e| format!("расширение не скопировано: {e}"))?;
+    let snapshot = workspace_files(&work).map_err(|e| format!("снимок workspace: {e}"))?;
 
     let model = ModelProxy::bind(&sock).map_err(|e| format!("канал модели: {e}"))?;
     let gate = GateChannel::bind(&sock).map_err(|e| format!("канал гейта: {e}"))?;
@@ -652,7 +719,7 @@ pub fn run_build(run: BuildRun<'_>, backend: &dyn ModelBackend) -> Result<BuildO
     }
     args.push(prompt(run.request));
 
-    let home = work.join("home");
+    let home = run.root.join("home");
     std::fs::create_dir_all(&home).map_err(|e| format!("дом агента: {e}"))?;
     let worker = SandboxWorker::new(
         FixtureEngine::new("/bin/true"),
@@ -729,12 +796,14 @@ pub fn run_build(run: BuildRun<'_>, backend: &dyn ModelBackend) -> Result<BuildO
             .lock()
             .map_err(|_| "вывод прогона отравлен".to_string())?
             .clone();
+        let candidate = changed_files(&work, &snapshot).map_err(|e| format!("кандидат: {e}"))?;
         Ok(BuildOutcome {
             model_turns,
             gate_requests,
             gate,
             output,
             decision,
+            candidate,
         })
     })
 }

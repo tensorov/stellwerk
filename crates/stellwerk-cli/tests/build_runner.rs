@@ -13,7 +13,7 @@ use stellwerk_cli::build_runner::{
     BUILD_MODULE, BUILD_OFFERED,
 };
 use stellwerk_cli::plan::BuildRequest;
-use stellwerk_gateway::gate::decide;
+use stellwerk_gateway::gate::{decide, ContentDigest};
 use stellwerk_task::m5::gate_channel::{GateAnswer, GateChannel, GatePolicy, PolicyVerdict};
 use stellwerk_task::m5::model_transport::{
     BackendError, Frame, ModelBackend, ModelProxy, TurnMessage, TurnRequest,
@@ -251,13 +251,21 @@ fn the_build_does_not_offer_bash() {
     assert_eq!(BUILD_OFFERED.to_vec(), vec!["read", "edit", "write"]);
 
     let args = build_args(Path::new("/tmp/stellwerk_transport.ts"));
+    assert!(
+        args.iter().any(|arg| arg == "--no-builtin-tools"),
+        "read/edit/write — встроенные, явный список не нужен: {args:?}"
+    );
+    assert!(
+        !args.iter().any(|arg| arg == "--tools"),
+        "фильтрованный список не передаётся: {args:?}"
+    );
     let at = args
         .iter()
-        .position(|arg| arg == "--tools")
-        .expect("--tools назван явно");
+        .position(|arg| arg == "-e")
+        .expect("расширение названо явно");
     assert_eq!(
         args.get(at + 1).map(String::as_str),
-        Some("read,edit,write"),
+        Some("/tmp/stellwerk_transport.ts"),
         "аргументы: {args:?}"
     );
     assert!(
@@ -414,13 +422,20 @@ fn an_edit_reaches_the_copy_and_the_gate_authorizes_it() {
     )
     .expect("прогон");
 
+    let scope = outcome
+        .gate
+        .iter()
+        .find_map(|answer| match answer {
+            GateAnswer::Authorized { tool, scope } if tool == "edit" => Some(scope.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("ожидалось Authorized для edit: {:?}", outcome.gate));
+    let digest = scope
+        .strip_prefix("src/lib.rs#sha256:")
+        .unwrap_or_else(|| panic!("scope называет путь и digest: {scope}"));
     assert!(
-        outcome
-            .gate
-            .iter()
-            .any(|answer| matches!(answer, GateAnswer::Allow { tool } if tool == "edit")),
-        "журнал гейта: {:?}",
-        outcome.gate
+        ContentDigest::parse(digest).is_ok(),
+        "digest в scope — 64 hex: {scope}"
     );
     assert!(
         !outcome.output.contains("gate_denied"),
@@ -433,6 +448,81 @@ fn an_edit_reaches_the_copy_and_the_gate_authorizes_it() {
     assert!(
         original.contains("{ 1 }"),
         "репозиторий не тронут: {original}"
+    );
+}
+
+/// C: кандидат собирается из байтов workspace, а не из истории репозитория. После
+/// правки в нём ровно изменённый файл с digest фактических байтов; неизменённый
+/// манифест, копия расширения и `.git` в кандидат не попадают.
+#[test]
+fn candidate_contains_only_changed_workspace_files() {
+    let (repo, root) = repo("candidate");
+    let call = Frame::ToolCall {
+        id: "call-1".to_string(),
+        name: "edit".to_string(),
+        input: json!({
+            "path": "src/lib.rs",
+            "edits": [{
+                "oldText": "pub fn one() -> u8 { 1 }",
+                "newText": "pub fn one() -> u8 { 2 }"
+            }]
+        }),
+    };
+    let backend = Scripted(Mutex::new(VecDeque::from([
+        vec![call],
+        vec![Frame::Text {
+            text: "ok".to_string(),
+        }],
+    ])));
+    let outcome = run_build(
+        BuildRun {
+            request: &request(),
+            repo: &repo,
+            root: &root,
+            extension: &extension(),
+            pi: &pi(),
+        },
+        &backend,
+    )
+    .expect("прогон");
+
+    let expected = ContentDigest::of(b"pub fn one() -> u8 { 2 }\n");
+    assert_eq!(
+        outcome.candidate.len(),
+        1,
+        "кандидат: {:?}",
+        outcome.candidate
+    );
+    let entry = &outcome.candidate[0];
+    assert_eq!(
+        entry.path, "src/lib.rs",
+        "кандидат: {:?}",
+        outcome.candidate
+    );
+    assert_eq!(entry.digest, expected.as_hex(), "digest фактических байтов");
+
+    let paths: Vec<&str> = outcome
+        .candidate
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
+    assert!(
+        !paths.iter().any(|path| path.contains(".git")),
+        "история не в кандидате: {paths:?}"
+    );
+    assert!(
+        !paths.contains(&"stellwerk_transport.ts"),
+        "копия расширения — состояние харнесса, не правка: {paths:?}"
+    );
+    assert!(
+        paths.iter().all(|path| {
+            let candidate = Path::new(path);
+            !candidate.is_absolute()
+                && !candidate
+                    .components()
+                    .any(|part| part == std::path::Component::ParentDir)
+        }),
+        "пути только относительные и без `..`: {paths:?}"
     );
 }
 
