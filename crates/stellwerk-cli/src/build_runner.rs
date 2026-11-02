@@ -318,16 +318,15 @@ pub fn serve_gate_until_stopped(
     policy: &dyn GatePolicy,
     stop: &AtomicBool,
 ) -> io::Result<usize> {
-    serve_gate_until_stopped_logged(gate, session, policy, stop).map(|(served, _)| served)
+    serve_gate(gate, session, policy, stop, None).map(|(served, _)| served)
 }
 
-/// То же, но с журналом решений: «заявок ноль» и «все разрешены» различимы только
-/// вместе с ответами.
-pub fn serve_gate_until_stopped_logged(
+fn serve_gate(
     gate: &GateChannel,
     session: &SessionDescription,
     policy: &dyn GatePolicy,
     stop: &AtomicBool,
+    root: Option<&Path>,
 ) -> io::Result<(usize, Vec<GateAnswer>)> {
     let mut served = 0;
     let mut answers = Vec::new();
@@ -336,11 +335,37 @@ pub fn serve_gate_until_stopped_logged(
         if status != GateServed::NoRequest {
             served += 1;
         }
-        if let Some(decision) = decision {
-            answers.push(decision.into_answer());
+        let Some(decision) = decision else {
+            continue;
+        };
+        // Применяется только то, что гейт назвал `AuthorizedCall`; `Allow` и прочие
+        // ответы писать нечего. Отказ хоста — ошибка потока, а не пропущенный ответ.
+        if decision.authorized().is_some() {
+            let root = root.ok_or_else(|| {
+                io::Error::other("authorized call without a workspace root cannot be applied")
+            })?;
+            apply_gate_decision(root, &decision).map_err(host_refusal)?;
         }
+        answers.push(decision.into_answer());
     }
     Ok((served, answers))
+}
+
+fn host_refusal(refusal: HostRefusal) -> io::Error {
+    io::Error::other(format!("применение авторизованного вызова: {refusal:?}"))
+}
+
+/// То же, но с журналом решений и применением авторизованной записи к `root`:
+/// «заявок ноль» и «все разрешены» различимы только вместе с ответами, а успех
+/// записи — только по фактическим байтам в workspace.
+pub fn serve_gate_until_stopped_logged(
+    gate: &GateChannel,
+    session: &SessionDescription,
+    policy: &dyn GatePolicy,
+    stop: &AtomicBool,
+    root: &Path,
+) -> io::Result<(usize, Vec<GateAnswer>)> {
+    serve_gate(gate, session, policy, stop, Some(root))
 }
 
 /// Обслуживает канал модели по тому же правилу остановки.
@@ -855,7 +880,7 @@ pub fn run_build(run: BuildRun<'_>, backend: &dyn ModelBackend) -> Result<BuildO
     std::thread::scope(|scope| -> Result<BuildOutcome, String> {
         let model_thread = scope.spawn(|| serve_model_until_stopped(&model, backend, &stop));
         let gate_thread =
-            scope.spawn(|| serve_gate_until_stopped_logged(&gate, &held, &policy, &stop));
+            scope.spawn(|| serve_gate_until_stopped_logged(&gate, &held, &policy, &stop, &work));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

@@ -5,16 +5,21 @@
 //! такого значения не несут. Поэтому голое разрешение нельзя применить как запись —
 //! не по соглашению, а потому что применять нечего.
 
+use std::io::{BufRead, BufReader, Write};
+use std::net::Shutdown;
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use stellwerk_cli::build_runner::{apply_gate_decision, HostRefusal};
+use stellwerk_cli::build_runner::{
+    apply_gate_decision, serve_gate_until_stopped_logged, wake, HostRefusal,
+};
 use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, RetentionClass, RiskClass};
 use stellwerk_gateway::gate::{CallRequest, ContentDigest};
 use stellwerk_gateway::permission::ToolRisk;
 use stellwerk_task::m5::gate_channel::{
-    decide_request, AllowBasis, GateAnswer, GatePolicy, GateRequest, PolicyVerdict,
+    decide_request, AllowBasis, GateAnswer, GateChannel, GatePolicy, GateRequest, PolicyVerdict,
 };
 use stellwerk_task::m5::session_identity::{
     Adjudication, CodemodeState, SessionDescription, ToolSet,
@@ -177,5 +182,58 @@ fn a_path_outside_the_workspace_is_refused_without_writing() {
             .join(format!("{name}-outside.txt"))
             .exists(),
         "файл вне workspace не создан"
+    );
+}
+
+#[test]
+fn authorized_gate_decision_is_applied_by_the_host() {
+    let root = scratch("served");
+    std::fs::write(root.join("src/note.txt"), b"before").expect("файл");
+    let channel = GateChannel::bind(&root).expect("канал гейта");
+    let socket = channel.socket().to_path_buf();
+    let stop = AtomicBool::new(false);
+    let held = session(&["read", "write", "edit"]);
+    let policy = WriteRisk;
+    let body = "after: the host applied the authorized write";
+    let claimed = ContentDigest::of(body.as_bytes());
+    let frame = serde_json::json!({
+        "kind": "tool_call",
+        "tool": "write",
+        "parent_tool_call_id": null,
+        "path": "src/note.txt",
+        "argument": body,
+        "content_digest": claimed.as_hex(),
+    });
+
+    std::thread::scope(|scope| {
+        let servant =
+            scope.spawn(|| serve_gate_until_stopped_logged(&channel, &held, &policy, &stop, &root));
+        let mut stream = UnixStream::connect(&socket).expect("клиент подключается");
+        stream
+            .write_all(format!("{frame}\n").as_bytes())
+            .expect("заявка записана");
+        stream.shutdown(Shutdown::Write).expect("запись закрыта");
+        let answers: Vec<GateAnswer> = BufReader::new(stream)
+            .lines()
+            .map(|line| serde_json::from_str(&line.expect("ответ читается")).expect("ответ — кадр"))
+            .collect();
+        assert_eq!(answers.len(), 1, "ровно один ответ: {answers:?}");
+        assert!(
+            matches!(answers[0], GateAnswer::Authorized { .. }),
+            "гейт авторизовал запись: {answers:?}"
+        );
+        stop.store(true, Ordering::SeqCst);
+        wake(&socket).expect("пробуждение");
+        let (served, gate) = servant.join().expect("поток гейта").expect("служба гейта");
+        assert_eq!(served, 1, "заявка обслужена");
+        assert_eq!(gate, answers, "журнал решений совпадает с ответом");
+    });
+
+    let written = std::fs::read(root.join("src/note.txt")).expect("файл после записи");
+    assert_eq!(written, body.as_bytes(), "файл изменён хостом");
+    assert_eq!(
+        ContentDigest::of(&written).as_hex(),
+        claimed.as_hex(),
+        "digest после записи равен авторизованному"
     );
 }

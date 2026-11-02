@@ -1,6 +1,6 @@
 // N2-00f: единственное расширение Pi внутри песочницы: два хостовых AF_UNIX, без сети и ключа.
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
 import {
   getCurrentSystemPrompt,
@@ -108,36 +108,34 @@ async function authorize(tool: string, path: string | undefined, signal?: AbortS
   return verdict({ kind: "tool_call", tool, parent_tool_call_id: null, path }, signal);
 }
 
-async function hostCall(tool: string, params: unknown, signal?: AbortSignal): Promise<{ block: true; reason: string } | undefined> {
-  const argument = JSON.stringify(params);
-  const frame: Frame = { kind: "tool_call", tool, parent_tool_call_id: null, path: pathOf(params), argument };
-  if (tool === "write" || tool === "edit") {
+async function hostCall(
+  tool: string,
+  path: string | undefined,
+  argument: string,
+  writable: boolean,
+  signal?: AbortSignal,
+): Promise<{ block: true; reason: string } | undefined> {
+  const frame: Frame = { kind: "tool_call", tool, parent_tool_call_id: null, path, argument };
+  if (writable) {
     frame.content_digest = createHash("sha256").update(argument).digest("hex");
   }
   return verdict(frame, signal);
 }
 
 type ReadParams = { path: string };
-type WriteParams = { path: string; content: string };
 type EditParams = { path: string; edits: { oldText: string; newText: string }[] };
 
 function readHost(params: ReadParams): string {
   return readFileSync(params.path, "utf8");
 }
 
-function writeHost(params: WriteParams): string {
-  writeFileSync(params.path, params.content, "utf8");
-  return `wrote ${Buffer.byteLength(params.content)} bytes to ${params.path}`;
-}
-
-function editHost(params: EditParams): string {
+function finalEditText(params: EditParams): string {
   let text = readFileSync(params.path, "utf8");
   for (const edit of params.edits) {
     if (!text.includes(edit.oldText)) throw new Error(`edit: oldText not found in ${params.path}`);
     text = text.replace(edit.oldText, edit.newText);
   }
-  writeFileSync(params.path, text, "utf8");
-  return `edited ${params.path}`;
+  return text;
 }
 
 function success(tool: string, path: string, text: string) {
@@ -327,7 +325,7 @@ export default function stellwerk(pi: ExtensionAPI): void {
     description: "Read a file from the host workspace after the Stellwerk gate approves the call.",
     parameters: Type.Object({ path: Type.String({ description: "Path to read" }) }),
     async execute(_toolCallId, params, signal) {
-      const blocked = await hostCall("read", params, signal);
+      const blocked = await hostCall("read", params.path, JSON.stringify(params), false, signal);
       if (blocked) return failure("read", params.path, blocked.reason);
       try {
         return success("read", params.path, readHost(params));
@@ -348,13 +346,15 @@ export default function stellwerk(pi: ExtensionAPI): void {
       })),
     }),
     async execute(_toolCallId, params, signal) {
-      const blocked = await hostCall("edit", params, signal);
-      if (blocked) return failure("edit", params.path, blocked.reason);
+      let text: string;
       try {
-        return success("edit", params.path, editHost(params));
+        text = finalEditText(params);
       } catch (error) {
         return failure("edit", params.path, `edit_failed:${describe(error)}`);
       }
+      const blocked = await hostCall("edit", params.path, text, true, signal);
+      if (blocked) return failure("edit", params.path, blocked.reason);
+      return success("edit", params.path, `host edits ${params.path}`);
     },
   }));
   pi.registerTool(defineTool({
@@ -366,13 +366,9 @@ export default function stellwerk(pi: ExtensionAPI): void {
       content: Type.String({ description: "Exact bytes to write" }),
     }),
     async execute(_toolCallId, params, signal) {
-      const blocked = await hostCall("write", params, signal);
+      const blocked = await hostCall("write", params.path, params.content, true, signal);
       if (blocked) return failure("write", params.path, blocked.reason);
-      try {
-        return success("write", params.path, writeHost(params));
-      } catch (error) {
-        return failure("write", params.path, `write_failed:${describe(error)}`);
-      }
+      return success("write", params.path, `host writes ${Buffer.byteLength(params.content)} bytes to ${params.path}`);
     },
   }));
   // Хостовые инструменты сами отправляют полный вызов; второй пояс остаётся для
