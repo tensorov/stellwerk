@@ -15,6 +15,7 @@
 
 use crate::runner::{RunOutcome, Verdict};
 use sha2::{Digest, Sha256};
+use stellwerk_core::contract::TaskStatus;
 use thiserror::Error;
 
 pub use stellwerk_core::contract::{EvidenceEntry, EvidenceKind, GateResult};
@@ -134,6 +135,76 @@ pub fn validation(
         policy_digest: None,
         model_fingerprint: None,
         commit_sha: None,
+    }
+}
+
+/// Почему опровержение отвергнуто. Отдельный тип, а не `()`: у опровержения без
+/// основания и у опровержения без ссылки на данные РАЗНЫЕ причины, и слитая
+/// причина неотличима от неразобранной (закон 6).
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum RefutationError {
+    /// Основание не названо. Опровержение без основания неотличимо от отказа без
+    /// причины, поэтому это отказ, а не молчаливый дефолт.
+    #[error(
+        "refutation without a stated basis: a refutation must name why the evidence is refuted"
+    )]
+    MissingBasis,
+    /// Ссылка на опровергающие данные не названа. Проверять опровержение не по
+    /// чему, поэтому запись не принимается.
+    #[error("refutation without a reference to refuting data: the refutation must point at the data that refute the claim")]
+    MissingRefutingData,
+}
+
+/// Принятое опровержение: названное основание ПЛЮС ссылка на опровергающие данные.
+/// Оба поля сохраняются: выброшенная ссылка оставила бы опровержение, которое
+/// нечем сверить с данными, и оно снова стало бы неотличимо от отказа.
+///
+/// Это `TaskStatus`-уровень, а не новый `EvidenceKind`: `contract.rs` объявляет
+/// `TaskStatus::Refuted`, и дублировать его видом записи значило бы завести второе
+/// определение одного понятия. `status()` возвращает именно `Refuted`, а не
+/// `Failed`: провал прогона и человеческое опровержение — разные факты.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refutation {
+    basis: String,
+    refuting_data: String,
+}
+
+/// Собрать опровержение. Основание и ссылка на опровергающие данные обязаны быть
+/// непустыми после `trim`: пустая строка и пробелы — это отсутствие значения, а
+/// не основание (закон 6).
+pub fn refutation(basis: &str, refuting_data: &str) -> Result<Refutation, RefutationError> {
+    let basis = basis.trim();
+    if basis.is_empty() {
+        return Err(RefutationError::MissingBasis);
+    }
+    let refuting_data = refuting_data.trim();
+    if refuting_data.is_empty() {
+        return Err(RefutationError::MissingRefutingData);
+    }
+    Ok(Refutation {
+        basis: basis.to_owned(),
+        refuting_data: refuting_data.to_owned(),
+    })
+}
+
+impl Refutation {
+    /// Статус, в который переводит принятое опровержение. `Refuted` терминален и
+    /// отличен от `Failed`: опровергается предъявленное доказательство, а не
+    /// прогон.
+    pub fn status(&self) -> TaskStatus {
+        TaskStatus::Refuted
+    }
+
+    /// Названное основание. Сохраняется целиком: основание — это то, по чему
+    /// опровержение можно проверить, а не пометка «опровергнуто».
+    pub fn basis(&self) -> &str {
+        &self.basis
+    }
+
+    /// Ссылка на опровергающие данные. Не теряется: без неё опровержение нечем
+    /// сверить с данными.
+    pub fn refuting_data(&self) -> &str {
+        &self.refuting_data
     }
 }
 
