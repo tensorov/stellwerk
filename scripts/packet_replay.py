@@ -247,9 +247,6 @@ def canonical_files(root: Path) -> list[Path]:
             continue
         if '.omo' in path.parts:
             continue
-        # Exclude M1, M3 (restored C7 docs) to match expected count of 50
-        if path.parent.name in ('M1', 'M3'):
-            continue
         found.append(path)
     return found
 

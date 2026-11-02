@@ -271,3 +271,34 @@ fn counts_match_fixture_not_brief_heuristics() {
         stdout
     );
 }
+
+/// 10. M1 и M3 пакеты не фильтруются — сканируются как все остальные.
+#[test]
+fn m1_and_m3_packets_are_not_filtered() {
+    let dir = fixture();
+    write_packet(
+        &dir,
+        "M1",
+        "packet-05.md",
+        "# packet-05\ngoal: M1 пакет\ntest: cargo test -p stellwerk-core --test m1_case\n",
+    );
+    write_packet(
+        &dir,
+        "M3",
+        "packet-01.md",
+        "# packet-01\ngoal: M3 пакет\ntest: cargo test -p stellwerk-store --test m3_case\n",
+    );
+
+    let (stdout, _, ok) = run(&["inventory", "--root", dir.to_str().unwrap()]);
+    assert!(ok, "инвентарь должен строиться: {}", stdout);
+    assert!(
+        stdout.contains("m1_case"),
+        "M1/packet-05 должен быть в инвентаре: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("m3_case"),
+        "M3/packet-01 должен быть в инвентаре: {}",
+        stdout
+    );
+}
