@@ -52,9 +52,9 @@ pub enum GateAnswer {
     Allow {
         tool: String,
     },
-    /// Таблица разрешила, и у разрешения есть названное основание: путь совпал с
-    /// записью утверждённого плана. Отдельное состояние, а не `Allow`: «разрешено
-    /// таблицей» и «разрешено планом владельца» — разные факты.
+    /// Разрешение на запись с названным основанием: путь из таблицы рисков или
+    /// запись утверждённого плана, каждый вместе с digest содержимого. Отдельное
+    /// состояние, а не `Allow`: запись разрешает только `AuthorizedCall`.
     Authorized {
         tool: String,
         scope: String,
@@ -261,7 +261,30 @@ fn answer_for(
             // База только аннотирует разрешение таблицы и никогда его не подменяет:
             // если таблица сказала Ask или Deny, основание не превращает это в Allow.
             Verdict::Allow => match basis {
-                AllowBasis::RiskTable => GateAnswer::Allow { tool },
+                // Таблица рисков разрешает пару (tool, path), а не содержимое:
+                // пишущий вызов с путём получает `AuthorizedCall`, связанный с
+                // digest, поэтому подмена файла после решения не пройдёт под тем же
+                // `scope`. Без digest разрешения на запись нет.
+                AllowBasis::RiskTable => match requested.as_ref() {
+                    Some(requested) => {
+                        let scope = request.path.as_deref().unwrap_or_default();
+                        match authorize_write(requested, scope) {
+                            CallDecision::Authorized(authorized) => GateAnswer::Authorized {
+                                tool,
+                                scope: authorized.scope().to_owned(),
+                            },
+                            CallDecision::Refused { reason } => GateAnswer::Deny { tool, reason },
+                        }
+                    }
+                    None if writes_content(&request.tool) && request.path.is_some() => {
+                        let path = request.path.as_deref().unwrap_or_default();
+                        GateAnswer::Deny {
+                            tool,
+                            reason: format!("write_without_content_digest: `{}` with path `{path}` cannot be authorized without a content digest", request.tool),
+                        }
+                    }
+                    None => GateAnswer::Allow { tool },
+                },
                 // Разрешение записи выдаётся только через `AuthorizedCall`: он
                 // связан с digest проверенного содержимого, поэтому замена файла
                 // после авторизации не пройдёт под тем же `scope`.

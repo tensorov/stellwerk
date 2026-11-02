@@ -9,7 +9,7 @@ use std::time::Duration;
 use stellwerk_core::contract::PolicyLevel::L5Owner;
 use stellwerk_core::contract::RiskClass::{R0, R1, R2, R5};
 use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, RetentionClass, RiskClass};
-use stellwerk_gateway::gate::CallRequest;
+use stellwerk_gateway::gate::{CallRequest, ContentDigest};
 use stellwerk_gateway::permission::ToolRisk;
 use stellwerk_task::m5::gate_channel::{
     AllowBasis, GateAnswer, GateChannel, GatePolicy, GateServed, PolicyVerdict, RefusalCode,
@@ -71,10 +71,14 @@ fn binding() -> ModelBinding {
 }
 
 fn session() -> SessionDescription {
+    session_with(&["read"])
+}
+
+fn session_with(tools: &[&str]) -> SessionDescription {
     SessionDescription::new(
         "session-1",
         &std::env::temp_dir(),
-        ToolSet::listed(&["read"]).expect("набор инструментов"),
+        ToolSet::listed(tools).expect("набор инструментов"),
         Duration::from_secs(60),
         CodemodeState::AbsentAfterConfigLoad,
     )
@@ -101,12 +105,13 @@ fn scripted(risk: Option<ToolRisk>, interactive: bool) -> Arc<Scripted> {
     })
 }
 
-fn serve(
+fn serve_in(
     gate: &Arc<GateChannel>,
     policy: Arc<dyn GatePolicy>,
+    session: SessionDescription,
 ) -> std::thread::JoinHandle<Result<GateServed, Error>> {
     let gate = Arc::clone(gate);
-    std::thread::spawn(move || gate.serve_once(&session(), policy.as_ref()))
+    std::thread::spawn(move || gate.serve_once(&session, policy.as_ref()))
 }
 
 fn exchange(
@@ -114,7 +119,16 @@ fn exchange(
     policy: Arc<dyn GatePolicy>,
     payload: impl AsRef<[u8]>,
 ) -> (Vec<GateAnswer>, GateServed) {
-    let handle = serve(gate, policy);
+    exchange_in(gate, policy, payload, session())
+}
+
+fn exchange_in(
+    gate: &Arc<GateChannel>,
+    policy: Arc<dyn GatePolicy>,
+    payload: impl AsRef<[u8]>,
+    session: SessionDescription,
+) -> (Vec<GateAnswer>, GateServed) {
+    let handle = serve_in(gate, policy, session);
     let mut stream = UnixStream::connect(gate.socket()).expect("клиент подключается");
     stream.write_all(payload.as_ref()).expect("заявка записана");
     stream.shutdown(Shutdown::Write).expect("запись закрыта");
@@ -428,5 +442,64 @@ fn a_plan_basis_does_not_override_ask() {
     assert!(
         matches!(&answers[..], [GateAnswer::Ask { .. }]),
         "основание не превращает Ask в Authorized: {answers:?}"
+    );
+}
+
+fn write_request(tool: &str, path: &str, argument: Option<&str>, digest: Option<&str>) -> Vec<u8> {
+    let mut frame = serde_json::json!({
+        "kind": "tool_call",
+        "tool": tool,
+        "parent_tool_call_id": serde_json::Value::Null,
+        "path": path,
+    });
+    if let Some(argument) = argument {
+        frame["argument"] = serde_json::json!(argument);
+    }
+    if let Some(digest) = digest {
+        frame["content_digest"] = serde_json::json!(digest);
+    }
+    let mut bytes = serde_json::to_vec(&frame).expect("кадр — JSON");
+    bytes.push(b'\n');
+    bytes
+}
+
+/// `Allow` таблицы рисков — не разрешение на запись: пишущий вызов с путём
+/// получает `Authorized`, связанный с digest содержимого, либо названный отказ.
+#[test]
+fn risk_table_allow_of_write_requires_content_digest() {
+    let argument = "fn main() {}\n";
+    let digest = ContentDigest::of(argument.as_bytes());
+    let gate = channel("risk-write-digest");
+    let policy = scripted(Some(ToolRisk::Classified(R0)), true);
+    let (answers, _) = exchange_in(
+        &gate,
+        policy,
+        write_request("edit", "src/lib.rs", Some(argument), Some(digest.as_hex())),
+        session_with(&["edit"]),
+    );
+    assert!(
+        matches!(
+            &answers[..],
+            [GateAnswer::Authorized { tool, scope }]
+                if tool == "edit" && scope.contains(digest.as_hex())
+        ),
+        "таблица рисков не разрешает запись без AuthorizedCall, связанного с digest: {answers:?}"
+    );
+
+    let gate = channel("risk-write-no-digest");
+    let policy = scripted(Some(ToolRisk::Classified(R0)), true);
+    let (answers, _) = exchange_in(
+        &gate,
+        policy,
+        write_request("edit", "src/lib.rs", None, None),
+        session_with(&["edit"]),
+    );
+    assert!(
+        matches!(
+            &answers[..],
+            [GateAnswer::Deny { tool, reason }]
+                if tool == "edit" && reason.contains("write_without_content_digest")
+        ),
+        "пишущий вызов с путём без digest — Deny с названной причиной: {answers:?}"
     );
 }
