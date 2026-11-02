@@ -1,3 +1,4 @@
+use crate::execution::{EngineProfile, REGISTRY};
 use serde::{Deserialize, Serialize};
 use stellwerk_core::contract::{DataClass, TaskLimits, TaskSpec};
 use thiserror::Error;
@@ -12,6 +13,20 @@ pub enum TaskFileError {
     Parse(#[from] toml::de::Error),
     #[error("validation error: {0}")]
     Validation(String),
+    /// Поле `profile` не названо вовсе. Отдельный вариант, а не `Validation`:
+    /// отсутствие данных — состояние, отличное от неверного значения, и
+    /// подставленное `pi` сделало бы отказ неотличимым от согласия.
+    #[error("task.toml does not name `profile`: the engine profile must be explicit")]
+    MissingProfile,
+    /// Профиль назван, но реестр этой сборки его не разрешает. Значение
+    /// прочитано и отвергнуто — это не то же, что отсутствие поля.
+    #[error("profile `{profile}` is not allowed: registry holds {known:?}")]
+    UnknownProfile {
+        /// Названное, но не разрешённое значение.
+        profile: String,
+        /// Что вообще разрешено в этой сборке.
+        known: Vec<String>,
+    },
     /// Файл не прочитан. Отдельный вариант, а не Validation: отсутствие файла —
     /// это операционная ошибка, и путать её с опечаткой в содержимом нельзя.
     #[error("io error: {0}")]
@@ -37,6 +52,11 @@ pub struct TaskFileSpec {
     pub workspace_ref: String,
     pub model_ref: String,
     pub packet: String,
+    /// Названный движок. `None` — поля нет; это НЕ `pi` по умолчанию, а
+    /// отсутствие данных, которое `resolve` превращает в `MissingProfile`.
+    /// `#[serde(default)]` здесь намеренно нет: умолчание стёрло бы разницу
+    /// между «не названо» и «названо явно».
+    pub profile: Option<String>,
     #[serde(default)]
     pub limits: TaskFileLimits,
     #[serde(default)]
@@ -89,8 +109,30 @@ impl TaskFile {
         Self::from_toml_str(&raw)
     }
 
+    /// Разрешить названный профиль против реестра этой сборки.
+    ///
+    /// Отсутствие поля (`None`) — `MissingProfile`, а не подстановка `pi`.
+    /// Названное значение ищется в `REGISTRY`, единственном источнике истины о
+    /// разрешённых движках; `UnknownProfile` называет отклонённое имя и то, что
+    /// вообще разрешено. Двух разных отказов достаточно, чтобы «не названо» и
+    /// «названо неверно» нельзя было перепутать.
+    pub fn resolve(&self) -> Result<&'static EngineProfile, TaskFileError> {
+        let Some(profile) = self.spec.profile.as_deref() else {
+            return Err(TaskFileError::MissingProfile);
+        };
+        REGISTRY
+            .find(profile)
+            .ok_or_else(|| TaskFileError::UnknownProfile {
+                profile: profile.to_owned(),
+                known: REGISTRY.engines(),
+            })
+    }
+
     fn validate(&self) -> Result<(), TaskFileError> {
         let t = &self.spec;
+        // Профиль называется первым: без движка задача не исполнима, и отказ
+        // обязан быть про отсутствие/неверный профиль, а не про лимиты.
+        self.resolve()?;
         let bad = |m: String| Err(TaskFileError::Validation(m));
         if t.id.trim().is_empty() {
             return bad("id обязан быть непустым".into());

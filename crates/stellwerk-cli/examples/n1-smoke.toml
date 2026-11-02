@@ -4,6 +4,7 @@ goal = "echo hello"
 workspace_ref = "ws-n1"
 model_ref = "m-n1"
 packet = "N1-01"
+profile = "pi"
 evidence_policy = "tool_attestation"
 
 [task.limits]

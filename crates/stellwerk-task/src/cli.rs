@@ -318,6 +318,7 @@ mod tests {
              workspace_ref = \"ws-cli\"\n\
              model_ref = \"m-default\"\n\
              packet = \"M2/packet-04\"\n\
+             profile = \"pi\"\n\
              limits = {{ max_files = 3, max_diff_lines = 50, timeout_seconds = 60,\n\
              max_retries = 1, context_budget_tokens = 1000, data_class = \"internal\" }}\n"
         );
