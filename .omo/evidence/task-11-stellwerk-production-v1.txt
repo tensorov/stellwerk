@@ -76,3 +76,12 @@ diffstat: 3 files changed, 235 insertions(+), 12 deletions(-)
 
 ===== COMMIT =====
 5bd77cf feat(pi): host-executed tools via registerTool
+a61badd chore(evidence): attest V1/r03
+
+===== GATE =====
+evidence_append(ModelClaim) -> entry 319, state ModelClaimed
+evidence_verify(cargo test -p stellwerk-task --test pi_transport)
+  -> entry 320, state Verified, exit_code 0
+gate_evaluate(required=["Verified"])
+  -> passed=true, verified=1, missing=[]
+chain_tail=8e4f8db03e973032d64623283d1b41544ed67ba7e6c4fa4e39e203469be8b312
