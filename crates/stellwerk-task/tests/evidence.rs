@@ -85,6 +85,17 @@ fn attested_and_human_validated() -> Vec<EvidenceEntry> {
     chain
 }
 
+/// Все три вида на месте, но удостоверение записано раньше утверждения модели.
+/// Присутствие звеньев не заменяет их порядок: перестановка доказательств — это
+/// другая цепочка.
+fn wrong_order() -> Vec<EvidenceEntry> {
+    vec![
+        tool_attestation(TASK, "e-tool", TEST_CMD, "h-tool", TS),
+        claim("e-claim", "h-claim"),
+        validation(TASK, "e-validation", TEST_CMD, "h-tool", TS),
+    ]
+}
+
 fn assert_entry(
     entry: &EvidenceEntry,
     id: &str,
@@ -151,6 +162,97 @@ fn validation_without_tool_attestation_does_not_pass() {
         1,
         "валидация условие выполняет — отсутствует ровно одно, и коллапс двух причин \
          в одну выдал бы ложную полноту: {:?}",
+        gate.missing
+    );
+}
+
+#[test]
+fn correct_order_closes_the_gate() {
+    let gate = evaluate(&outcome(Verdict::Valid), &attested_and_validated());
+    assert!(
+        gate.passed,
+        "цепочка ModelClaim → ToolAttestation → Validation обязана закрывать гейт: {:?}",
+        gate.missing
+    );
+    assert!(
+        gate.missing.is_empty(),
+        "у закрытого гейта нет причин отказа: {:?}",
+        gate.missing
+    );
+}
+
+#[test]
+fn wrong_order_is_refused_and_names_the_expected_order() {
+    let gate = evaluate(&outcome(Verdict::Valid), &wrong_order());
+    assert!(
+        !gate.passed,
+        "все три вида на месте, но перестановка звеньев — это другая цепочка: {:?}",
+        gate.missing
+    );
+    assert!(
+        gate.missing
+            .iter()
+            .any(|reason| reason.contains("ModelClaim")
+                && reason.contains("ToolAttestation")
+                && reason.contains("Validation")),
+        "причина обязана назвать ожидаемый порядок, а не просто «неверно»: {:?}",
+        gate.missing
+    );
+    assert!(
+        gate.missing.iter().all(|reason| !reason.trim().is_empty()),
+        "пустая строка причины значит «не посчитали»: {:?}",
+        gate.missing
+    );
+}
+
+#[test]
+fn tool_attestation_without_command_is_refused() {
+    let chain = vec![
+        claim("e-1", "h-claim"),
+        tool_attestation(TASK, "e-2", "", "h-tool", TS),
+        validation(TASK, "e-3", TEST_CMD, "h-tool", TS),
+    ];
+    let gate = evaluate(&outcome(Verdict::Valid), &chain);
+    assert!(
+        !gate.passed,
+        "удостоверение без команды не называет записанный запуск: {:?}",
+        gate.missing
+    );
+    assert!(
+        gate.missing.iter().any(|reason| reason.contains("команд")),
+        "отказ обязан назвать пустую команду, а не молчать: {:?}",
+        gate.missing
+    );
+    assert!(
+        gate.missing.iter().all(|reason| !reason.trim().is_empty()),
+        "пустая строка причины значит «не посчитали»: {:?}",
+        gate.missing
+    );
+}
+
+#[test]
+fn present_entry_without_digest_is_refused() {
+    let chain = vec![
+        claim("e-1", ""),
+        tool_attestation(TASK, "e-2", TEST_CMD, "h-tool", TS),
+        validation(TASK, "e-3", TEST_CMD, "h-tool", TS),
+    ];
+    let gate = evaluate(&outcome(Verdict::Valid), &chain);
+    assert!(
+        !gate.passed,
+        "звено без digest не удостоверяет, что результат не подменён: {:?}",
+        gate.missing
+    );
+    assert!(
+        gate.missing
+            .iter()
+            .any(|reason| reason.contains("digest") && reason.contains("e-1")),
+        "отказ обязан назвать запись без digest: {:?}",
+        gate.missing
+    );
+    assert!(
+        gate.missing.iter().all(|reason| !reason.trim().is_empty()),
+        "пустая строка причины значит «не посчитали»: {:?}",
         gate.missing
     );
 }

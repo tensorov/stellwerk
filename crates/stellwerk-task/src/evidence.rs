@@ -193,6 +193,12 @@ fn is_human_validation(entry: &EvidenceEntry) -> bool {
     entry.kind == EvidenceKind::Validation && entry.command != FIXTURE_VALIDATION_LABEL
 }
 
+/// Первый индекс записи нужного вида, `None` — вида нет. Отдельный `Option`, а не
+/// `0`: отсутствующее звено не должно выглядеть как звено в начале цепочки.
+fn first_index(chain: &[EvidenceEntry], kind: EvidenceKind) -> Option<usize> {
+    chain.iter().position(|entry| entry.kind == kind)
+}
+
 /// Решение этапного gate'а: прогон плюс цепочка, из которой оно выводится.
 ///
 /// `RunOutcome.verdict` читается КАК ДАННОЕ и не пересчитывается: раннер и
@@ -220,6 +226,39 @@ pub fn evaluate(outcome: &RunOutcome, chain: &[EvidenceEntry]) -> GateResult {
             "нет Validation: ToolAttestation никто не проверил, и выглядящий годным результат проверенным не является"
                 .to_owned(),
         );
+    }
+    // Порядок проверяется только для тех звеньев, которые ЕСТЬ: отсутствующее
+    // звено уже названо выше, и второй причины за него быть не должно.
+    let claim_at = first_index(chain, EvidenceKind::ModelClaim);
+    let tool_at = first_index(chain, EvidenceKind::ToolAttestation);
+    let validation_at = first_index(chain, EvidenceKind::Validation);
+    let out_of_order = match (claim_at, tool_at, validation_at) {
+        (Some(claim), Some(tool), Some(validation)) => claim >= tool || tool >= validation,
+        (None, Some(tool), Some(validation)) => tool >= validation,
+        _ => false,
+    };
+    if out_of_order {
+        missing.push(
+            "порядок цепочки нарушен: ожидается ModelClaim → ToolAttestation → Validation"
+                .to_owned(),
+        );
+    }
+    // Каждое ПРИСУТСТВУЮЩЕЕ звено обязано нести digest: пустой `result_hash` —
+    // это не «неизвестный результат», а звено, которое ничего не удостоверяет.
+    for entry in chain {
+        if entry.result_hash.is_empty() {
+            missing.push(format!("запись {} без digest: result_hash пуст", entry.id));
+        }
+        if entry.command.is_empty() {
+            match entry.kind {
+                EvidenceKind::ToolAttestation => missing
+                    .push("ToolAttestation без команды: записанный запуск не назван".to_owned()),
+                EvidenceKind::Validation => {
+                    missing.push("Validation без субъекта: решение не названо".to_owned())
+                }
+                EvidenceKind::ModelClaim => {}
+            }
+        }
     }
     if outcome.verdict != Verdict::Valid {
         // Имя вердикта печатается, а решение не пересчитывается: спор о годности
