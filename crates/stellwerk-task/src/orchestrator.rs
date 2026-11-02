@@ -241,19 +241,29 @@ enum Environment {
 /// `--api-key` не передаётся никогда: argv виден в `/proc` любому в namespace,
 /// поэтому ключ остаётся на хосте и в процесс не попадает.
 pub fn pi_transport_args(extension: &Path, tools: &[&str]) -> Vec<String> {
-    [
+    let mut args: Vec<String> = [
         "--offline",
         "--no-session",
         "--no-extensions",
         "--no-context-files",
         "-e",
         &extension.display().to_string(),
-        "--tools",
-        &tools.join(","),
     ]
     .into_iter()
     .map(str::to_owned)
-    .collect()
+    .collect();
+    let requested: Vec<&str> = tools
+        .iter()
+        .copied()
+        .filter(|tool| !matches!(*tool, "read" | "edit" | "write"))
+        .collect();
+    if requested.is_empty() {
+        args.push("--no-builtin-tools".to_owned());
+    } else {
+        args.push("--tools".to_owned());
+        args.push(requested.join(","));
+    }
+    args
 }
 
 /// Воркер, запускающий движок ВНУТРИ песочницы через адаптер.

@@ -1,6 +1,8 @@
 //! N2-00f: Pi в `bwrap --unshare-net`; нет `pi`/`bwrap` — падение, нет гейта — нет эффекта.
 use serde_json::json;
-use std::io::Read;
+use sha2::{Digest, Sha256};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -109,7 +111,50 @@ fn pi_args_carry_one_extension_and_no_key() {
     let args = pi_transport_args(Path::new("/run/sw/ext.ts"), &["bash", "read"]);
     assert_eq!(
         args.join(" "),
-        "--offline --no-session --no-extensions --no-context-files -e /run/sw/ext.ts --tools bash,read"
+        "--offline --no-session --no-extensions --no-context-files -e /run/sw/ext.ts --tools bash"
+    );
+}
+#[test]
+fn tool_call_goes_to_socket_with_args() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let run = run_inner(
+        "args",
+        &["read", "edit", "write"],
+        Some(RiskClass::R1),
+        &["read", "edit", "write"],
+        Some((
+            seen,
+            json!({ "kind": "authorized", "tool": "write", "scope": "note.txt#sha256:test" }),
+        )),
+        |_work| {
+            vec![
+                vec![tool_call(
+                    "call-1",
+                    "write",
+                    json!({ "path": "note.txt", "content": "from the host\n" }),
+                )],
+                vec![text_frame("ok")],
+            ]
+        },
+    );
+    let frames = run.gate_seen.lock().expect("журнал гейта");
+    assert_eq!(frames.len(), 1, "один вызов — один кадр: {frames:?}");
+    let frame = &frames[0];
+    assert_eq!(frame["kind"], "tool_call");
+    assert_eq!(frame["tool"], "write");
+    assert_eq!(frame["parent_tool_call_id"], serde_json::Value::Null);
+    assert_eq!(frame["path"], "note.txt");
+    let argument = frame["argument"].as_str().expect("аргументы строкой");
+    let parsed: serde_json::Value = serde_json::from_str(argument).expect("аргументы — JSON");
+    assert_eq!(parsed["path"], "note.txt");
+    assert_eq!(parsed["content"], "from the host\n");
+    let digest = frame["content_digest"]
+        .as_str()
+        .expect("дайджест аргументов записи");
+    assert_eq!(digest, format!("{:x}", Sha256::digest(argument.as_bytes())));
+    assert_eq!(
+        std::fs::read_to_string(run.work.join("note.txt")).expect("файл записан"),
+        "from the host\n"
     );
 }
 #[test]
@@ -197,8 +242,22 @@ struct Run {
     canary: bool,
     work: PathBuf,
     seen: Arc<Mutex<Vec<TurnRecord>>>,
+    gate_seen: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 fn run<F>(name: &str, offered: &[&str], risk: Option<RiskClass>, held: &[&str], turns: F) -> Run
+where
+    F: FnOnce(&Path) -> Vec<Vec<Frame>>,
+{
+    run_inner(name, offered, risk, held, None, turns)
+}
+fn run_inner<F>(
+    name: &str,
+    offered: &[&str],
+    risk: Option<RiskClass>,
+    held: &[&str],
+    recording: Option<(Arc<Mutex<Vec<serde_json::Value>>>, serde_json::Value)>,
+    turns: F,
+) -> Run
 where
     F: FnOnce(&Path) -> Vec<Vec<Frame>>,
 {
@@ -206,7 +265,18 @@ where
     let (sock, work, tmp) = (root.join("sock"), root.join("work"), root.join("tmp"));
     let canary = work.join("canary");
     let model = ModelProxy::bind(&sock).expect("канал модели");
-    let gate = risk.map(|_| GateChannel::bind(&sock).expect("канал гейта"));
+    let (gate_seen, recording) = match recording {
+        Some((seen, answer)) => (Arc::clone(&seen), Some((seen, answer))),
+        None => (Arc::new(Mutex::new(Vec::new())), None),
+    };
+    let recording_gate = recording
+        .as_ref()
+        .map(|_| UnixListener::bind(sock.join("gate.sock")).expect("канал гейта для записи"));
+    let gate = if recording.is_none() {
+        risk.map(|_| GateChannel::bind(&sock).expect("канал гейта"))
+    } else {
+        None
+    };
     let extension = work.join("stellwerk_transport.ts");
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(EXTENSION);
     std::fs::copy(source, &extension).expect("расширение скопировано");
@@ -263,7 +333,11 @@ where
             }
         }
     })];
-    if let (Some(gate), Some(class)) = (gate, risk) {
+    if let (Some(listener), Some((seen, answer))) = (recording_gate, recording) {
+        servers.push(std::thread::spawn(move || {
+            serve_recorded(listener, seen, answer);
+        }));
+    } else if let (Some(gate), Some(class)) = (gate, risk) {
         let session = SessionDescription::new(
             "session-1",
             &std::env::temp_dir(),
@@ -293,7 +367,39 @@ where
         canary: canary.exists(),
         work,
         seen,
+        gate_seen,
     }
+}
+fn serve_recorded(
+    listener: UnixListener,
+    seen: Arc<Mutex<Vec<serde_json::Value>>>,
+    answer: serde_json::Value,
+) {
+    listener
+        .set_nonblocking(true)
+        .expect("неблокирующий канал гейта");
+    let deadline = std::time::Instant::now() + WINDOW;
+    let (mut stream, _) = loop {
+        match listener.accept() {
+            Ok(connection) => break connection,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if std::time::Instant::now() >= deadline {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Err(error) => panic!("соединение гейта: {error}"),
+        }
+    };
+    stream
+        .set_read_timeout(Some(WINDOW))
+        .expect("таймаут гейта");
+    let mut reader = BufReader::new(stream.try_clone().expect("клон гейта"));
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("кадр гейта");
+    let frame: serde_json::Value = serde_json::from_str(line.trim_end()).expect("кадр — JSON");
+    seen.lock().expect("журнал гейта").push(frame);
+    writeln!(stream, "{answer}").expect("ответ гейта");
 }
 fn bash_turn(name: &str, tool: bool, risk: Option<RiskClass>, held: &[&str]) -> Run {
     run(name, &["bash", "read"], risk, held, |work| {

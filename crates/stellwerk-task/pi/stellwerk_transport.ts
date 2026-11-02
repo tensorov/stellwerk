@@ -1,8 +1,11 @@
 // N2-00f: единственное расширение Pi внутри песочницы: два хостовых AF_UNIX, без сети и ключа.
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
 import {
   getCurrentSystemPrompt,
   getCurrentTools,
+  Type,
   type AssistantMessage,
   type AssistantMessageEventStream,
   type Model,
@@ -10,11 +13,12 @@ import {
   type TranscriptContext,
   createAssistantMessageEventStream,
 } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const MAX_FRAME_BYTES = 512 * 1024;
 const PROVIDER = "stellwerk";
 const API = "stellwerk-uds";
+const HOST_TOOLS = new Set(["read", "edit", "write"]);
 
 type Frame = { kind: string } & Record<string, unknown>;
 type WireCall = { id: string; name: string; arguments: Record<string, unknown> };
@@ -76,11 +80,11 @@ function pathOf(input: unknown): string | undefined {
   return typeof path === "string" ? path : undefined;
 }
 
-async function authorize(tool: string, path: string | undefined, signal?: AbortSignal): Promise<{ block: true; reason: string } | undefined> {
+async function verdict(frame: Frame, signal?: AbortSignal): Promise<{ block: true; reason: string } | undefined> {
   if (signal?.aborted) return { block: true, reason: "gate_aborted" };
   let answer: Frame | undefined;
   try {
-    const frames = await exchange(GATE_SOCK, { kind: "tool_call", tool, parent_tool_call_id: null, path }, () => true);
+    const frames = await exchange(GATE_SOCK, frame, () => true);
     answer = frames[0];
   } catch (error) {
     return { block: true, reason: `gate_unreachable:${describe(error)}` };
@@ -98,6 +102,50 @@ async function authorize(tool: string, path: string | undefined, signal?: AbortS
     case "refused": return { block: true, reason: `gate_refused:${String(answer.code)}:${String(answer.message)}` };
     default: return { block: true, reason: `gate_unknown_answer:${String(answer.kind)}` };
   }
+}
+
+async function authorize(tool: string, path: string | undefined, signal?: AbortSignal): Promise<{ block: true; reason: string } | undefined> {
+  return verdict({ kind: "tool_call", tool, parent_tool_call_id: null, path }, signal);
+}
+
+async function hostCall(tool: string, params: unknown, signal?: AbortSignal): Promise<{ block: true; reason: string } | undefined> {
+  const argument = JSON.stringify(params);
+  const frame: Frame = { kind: "tool_call", tool, parent_tool_call_id: null, path: pathOf(params), argument };
+  if (tool === "write" || tool === "edit") {
+    frame.content_digest = createHash("sha256").update(argument).digest("hex");
+  }
+  return verdict(frame, signal);
+}
+
+type ReadParams = { path: string };
+type WriteParams = { path: string; content: string };
+type EditParams = { path: string; edits: { oldText: string; newText: string }[] };
+
+function readHost(params: ReadParams): string {
+  return readFileSync(params.path, "utf8");
+}
+
+function writeHost(params: WriteParams): string {
+  writeFileSync(params.path, params.content, "utf8");
+  return `wrote ${Buffer.byteLength(params.content)} bytes to ${params.path}`;
+}
+
+function editHost(params: EditParams): string {
+  let text = readFileSync(params.path, "utf8");
+  for (const edit of params.edits) {
+    if (!text.includes(edit.oldText)) throw new Error(`edit: oldText not found in ${params.path}`);
+    text = text.replace(edit.oldText, edit.newText);
+  }
+  writeFileSync(params.path, text, "utf8");
+  return `edited ${params.path}`;
+}
+
+function success(tool: string, path: string, text: string) {
+  return { content: [{ type: "text" as const, text }], details: { tool, path } };
+}
+
+function failure(tool: string, path: string, reason: string) {
+  return { content: [{ type: "text" as const, text: reason }], details: { tool, path }, isError: true };
 }
 
 type Block = { type?: unknown; text?: unknown };
@@ -273,5 +321,64 @@ export default function stellwerk(pi: ExtensionAPI): void {
     }],
     streamSimple: streamStellwerk,
   });
-  pi.on("tool_call", async (event) => authorize(event.toolName, pathOf(event.input)));
+  pi.registerTool(defineTool({
+    name: "read",
+    label: "Read",
+    description: "Read a file from the host workspace after the Stellwerk gate approves the call.",
+    parameters: Type.Object({ path: Type.String({ description: "Path to read" }) }),
+    async execute(_toolCallId, params, signal) {
+      const blocked = await hostCall("read", params, signal);
+      if (blocked) return failure("read", params.path, blocked.reason);
+      try {
+        return success("read", params.path, readHost(params));
+      } catch (error) {
+        return failure("read", params.path, `read_failed:${describe(error)}`);
+      }
+    },
+  }));
+  pi.registerTool(defineTool({
+    name: "edit",
+    label: "Edit",
+    description: "Edit a file in the host workspace after the Stellwerk gate approves the call.",
+    parameters: Type.Object({
+      path: Type.String({ description: "Path to edit" }),
+      edits: Type.Array(Type.Object({
+        oldText: Type.String({ description: "Exact text to replace" }),
+        newText: Type.String({ description: "Replacement text" }),
+      })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const blocked = await hostCall("edit", params, signal);
+      if (blocked) return failure("edit", params.path, blocked.reason);
+      try {
+        return success("edit", params.path, editHost(params));
+      } catch (error) {
+        return failure("edit", params.path, `edit_failed:${describe(error)}`);
+      }
+    },
+  }));
+  pi.registerTool(defineTool({
+    name: "write",
+    label: "Write",
+    description: "Write a file in the host workspace after the Stellwerk gate approves the call.",
+    parameters: Type.Object({
+      path: Type.String({ description: "Path to write" }),
+      content: Type.String({ description: "Exact bytes to write" }),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const blocked = await hostCall("write", params, signal);
+      if (blocked) return failure("write", params.path, blocked.reason);
+      try {
+        return success("write", params.path, writeHost(params));
+      } catch (error) {
+        return failure("write", params.path, `write_failed:${describe(error)}`);
+      }
+    },
+  }));
+  // Хостовые инструменты сами отправляют полный вызов; второй пояс остаётся для
+  // встроенных инструментов (bash и т.п.), которые не проходят через execute.
+  pi.on("tool_call", async (event) => {
+    if (HOST_TOOLS.has(event.toolName)) return undefined;
+    return authorize(event.toolName, pathOf(event.input));
+  });
 }
