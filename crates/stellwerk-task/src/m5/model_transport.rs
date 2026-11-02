@@ -52,7 +52,6 @@ pub enum ErrorCode {
     Schema,
     OversizeFrame,
     BackendError,
-    ToolNotOffered,
 }
 
 /// Сообщение разговора. Форму задаёт роль: assistant несёт текст и сделанные вызовы,
@@ -178,49 +177,27 @@ impl ModelProxy {
             }
             Ok(request) => match backend.turn_request(&request) {
                 Ok(frames) => {
-                    let known = request.tools.as_ref().map(|tools| {
-                        tools
-                            .iter()
-                            .map(|tool| tool.name.as_str())
-                            .collect::<Vec<_>>()
-                    });
-                    let refused = known.as_ref().and_then(|known| {
-                        frames.iter().find_map(|frame| match frame {
-                            Frame::ToolCall { name, .. } if !known.contains(&name.as_str()) => {
-                                Some(name.clone())
-                            }
-                            _ => None,
-                        })
-                    });
-                    if let Some(name) = refused {
-                        write_frame(
-                            &mut writer,
-                            &Frame::Error {
-                                code: ErrorCode::ToolNotOffered,
-                                message: format!("tool `{name}` was not offered"),
-                            },
-                        )?;
-                        Served::Refused
+                    // `tools` — подсказка модели, а не граница авторизации: любой
+                    // `Frame::ToolCall` доходит до клиента, включая имена вне
+                    // предложенного набора. Решение о вызове выносит гейт.
+                    let reason = if frames
+                        .iter()
+                        .any(|frame| matches!(frame, Frame::ToolCall { .. }))
+                    {
+                        "tool_use"
                     } else {
-                        let reason = if frames
-                            .iter()
-                            .any(|frame| matches!(frame, Frame::ToolCall { .. }))
-                        {
-                            "tool_use"
-                        } else {
-                            "stop"
-                        };
-                        for frame in frames {
-                            write_frame(&mut writer, &frame)?;
-                        }
-                        write_frame(
-                            &mut writer,
-                            &Frame::Done {
-                                reason: reason.to_owned(),
-                            },
-                        )?;
-                        Served::Turn
+                        "stop"
+                    };
+                    for frame in frames {
+                        write_frame(&mut writer, &frame)?;
                     }
+                    write_frame(
+                        &mut writer,
+                        &Frame::Done {
+                            reason: reason.to_owned(),
+                        },
+                    )?;
+                    Served::Turn
                 }
                 Err(error) => {
                     write_frame(

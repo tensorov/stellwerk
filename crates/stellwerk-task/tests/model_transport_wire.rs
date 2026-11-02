@@ -230,7 +230,7 @@ fn an_unknown_field_is_still_refused_first() {
 }
 
 #[test]
-fn an_explicit_empty_tool_set_refuses_any_call() {
+fn an_explicit_empty_tool_set_forwards_the_call() {
     let proxy = proxy_at("empty-tools");
     let backend = scripted(vec![bash_call()]);
     let handle = serve(&proxy, Arc::clone(&backend) as Arc<dyn ModelBackend>);
@@ -239,13 +239,21 @@ fn an_explicit_empty_tool_set_refuses_any_call() {
         b"{\"kind\":\"turn\",\"tools\":[],\"messages\":[{\"role\":\"user\",\"text\":\"hi\"}]}\n",
     );
 
-    assert_eq!(served(handle), Served::Refused);
+    assert_eq!(served(handle), Served::Turn);
     assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(error_code(&frames), ErrorCode::ToolNotOffered);
+    assert_eq!(
+        frames,
+        vec![
+            bash_call(),
+            Frame::Done {
+                reason: "tool_use".to_owned()
+            }
+        ]
+    );
 }
 
 #[test]
-fn a_call_outside_the_offered_set_is_refused() {
+fn a_call_outside_the_offered_set_is_forwarded() {
     let proxy = proxy_at("outside-offer");
     let backend = Recording::new(vec![text("сначала текст"), bash_call()]);
     let handle = serve(&proxy, Arc::clone(&backend) as Arc<dyn ModelBackend>);
@@ -254,9 +262,12 @@ fn a_call_outside_the_offered_set_is_refused() {
         b"{\"kind\":\"turn\",\"tools\":[{\"name\":\"read\",\"description\":\"read\",\"parameters\":{}}],\"messages\":[{\"role\":\"user\",\"text\":\"hi\"}]}\n",
     );
 
-    assert_eq!(served(handle), Served::Refused);
+    assert_eq!(served(handle), Served::Turn);
     assert_eq!(backend.offered(), vec![vec!["read".to_owned()]]);
-    assert_eq!(error_code(&frames), ErrorCode::ToolNotOffered);
+    assert_eq!(frames.len(), 3);
+    assert_eq!(frames[0], text("сначала текст"));
+    assert!(matches!(&frames[1], Frame::ToolCall { name, .. } if name == "bash"));
+    assert!(matches!(&frames[2], Frame::Done { reason } if reason == "tool_use"));
 }
 
 #[test]
