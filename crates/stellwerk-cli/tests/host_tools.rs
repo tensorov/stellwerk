@@ -10,9 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use stellwerk_cli::build_runner::{apply_gate_decision, HostRefusal};
-use stellwerk_core::contract::{
-    DataClass, ModelBinding, PolicyLevel, RetentionClass, RiskClass,
-};
+use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, RetentionClass, RiskClass};
 use stellwerk_gateway::gate::{CallRequest, ContentDigest};
 use stellwerk_gateway::permission::ToolRisk;
 use stellwerk_task::m5::gate_channel::{
@@ -88,10 +86,7 @@ static SEQ: AtomicUsize = AtomicUsize::new(0);
 
 fn scratch(name: &str) -> PathBuf {
     let seq = SEQ.fetch_add(1, Ordering::SeqCst);
-    let root = std::env::temp_dir().join(format!(
-        "sw-a02-{name}-{}-{seq}",
-        std::process::id()
-    ));
+    let root = std::env::temp_dir().join(format!("sw-a02-{name}-{}-{seq}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("src")).expect("рабочее место");
     root
@@ -176,7 +171,11 @@ fn a_path_outside_the_workspace_is_refused_without_writing() {
         "названный отказ: {refused:?}"
     );
     assert!(
-        !root.parent().expect("родитель").join(format!("{name}-outside.txt")).exists(),
+        !root
+            .parent()
+            .expect("родитель")
+            .join(format!("{name}-outside.txt"))
+            .exists(),
         "файл вне workspace не создан"
     );
 }

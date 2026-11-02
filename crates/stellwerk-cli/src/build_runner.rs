@@ -227,12 +227,28 @@ pub fn sandbox_roots() -> Vec<PathBuf> {
 /// тихой записью.
 #[derive(Debug)]
 pub enum HostRefusal {
-    WorkspaceMissing { root: PathBuf },
-    OutsideWorkspace { root: PathBuf, path: PathBuf },
-    NotWritable { tool: String },
-    NotAuthorized { answer: GateAnswer },
-    DigestMismatch { stage: &'static str, authorized: String, actual: String },
-    Io { path: PathBuf, message: String },
+    WorkspaceMissing {
+        root: PathBuf,
+    },
+    OutsideWorkspace {
+        root: PathBuf,
+        path: PathBuf,
+    },
+    NotWritable {
+        tool: String,
+    },
+    NotAuthorized {
+        answer: GateAnswer,
+    },
+    DigestMismatch {
+        stage: &'static str,
+        authorized: String,
+        actual: String,
+    },
+    Io {
+        path: PathBuf,
+        message: String,
+    },
 }
 
 /// Что хост записал. Digest — фактический digest файла после записи.
@@ -244,7 +260,10 @@ pub struct HostWrite {
 }
 
 fn io_refusal(path: &Path, error: io::Error) -> HostRefusal {
-    HostRefusal::Io { path: path.to_path_buf(), message: error.to_string() }
+    HostRefusal::Io {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    }
 }
 
 static HOST_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -252,15 +271,19 @@ static HOST_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::ne
 /// Применяет решение гейта. Пишет только `authorized()`: у `Allow` и прочих ответов
 /// нет `AuthorizedCall`, поэтому применить их как запись нельзя — это отказ.
 pub fn apply_gate_decision(root: &Path, decision: &GateDecision) -> Result<HostWrite, HostRefusal> {
-    let call = decision.authorized().ok_or_else(|| HostRefusal::NotAuthorized {
-        answer: decision.answer().clone(),
-    })?;
+    let call = decision
+        .authorized()
+        .ok_or_else(|| HostRefusal::NotAuthorized {
+            answer: decision.answer().clone(),
+        })?;
     apply_authorized(root, call)
 }
 
 fn apply_authorized(root: &Path, call: &AuthorizedCall) -> Result<HostWrite, HostRefusal> {
     if !writes_content(call.tool()) {
-        return Err(HostRefusal::NotWritable { tool: call.tool().to_owned() });
+        return Err(HostRefusal::NotWritable {
+            tool: call.tool().to_owned(),
+        });
     }
     let target = resolve_in_workspace(root, call.path())?;
     // До записи: байты, которые собираемся писать, — ровно авторизованные.
@@ -273,9 +296,14 @@ fn apply_authorized(root: &Path, call: &AuthorizedCall) -> Result<HostWrite, Hos
         });
     }
     let Some(parent) = target.parent() else {
-        return Err(HostRefusal::OutsideWorkspace { root: root.to_path_buf(), path: target });
+        return Err(HostRefusal::OutsideWorkspace {
+            root: root.to_path_buf(),
+            path: target,
+        });
     };
-    let name = target.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let name = target
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let temp = parent.join(format!(
         ".{name}.host-{}-{}",
         std::process::id(),
@@ -311,7 +339,11 @@ fn apply_authorized(root: &Path, call: &AuthorizedCall) -> Result<HostWrite, Hos
             actual: digest.as_hex().to_owned(),
         });
     }
-    Ok(HostWrite { path: target, digest: digest.as_hex().to_owned(), bytes: written.len() })
+    Ok(HostWrite {
+        path: target,
+        digest: digest.as_hex().to_owned(),
+        bytes: written.len(),
+    })
 }
 
 /// Разрешает путь строго внутри `root`. Корень канонизируется: его отсутствие —
@@ -320,21 +352,32 @@ fn apply_authorized(root: &Path, call: &AuthorizedCall) -> Result<HostWrite, Hos
 pub fn resolve_in_workspace(root: &Path, raw: &str) -> Result<PathBuf, HostRefusal> {
     let root = std::fs::canonicalize(root).map_err(|error| {
         if error.kind() == io::ErrorKind::NotFound {
-            HostRefusal::WorkspaceMissing { root: root.to_path_buf() }
+            HostRefusal::WorkspaceMissing {
+                root: root.to_path_buf(),
+            }
         } else {
             io_refusal(root, error)
         }
     })?;
-    let outside = |path: PathBuf| HostRefusal::OutsideWorkspace { root: root.clone(), path };
+    let outside = |path: PathBuf| HostRefusal::OutsideWorkspace {
+        root: root.clone(),
+        path,
+    };
     let requested = Path::new(raw);
     let relative = if requested.is_absolute() {
-        requested.strip_prefix(&root).map_err(|_| outside(requested.to_path_buf()))?.to_path_buf()
+        requested
+            .strip_prefix(&root)
+            .map_err(|_| outside(requested.to_path_buf()))?
+            .to_path_buf()
     } else {
         requested.to_path_buf()
     };
     if relative.as_os_str().is_empty()
         || relative.components().any(|part| {
-            !matches!(part, std::path::Component::Normal(_) | std::path::Component::CurDir)
+            !matches!(
+                part,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
         })
     {
         return Err(outside(requested.to_path_buf()));
@@ -353,7 +396,8 @@ pub fn resolve_in_workspace(root: &Path, raw: &str) -> Result<PathBuf, HostRefus
     // хотя лексически путь внутри.
     if let Ok(meta) = std::fs::symlink_metadata(&target) {
         if meta.file_type().is_symlink() {
-            let real = std::fs::canonicalize(&target).map_err(|error| io_refusal(&target, error))?;
+            let real =
+                std::fs::canonicalize(&target).map_err(|error| io_refusal(&target, error))?;
             if !real.starts_with(&root) {
                 return Err(outside(target));
             }

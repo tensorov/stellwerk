@@ -218,16 +218,17 @@ impl GateChannel {
         let answer = match read_request(&mut reader)? {
             ReadOutcome::Eof => return Ok((GateServed::NoRequest, None)),
             ReadOutcome::Refused(code, message) => GateAnswer::Refused { code, message },
-            ReadOutcome::Request(request) => {
-                answer_for(session, policy, &request, &mut authorized)
-            }
+            ReadOutcome::Request(request) => answer_for(session, policy, &request, &mut authorized),
         };
         write_answer(&mut writer, &answer)?;
         // Хвост дочитываем до EOF: закрытие с непрочитанными байтами шлёт RST, и клиент
         // не увидит сам ответ. Предел — тот же, что у кадра.
         let tail = &mut reader.by_ref().take(MAX_FRAME_BYTES as u64);
         io::copy(tail, &mut io::sink())?;
-        let decision = GateDecision { answer, call: authorized };
+        let decision = GateDecision {
+            answer,
+            call: authorized,
+        };
         let served = match decision.answer() {
             GateAnswer::Refused { .. } => GateServed::Refused,
             _ => GateServed::Answered,
@@ -270,20 +271,20 @@ fn answer_for(
     let call = match session.adjudicate(&request.tool, request.parent_tool_call_id.as_deref()) {
         Ok(call) => call,
         Err(IdentityError::NoSuchTool { tool, held }) => {
-            return GateAnswer::UnknownTool { tool, held }
+            return GateAnswer::UnknownTool { tool, held };
         }
         Err(IdentityError::UnrecognisedSource {
             parent_tool_call_id,
         }) => {
             return GateAnswer::UnrecognisedSource {
                 parent_tool_call_id,
-            }
+            };
         }
         Err(other) => {
             return GateAnswer::Refused {
                 code: RefusalCode::Identity,
                 message: other.to_string(),
-            }
+            };
         }
     };
     let tool = call.tool.clone();
@@ -321,7 +322,10 @@ fn answer_for(
                         let path = request.path.as_deref().unwrap_or_default();
                         GateAnswer::Deny {
                             tool,
-                            reason: format!("write_without_content_digest: `{}` with path `{path}` cannot be authorized without a content digest", request.tool),
+                            reason: format!(
+                                "write_without_content_digest: `{}` with path `{path}` cannot be authorized without a content digest",
+                                request.tool
+                            ),
                         }
                     }
                     None => GateAnswer::Allow { tool },
@@ -345,7 +349,10 @@ fn answer_for(
                         let path = request.path.as_deref().unwrap_or_default();
                         GateAnswer::Deny {
                             tool,
-                            reason: format!("write_without_content_digest: `{}` with path `{path}` cannot be authorized without a content digest", request.tool),
+                            reason: format!(
+                                "write_without_content_digest: `{}` with path `{path}` cannot be authorized without a content digest",
+                                request.tool
+                            ),
                         }
                     }
                     None => GateAnswer::Authorized { tool, scope },
@@ -382,7 +389,10 @@ fn requested_write(request: &GateRequest) -> Result<Option<RequestedCall>, Strin
         request.content_digest.as_deref(),
     ) else {
         let reason = if request.content_digest.is_none() {
-            format!("write_without_content_digest: `{}` with path `{path}` came without a content digest; a path alone does not say what will be written", request.tool)
+            format!(
+                "write_without_content_digest: `{}` with path `{path}` came without a content digest; a path alone does not say what will be written",
+                request.tool
+            )
         } else {
             format!(
                 "write_without_argument: `{}` with path `{path}` came without its argument",
@@ -431,7 +441,7 @@ fn read_request(reader: &mut BufReader<UnixStream>) -> io::Result<ReadOutcome> {
             return Ok(ReadOutcome::Refused(
                 RefusalCode::MalformedJson,
                 "frame is not UTF-8".to_owned(),
-            ))
+            ));
         }
     };
     Ok(match parse_request(&text) {
