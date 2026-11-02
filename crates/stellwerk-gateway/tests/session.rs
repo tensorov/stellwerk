@@ -7,7 +7,9 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
 use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, RetentionClass, RiskClass};
 use stellwerk_gateway::gate::{CallRequest, Verdict};
@@ -225,4 +227,76 @@ fn an_allowed_call_yields_exactly_one_receipt_and_counts_itself() {
         "в чеке — решение по вызову"
     );
     assert_eq!(receipt.tool, MOUNTED, "чек описывает именно этот вызов");
+}
+
+/// Future, готовое только после настоящего пробуждения: на первом опросе оно отдаёт
+/// waker второму потоку и возвращает `Pending`, а поток будит его и только затем
+/// выставляет признак готовности. Счётчик опросов лежит снаружи, чтобы тест мог
+/// отличить ожидание будильника от busy-poll.
+struct WakesOnce {
+    /// Признак сработавшего будильника; ставится ДО `wake`, иначе разбуженный
+    /// исполнитель успел бы опросить future и снова увидеть `Pending`.
+    woken: Arc<AtomicBool>,
+    /// Сколько раз `drive` опросил future — снаружи, чтобы тест их увидел.
+    polls: Arc<AtomicUsize>,
+    /// Второй поток уже запущен: на ложном пробуждении спавнить его повторно нельзя.
+    spawned: bool,
+}
+
+impl Future for WakesOnce {
+    type Output = &'static str;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<&'static str> {
+        let this = self.get_mut();
+        this.polls.fetch_add(1, Ordering::SeqCst);
+        if !this.spawned {
+            this.spawned = true;
+            let waker = cx.waker().clone();
+            let woken = Arc::clone(&this.woken);
+            std::thread::spawn(move || {
+                // Пауза не заменяет пробуждение, а откладывает его заведомо ПОСЛЕ
+                // первого `Pending`: иначе `wake` мог бы прийти до того, как
+                // исполнитель уснёт, и тест не отличил бы ожидание от busy-poll.
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                woken.store(true, Ordering::SeqCst);
+                waker.wake();
+            });
+            return Poll::Pending;
+        }
+        if this.woken.load(Ordering::SeqCst) {
+            Poll::Ready("пробуждено")
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+#[test]
+fn woken_task_continues_after_waker_replacement() {
+    // Дано: задача, чей будильник заменён на живой waker `drive`: на первом опросе
+    // она отдаёт его второму потоку и возвращает `Pending`, а `Ready` отдаёт только
+    // после `wake`. Когда: `drive` опрашивает её. Тогда: задача продолжает исполнение
+    // до значения, и опросов мало — исполнитель ждёт будильник, а не крутит
+    // `yield_now`, который замаскировал бы потерю пробуждения. Страж нужен потому,
+    // что потерянный `wake` при `park` — это не падение, а вечное молчание:
+    // `recv_timeout` превращает его в отказ с именем причины, а не в зависшую сьюту.
+    let polls = Arc::new(AtomicUsize::new(0));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let future = WakesOnce {
+        woken: Arc::new(AtomicBool::new(false)),
+        polls: Arc::clone(&polls),
+        spawned: false,
+    };
+    std::thread::spawn(move || {
+        let _ = tx.send(drive(future));
+    });
+    let out = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("drive не вернулся за 5 с: пробуждение потеряно — waker не разбудил исполнителя");
+    assert_eq!(out, "пробуждено", "drive не довёл future до его значения");
+    let seen = polls.load(Ordering::SeqCst);
+    assert!(
+        seen <= 100,
+        "drive опросил future {seen} раз на один будильник: это busy-poll, а не ожидание пробуждения"
+    );
 }

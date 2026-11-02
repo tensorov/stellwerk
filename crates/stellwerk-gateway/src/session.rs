@@ -607,19 +607,27 @@ pub enum SessionError {
 
 /// Довести future до `Ready` без чужого исполнителя: крейт от `tokio` не зависит, а
 /// `Cargo.toml` вне `files_allowed`. Один опрос на 11a, 11b и 11c, а не свой в каждом.
+///
+/// `Pending` не крутится вхолостую: поток-исполнитель спит в `park`, а `wake` будит
+/// именно его через `unpark`. Токен `unpark` хранится до следующего `park`, поэтому
+/// пробуждение, пришедшее между опросом и сном, не теряется; ложное пробуждение
+/// безопасно — цикл опрашивает future заново, а не считает возврат `park` прогрессом.
 pub fn drive<F: Future>(future: F) -> F::Output {
-    /// Будильщик молчит: с готовым backend будущее не ждёт, и ждать тут нечего.
-    struct Park;
-    impl Wake for Park {
-        fn wake(self: Arc<Self>) {}
+    /// Будильщик потока-исполнителя. Тело не пустое: `unpark` ставит токен, который
+    /// переживёт `park`, если `wake` пришёл раньше.
+    struct Unpark(std::thread::Thread);
+    impl Wake for Unpark {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
     }
-    let waker = Waker::from(Arc::new(Park));
+    let waker = Waker::from(Arc::new(Unpark(std::thread::current())));
     let mut cx = Context::from_waker(&waker);
     let mut future = Box::pin(future);
     loop {
         match future.as_mut().poll(&mut cx) {
             Poll::Ready(value) => return value,
-            Poll::Pending => std::thread::yield_now(),
+            Poll::Pending => std::thread::park(),
         }
     }
 }

@@ -1,0 +1,149 @@
+task: task-3, packet V1/packet-01, clippy+behaviour half only (cargo fmt half not touched)
+branch: main
+HEAD: fea4fa7
+toolchain: rustc 1.99.0 (b940084d7 2026-09-28) / cargo 1.99.0
+files changed: crates/stellwerk-gateway/src/session.rs, crates/stellwerk-gateway/tests/session.rs
+rerun: 2026-11-02, independently re-measured against the worktree (not copied from a prior claim)
+
+WHY THE WATCHDOG EXISTS
+  A lost wakeup is not a panic, it is silence: a driver that parks and never gets
+  unparked blocks forever, and a plain `cargo test` would hang the whole suite until
+  the CI timeout. The test therefore runs `drive` in a worker thread and collects its
+  result through `std::sync::mpsc::recv_timeout(5s)`; on timeout it fails with a
+  message naming the lost wakeup instead of hanging the suite. The test also counts
+  polls because the OLD `yield_now` loop does not lose the wakeup either — it hides it
+  behind busy-polling, which is the actual defect packet 01 names. Both failure modes
+  are covered: no-op waker + `park` would time out through the watchdog (lost wakeup),
+  no-op waker + `yield_now` fails the poll bound (busy poll).
+
+FIX
+  `drive` keeps its signature `pub fn drive<F: Future>(future: F) -> F::Output` and its
+  std-only construction. The no-op `Park` waker is replaced by `Unpark(std::thread::Thread)`
+  whose `wake` calls `Thread::unpark`; the `Pending` arm sleeps in `std::thread::park()`
+  and the `loop` re-polls on every return, so a spurious park return is not treated as
+  progress and an `unpark` token that arrives between poll and park is not lost.
+
+RED — before the fix (drive restored from `git show HEAD:...src/session.rs`: no-op
+`Wake` + `yield_now` loop; new test kept)
+
+$ cargo test -p stellwerk-gateway --test session
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
+     Running tests/session.rs (target/debug/deps/session-704a343e368d7809)
+
+running 5 tests
+test an_allowed_call_yields_exactly_one_receipt_and_counts_itself ... ok
+test deny_for_insufficient_level_still_leaves_a_receipt ... ok
+test unknown_tool_is_denied_before_the_backend_ever_sees_it ... ok
+test r5_is_denied_at_once_and_leaves_no_question_behind ... ok
+test drive_resumes_a_woken_future_without_busy_polling ... FAILED
+
+failures:
+
+---- drive_resumes_a_woken_future_without_busy_polling stdout ----
+
+thread 'drive_resumes_a_woken_future_without_busy_polling' (2166628) panicked at crates/stellwerk-gateway/tests/session.rs:298:5:
+drive опросил future 58800 раз на один будильник: это busy-poll, а не ожидание пробуждения
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+failures:
+    drive_resumes_a_woken_future_without_busy_polling
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p stellwerk-gateway --test session`
+RED_EXIT=101
+
+  The RED run TERMINATED in 0.05 s; it did not hang. The 58 800 polls prove the old
+  driver re-polled in a `yield_now` spin instead of waiting for the waker. The old
+  driver does eventually return the value, so a wakeup-only test would have been green;
+  the poll bound is what makes the busy-poll visible. The source was restored from a
+  backup immediately after this run (verified: `struct Unpark` present at session.rs:618).
+
+BASELINE CLIPPY — before the fix (same temporary HEAD drive swap)
+
+$ cargo clippy -p stellwerk-gateway --all-targets -- -D warnings
+error: manual implementation of a no-op waker
+   --> crates/stellwerk-gateway/src/session.rs:613:10
+    |
+613 |     impl Wake for Park {
+    |          ^^^^
+    |
+    = help: use `std::task::Waker::noop()` instead
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#manual_noop-waker
+    = note: `-D clippy::manual-noop-waker` implied by `-D clippy::all`
+BASELINE_CLIPPY_EXIT=101
+
+GREEN — after replacing the no-op waker with `Arc<Thread>` + `unpark` and `yield_now`
+with `park` (loop re-polls on every `park` return, so spurious wakeups are safe and the
+`unpark` token covers a wake that arrives between poll and park)
+
+$ cargo test -p stellwerk-gateway --test session
+running 5 tests
+test an_allowed_call_yields_exactly_one_receipt_and_counts_itself ... ok
+test deny_for_insufficient_level_still_leaves_a_receipt ... ok
+test r5_is_denied_at_once_and_leaves_no_question_behind ... ok
+test unknown_tool_is_denied_before_the_backend_ever_sees_it ... ok
+test drive_resumes_a_woken_future_without_busy_polling ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+SESSION_EXIT=0
+
+$ cargo test -p stellwerk-gateway --test session_failure   # 9 drive call sites, file NOT edited
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+FAILURE_EXIT=0
+
+$ cargo test -p stellwerk-gateway                          # whole crate, no regressions
+  lib 5 ok / gate 15 ok / gate_ask 7 ok / mount 9 ok / permission 9 ok / receipt 12 ok /
+  session 5 ok / session_contract 5 ok / session_failure 18 ok / shaping 10 ok / doctests 0 ok
+CRATE_EXIT=0
+
+$ cargo clippy -p stellwerk-gateway --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.31s
+CLIPPY_EXIT=0
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.42s
+WORKSPACE_CLIPPY_EXIT=0
+
+FORMATTING — the gate is `cargo fmt --all -- --check`, NOT per-file rustfmt
+
+$ cargo fmt --all -- --check 2>&1 | grep "Diff in" | grep -E 'gateway/src/session\.rs|gateway/tests/session\.rs'
+  (no output; grep exit 1 = neither of the two files has a formatting diff)
+
+  Before the correction, the same gate DID report both files:
+    Diff in /home/.../gateway/src/session.rs:9:
+      -use std::future::{Future, ready};
+      +use std::future::{ready, Future};
+    Diff in /home/.../gateway/tests/session.rs:15:
+      -use stellwerk_gateway::session::{Session, TokenCalibration, ToolBackend, ToolError, drive};
+      +use stellwerk_gateway::session::{drive, Session, TokenCalibration, ToolBackend, ToolError};
+  Restoring HEAD's import order in both files clears the gate. No logic changed.
+
+TRAP — per-file `rustfmt --edition 2024 --check` is NOT equivalent to `cargo fmt`
+  Measured: `rustfmt --edition 2024 --check crates/stellwerk-gateway/src/session.rs
+  crates/stellwerk-gateway/tests/session.rs` exited 0 on exactly the files that
+  `cargo fmt --all -- --check` rejects. Standalone rustfmt does not reproduce the crate's
+  style-edition import reordering, so a per-file rustfmt check produced a false green.
+  The authoritative formatting signal for packet-01 is the cargo-fmt gate filtered to
+  these two files; `cargo fmt` itself was not run, and owner-WIP formatting diffs
+  (`session_failure.rs`, `shaping.rs`, `tests/mount.rs`, `tests/shaping.rs`, `cli.rs`,
+  `cmd_add.rs`) were left untouched.
+
+TEST COUNT DISCREPANCY (measured, not assumed)
+  The task text says the target had 5 tests and would become 6. Measured:
+  `git show HEAD:crates/stellwerk-gateway/tests/session.rs | grep -c '#\[test\]'` = 4,
+  working tree after the new test = 5. No test was dropped or weakened to reach this
+  count. The new test is `drive_resumes_a_woken_future_without_busy_polling`.
+
+OWNER WIP
+  `git diff --name-only` lists the pre-existing owner changes (.gitignore, .omo/omo.jsonc,
+  gateway/src/shaping.rs, gateway/tests/{mount,session_failure,shaping}.rs,
+  registry/src/cmd_add.rs, task/src/cli.rs). None of them was written by this task; only
+  gateway/src/session.rs and gateway/tests/session.rs were touched.
+
+CANON TEST NAME (post-verification rename)
+  The RED/GREEN transcripts above were captured while the test was named
+  `drive_resumes_a_woken_future_without_busy_polling`. It was then renamed to the canon
+  name required by `.sisyphus/plans/V1/packet-01.md:22`,
+  `woken_task_continues_after_waker_replacement`; body, `WakesOnce`, poll bound and
+  watchdog are unchanged. Current run: that name appears as `... ok`, 5 passed.
