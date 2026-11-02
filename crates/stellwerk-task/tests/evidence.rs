@@ -14,8 +14,8 @@
 //! копию типов контракта, и расхождение обнаружилось бы в чужом коде.
 
 use stellwerk_task::evidence::{
-    CHAIN_TAIL_PENDING, EvidenceEntry, EvidenceKind, EvidenceStatus, FIXTURE_VALIDATION_LABEL,
-    evaluate, evidence_status, model_claim, tool_attestation, validation,
+    evaluate, evidence_status, model_claim, tool_attestation, validation, EvidenceEntry,
+    EvidenceKind, EvidenceStatus, CHAIN_TAIL_PENDING, FIXTURE_VALIDATION_LABEL,
 };
 use stellwerk_task::runner::{RunOutcome, StopReason, Verdict};
 
