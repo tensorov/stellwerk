@@ -319,6 +319,19 @@ export default function stellwerk(pi: ExtensionAPI): void {
     }],
     streamSimple: streamStellwerk,
   });
+  // Удерживаемый `bash`: зарегистрирован, чтобы Pi знал имя и пропускал вызов через
+  // `tool_call` в гейт, но скрыт из объявлений `prepareLoadout`. Исполнение не запускает
+  // оболочку: единственный путь — вердикт гейта, а `execute` остаётся названным отказом.
+  pi.registerTool(defineTool({
+    name: "bash",
+    label: "Bash (held)",
+    description: "Held by Stellwerk policy; never offered to the model and never executed.",
+    parameters: Type.Object({ command: Type.String({ description: "Command held by policy" }) }),
+    prepareLoadout: () => ({ hiddenDeclarations: ["bash"] }),
+    async execute(_toolCallId, _params, _signal) {
+      return failure("bash", "", "held_tool_unreachable");
+    },
+  }));
   pi.registerTool(defineTool({
     name: "read",
     label: "Read",
