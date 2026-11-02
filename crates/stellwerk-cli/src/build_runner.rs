@@ -7,10 +7,11 @@
 //! команд: фильтра команд в этом срезе нет, и изображать его было бы хуже, чем назвать
 //! отсутствующим.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
 use std::future::Future;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -82,6 +83,10 @@ pub const BUILD_OFFERED: &[&str] = &["read", "edit", "write"];
 /// R5 — это отказ по уровню, а не отсутствие инструмента, и эти два состояния должны
 /// быть различимы в решении гейта.
 pub const BUILD_HELD: &[&str] = &["read", "bash", "edit", "write"];
+
+/// Имя файла расширения Pi. Одно имя на копирование и на проверку кандидата: иначе
+/// служебный файл харнесса можно спутать с правкой агента.
+pub const HARNESS_EXTENSION: &str = "stellwerk_transport.ts";
 
 /// Копия дерева для песочницы. `.git` не копируется: `Sandbox::preflight` отвергает
 /// историю внутри `work`, и это единственный способ её там не иметь — не удалять после,
@@ -158,17 +163,14 @@ fn collect_files(
 /// Файлы, чьи байты отличаются от снимка, или новые. Пути относительны `work` и
 /// отсортированы; удалённые файлы не представимы парой «путь + digest» и сюда не
 /// входят. `.git` отсекается ещё раз здесь, на границе кандидата.
-fn changed_files(
-    work: &Path,
-    before: &BTreeMap<PathBuf, ContentDigest>,
-) -> io::Result<Vec<CandidateFile>> {
+fn changed_files(work: &Path, before: &WorkspaceSnapshot) -> io::Result<Vec<CandidateFile>> {
     let mut changed: Vec<CandidateFile> = workspace_files(work)?
         .into_iter()
         .filter(|(path, digest)| {
             !path
                 .components()
                 .any(|part| part.as_os_str() == std::ffi::OsStr::new(".git"))
-                && before.get(path) != Some(digest)
+                && before.0.get(path) != Some(digest)
         })
         .map(|(path, digest)| CandidateFile {
             path: path.to_string_lossy().into_owned(),
@@ -177,6 +179,90 @@ fn changed_files(
         .collect();
     changed.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(changed)
+}
+
+/// База сравнения кандидата: обычные файлы workspace с digest байтов. Пустой базы по
+/// умолчанию нет: снимок строится только обходом дерева.
+#[derive(Debug, Clone)]
+pub struct WorkspaceSnapshot(BTreeMap<PathBuf, ContentDigest>);
+
+/// Снимает базу с того же места, откуда берётся рабочая копия: `.git` пропускается,
+/// симлинки не раскрываются.
+pub fn snapshot_workspace(root: &Path) -> io::Result<WorkspaceSnapshot> {
+    workspace_files(root).map(WorkspaceSnapshot)
+}
+
+/// Грязное дерево: пути, которых нет в ожидаемом дереве, отсутствующие там, где
+/// ожидались, или с несовпавшим digest. Пути относительны `work` и отсортированы.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirtyWorkspace {
+    pub files: Vec<String>,
+}
+
+/// Итог проверки кандидата. `Clean` — отдельное состояние, а не отсутствие `Dirty`:
+/// неизвестный путь сюда не попадает, он становится `Dirty` с именем.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CandidateVerdict {
+    Clean,
+    Dirty(DirtyWorkspace),
+}
+
+/// Принимает кандидат только если рабочая копия равна базе, перекрытой его записями.
+/// Путь вне workspace, `.git`, служебный файл харнесса, нечитаемый digest, лишний или
+/// удалённый файл — всё это `Dirty` с перечнем, а не молчаливый пропуск.
+pub fn accept_candidate(
+    work: &Path,
+    base: &WorkspaceSnapshot,
+    candidate: &[CandidateFile],
+) -> io::Result<CandidateVerdict> {
+    let mut expected = base.0.clone();
+    let mut dirty: BTreeSet<String> = BTreeSet::new();
+    for entry in candidate {
+        let path = Path::new(&entry.path);
+        let mut relative = true;
+        let mut harness = false;
+        let mut git = false;
+        let mut components = 0;
+        for part in path.components() {
+            components += 1;
+            match part {
+                Component::Normal(name) => {
+                    harness |= name == OsStr::new(HARNESS_EXTENSION);
+                    git |= name == OsStr::new(".git");
+                }
+                Component::CurDir => {}
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                    relative = false
+                }
+            }
+        }
+        if !relative || components == 0 || harness || git {
+            dirty.insert(entry.path.clone());
+            continue;
+        }
+        match ContentDigest::parse(&entry.digest) {
+            Ok(digest) => {
+                expected.insert(path.to_path_buf(), digest);
+            }
+            Err(_) => {
+                dirty.insert(entry.path.clone());
+            }
+        }
+    }
+    let actual = workspace_files(work)?;
+    let mut paths: BTreeSet<&Path> = expected.keys().map(PathBuf::as_path).collect();
+    paths.extend(actual.keys().map(PathBuf::as_path));
+    for path in paths {
+        if expected.get(path) != actual.get(path) {
+            dirty.insert(path.to_string_lossy().into_owned());
+        }
+    }
+    if dirty.is_empty() {
+        return Ok(CandidateVerdict::Clean);
+    }
+    Ok(CandidateVerdict::Dirty(DirtyWorkspace {
+        files: dirty.into_iter().collect(),
+    }))
 }
 
 /// Политика гейта для canary C. Возвращает `Some` всегда: `Unclassified` — это тоже
@@ -671,10 +757,10 @@ pub fn run_build(run: BuildRun<'_>, backend: &dyn ModelBackend) -> Result<BuildO
         std::fs::create_dir_all(dir).map_err(|e| format!("каталог {}: {e}", dir.display()))?;
     }
     copy_workspace(run.repo, &work).map_err(|e| format!("копия дерева: {e}"))?;
-    let extension = work.join("stellwerk_transport.ts");
+    let extension = work.join(HARNESS_EXTENSION);
     std::fs::copy(run.extension, &extension)
         .map_err(|e| format!("расширение не скопировано: {e}"))?;
-    let snapshot = workspace_files(&work).map_err(|e| format!("снимок workspace: {e}"))?;
+    let snapshot = snapshot_workspace(&work).map_err(|e| format!("снимок workspace: {e}"))?;
 
     let model = ModelProxy::bind(&sock).map_err(|e| format!("канал модели: {e}"))?;
     let gate = GateChannel::bind(&sock).map_err(|e| format!("канал гейта: {e}"))?;
@@ -797,6 +883,17 @@ pub fn run_build(run: BuildRun<'_>, backend: &dyn ModelBackend) -> Result<BuildO
             .map_err(|_| "вывод прогона отравлен".to_string())?
             .clone();
         let candidate = changed_files(&work, &snapshot).map_err(|e| format!("кандидат: {e}"))?;
+        match accept_candidate(&work, &snapshot, &candidate)
+            .map_err(|e| format!("проверка workspace: {e}"))?
+        {
+            CandidateVerdict::Clean => {}
+            CandidateVerdict::Dirty(dirty) => {
+                return Err(format!(
+                    "грязное дерево workspace: {}",
+                    dirty.files.join(", ")
+                ));
+            }
+        }
         Ok(BuildOutcome {
             model_turns,
             gate_requests,
