@@ -187,10 +187,16 @@ pub fn evidence_status(chain: &[EvidenceEntry]) -> EvidenceStatus {
     }
 }
 
-/// Человеческая ли это `Validation`. Фикстура помечена `FIXTURE_VALIDATION_LABEL` и
-/// решением человека не является: иначе тест выдавал бы себя за приёмку (решение 5).
+/// Человеческая ли это `Validation`. Решение обязано быть ЯВНЫМ: запись без
+/// `task_id` или с пустым (в том числе пробельным) `subject` — это не решение, а
+/// его отсутствие, и продвигать статус она не может (закон 6). Фикстура помечена
+/// `FIXTURE_VALIDATION_LABEL` и решением человека не является: иначе тест выдавал
+/// бы себя за приёмку (решение 5).
 fn is_human_validation(entry: &EvidenceEntry) -> bool {
-    entry.kind == EvidenceKind::Validation && entry.command != FIXTURE_VALIDATION_LABEL
+    entry.kind == EvidenceKind::Validation
+        && !entry.task_id.trim().is_empty()
+        && !entry.command.trim().is_empty()
+        && entry.command != FIXTURE_VALIDATION_LABEL
 }
 
 /// Первый индекс записи нужного вида, `None` — вида нет. Отдельный `Option`, а не
