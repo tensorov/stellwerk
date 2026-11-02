@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use stellwerk_gateway::gate::{
-    authorize_write, decide, writes_content, CallDecision, CallRequest, ContentDigest,
-    RequestedCall, Verdict,
+    authorize_write, decide, writes_content, AuthorizedCall, CallDecision, CallRequest,
+    ContentDigest, RequestedCall, Verdict,
 };
 
 use super::model_transport::MAX_FRAME_BYTES;
@@ -154,6 +154,28 @@ pub enum GateServed {
     Refused,
 }
 
+/// Итог решения: ответ в сокет и, если гейт авторизовал запись, сам `AuthorizedCall`.
+/// Только `authorized()` даёт право писать; `Allow` и прочие ответы его не несут.
+#[derive(Debug, Clone)]
+pub struct GateDecision {
+    answer: GateAnswer,
+    call: Option<AuthorizedCall>,
+}
+
+impl GateDecision {
+    pub fn answer(&self) -> &GateAnswer {
+        &self.answer
+    }
+
+    pub fn authorized(&self) -> Option<&AuthorizedCall> {
+        self.call.as_ref()
+    }
+
+    pub fn into_answer(self) -> GateAnswer {
+        self.answer
+    }
+}
+
 /// Хостовый канал: слушает `gate.sock` в хозяйском каталоге и удаляет файл при уничтожении.
 pub struct GateChannel {
     listener: UnixListener,
@@ -188,25 +210,29 @@ impl GateChannel {
         &self,
         session: &SessionDescription,
         policy: &dyn GatePolicy,
-    ) -> io::Result<(GateServed, Option<GateAnswer>)> {
+    ) -> io::Result<(GateServed, Option<GateDecision>)> {
         let (stream, _address) = self.listener.accept()?;
         let mut writer = stream.try_clone()?;
         let mut reader = BufReader::new(stream);
+        let mut authorized = None;
         let answer = match read_request(&mut reader)? {
             ReadOutcome::Eof => return Ok((GateServed::NoRequest, None)),
             ReadOutcome::Refused(code, message) => GateAnswer::Refused { code, message },
-            ReadOutcome::Request(request) => answer_for(session, policy, &request),
+            ReadOutcome::Request(request) => {
+                answer_for(session, policy, &request, &mut authorized)
+            }
         };
         write_answer(&mut writer, &answer)?;
         // Хвост дочитываем до EOF: закрытие с непрочитанными байтами шлёт RST, и клиент
         // не увидит сам ответ. Предел — тот же, что у кадра.
         let tail = &mut reader.by_ref().take(MAX_FRAME_BYTES as u64);
         io::copy(tail, &mut io::sink())?;
-        let served = match answer {
+        let decision = GateDecision { answer, call: authorized };
+        let served = match decision.answer() {
             GateAnswer::Refused { .. } => GateServed::Refused,
             _ => GateServed::Answered,
         };
-        Ok((served, Some(answer)))
+        Ok((served, Some(decision)))
     }
 }
 
@@ -222,10 +248,24 @@ enum ReadOutcome {
     Refused(RefusalCode, String),
 }
 
+/// Решение по заявке для хоста: сокет получает `answer()`, а применять запись
+/// можно только по `authorized()`. Публичная точка входа не выдаёт `AuthorizedCall`
+/// вне гейта: значение появляется лишь после `authorize_write` внутри.
+pub fn decide_request(
+    session: &SessionDescription,
+    policy: &dyn GatePolicy,
+    request: &GateRequest,
+) -> GateDecision {
+    let mut call = None;
+    let answer = answer_for(session, policy, request, &mut call);
+    GateDecision { answer, call }
+}
+
 fn answer_for(
     session: &SessionDescription,
     policy: &dyn GatePolicy,
     request: &GateRequest,
+    authorized: &mut Option<AuthorizedCall>,
 ) -> GateAnswer {
     let call = match session.adjudicate(&request.tool, request.parent_tool_call_id.as_deref()) {
         Ok(call) => call,
@@ -269,10 +309,11 @@ fn answer_for(
                     Some(requested) => {
                         let scope = request.path.as_deref().unwrap_or_default();
                         match authorize_write(requested, scope) {
-                            CallDecision::Authorized(authorized) => GateAnswer::Authorized {
-                                tool,
-                                scope: authorized.scope().to_owned(),
-                            },
+                            CallDecision::Authorized(call) => {
+                                let scope = call.scope().to_owned();
+                                *authorized = Some(call);
+                                GateAnswer::Authorized { tool, scope }
+                            }
                             CallDecision::Refused { reason } => GateAnswer::Deny { tool, reason },
                         }
                     }
@@ -290,10 +331,11 @@ fn answer_for(
                 // после авторизации не пройдёт под тем же `scope`.
                 AllowBasis::ApprovedPlan { scope } => match requested.as_ref() {
                     Some(requested) => match authorize_write(requested, &scope) {
-                        CallDecision::Authorized(authorized) => GateAnswer::Authorized {
-                            tool,
-                            scope: authorized.scope().to_owned(),
-                        },
+                        CallDecision::Authorized(call) => {
+                            let scope = call.scope().to_owned();
+                            *authorized = Some(call);
+                            GateAnswer::Authorized { tool, scope }
+                        }
                         CallDecision::Refused { reason } => GateAnswer::Deny { tool, reason },
                     },
                     // Пишущий вызов с путём, но без digest, не получает разрешения:

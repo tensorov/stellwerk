@@ -16,11 +16,11 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, RetentionClass, RiskClass};
-use stellwerk_gateway::gate::CallRequest;
+use stellwerk_gateway::gate::{writes_content, AuthorizedCall, CallRequest, ContentDigest};
 use stellwerk_gateway::permission::ToolRisk;
 use stellwerk_store::SqliteStore;
 use stellwerk_task::m5::gate_channel::{
-    AllowBasis, GateAnswer, GateChannel, GatePolicy, GateServed, PolicyVerdict,
+    AllowBasis, GateAnswer, GateChannel, GateDecision, GatePolicy, GateServed, PolicyVerdict,
 };
 use stellwerk_task::m5::model_transport::{ModelBackend, ModelProxy, Served};
 use stellwerk_task::m5::sandbox_bwrap::Sandbox;
@@ -183,12 +183,12 @@ pub fn serve_gate_until_stopped_logged(
     let mut served = 0;
     let mut answers = Vec::new();
     while !stop.load(Ordering::SeqCst) {
-        let (status, answer) = gate.serve_once_logged(session, policy)?;
+        let (status, decision) = gate.serve_once_logged(session, policy)?;
         if status != GateServed::NoRequest {
             served += 1;
         }
-        if let Some(answer) = answer {
-            answers.push(answer);
+        if let Some(decision) = decision {
+            answers.push(decision.into_answer());
         }
     }
     Ok((served, answers))
@@ -220,6 +220,146 @@ pub fn sandbox_roots() -> Vec<PathBuf> {
     ["/usr", "/bin", "/lib", "/lib64", "/etc"]
         .map(PathBuf::from)
         .to_vec()
+}
+
+/// Отказ хостского исполнения. Корень, выход за workspace, несвязанный digest,
+/// не-пишущий инструмент и отказ гейта — разные состояния; ни одно не становится
+/// тихой записью.
+#[derive(Debug)]
+pub enum HostRefusal {
+    WorkspaceMissing { root: PathBuf },
+    OutsideWorkspace { root: PathBuf, path: PathBuf },
+    NotWritable { tool: String },
+    NotAuthorized { answer: GateAnswer },
+    DigestMismatch { stage: &'static str, authorized: String, actual: String },
+    Io { path: PathBuf, message: String },
+}
+
+/// Что хост записал. Digest — фактический digest файла после записи.
+#[derive(Debug)]
+pub struct HostWrite {
+    pub path: PathBuf,
+    pub digest: String,
+    pub bytes: usize,
+}
+
+fn io_refusal(path: &Path, error: io::Error) -> HostRefusal {
+    HostRefusal::Io { path: path.to_path_buf(), message: error.to_string() }
+}
+
+static HOST_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Применяет решение гейта. Пишет только `authorized()`: у `Allow` и прочих ответов
+/// нет `AuthorizedCall`, поэтому применить их как запись нельзя — это отказ.
+pub fn apply_gate_decision(root: &Path, decision: &GateDecision) -> Result<HostWrite, HostRefusal> {
+    let call = decision.authorized().ok_or_else(|| HostRefusal::NotAuthorized {
+        answer: decision.answer().clone(),
+    })?;
+    apply_authorized(root, call)
+}
+
+fn apply_authorized(root: &Path, call: &AuthorizedCall) -> Result<HostWrite, HostRefusal> {
+    if !writes_content(call.tool()) {
+        return Err(HostRefusal::NotWritable { tool: call.tool().to_owned() });
+    }
+    let target = resolve_in_workspace(root, call.path())?;
+    // До записи: байты, которые собираемся писать, — ровно авторизованные.
+    let actual = ContentDigest::of(call.argument());
+    if actual != *call.content_digest() {
+        return Err(HostRefusal::DigestMismatch {
+            stage: "authorized",
+            authorized: call.content_digest().as_hex().to_owned(),
+            actual: actual.as_hex().to_owned(),
+        });
+    }
+    let Some(parent) = target.parent() else {
+        return Err(HostRefusal::OutsideWorkspace { root: root.to_path_buf(), path: target });
+    };
+    let name = target.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let temp = parent.join(format!(
+        ".{name}.host-{}-{}",
+        std::process::id(),
+        HOST_SEQ.fetch_add(1, Ordering::SeqCst)
+    ));
+    // После записи (ещё во временном файле): то, что появится под целевым именем,
+    // обязано иметь авторизованный digest. Иначе цель не подменяется вообще.
+    let staged = std::fs::write(&temp, call.argument())
+        .and_then(|()| std::fs::read(&temp))
+        .map_err(|error| {
+            let _ = std::fs::remove_file(&temp);
+            io_refusal(&temp, error)
+        })?;
+    let staged_digest = ContentDigest::of(&staged);
+    if staged_digest != *call.content_digest() {
+        let _ = std::fs::remove_file(&temp);
+        return Err(HostRefusal::DigestMismatch {
+            stage: "staged",
+            authorized: call.content_digest().as_hex().to_owned(),
+            actual: staged_digest.as_hex().to_owned(),
+        });
+    }
+    std::fs::rename(&temp, &target).map_err(|error| {
+        let _ = std::fs::remove_file(&temp);
+        io_refusal(&target, error)
+    })?;
+    let written = std::fs::read(&target).map_err(|error| io_refusal(&target, error))?;
+    let digest = ContentDigest::of(&written);
+    if digest != *call.content_digest() {
+        return Err(HostRefusal::DigestMismatch {
+            stage: "written",
+            authorized: call.content_digest().as_hex().to_owned(),
+            actual: digest.as_hex().to_owned(),
+        });
+    }
+    Ok(HostWrite { path: target, digest: digest.as_hex().to_owned(), bytes: written.len() })
+}
+
+/// Разрешает путь строго внутри `root`. Корень канонизируется: его отсутствие —
+/// названный отказ. `..`, абсолютный путь вне корня и симлинк наружу отвергаются
+/// до записи.
+pub fn resolve_in_workspace(root: &Path, raw: &str) -> Result<PathBuf, HostRefusal> {
+    let root = std::fs::canonicalize(root).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            HostRefusal::WorkspaceMissing { root: root.to_path_buf() }
+        } else {
+            io_refusal(root, error)
+        }
+    })?;
+    let outside = |path: PathBuf| HostRefusal::OutsideWorkspace { root: root.clone(), path };
+    let requested = Path::new(raw);
+    let relative = if requested.is_absolute() {
+        requested.strip_prefix(&root).map_err(|_| outside(requested.to_path_buf()))?.to_path_buf()
+    } else {
+        requested.to_path_buf()
+    };
+    if relative.as_os_str().is_empty()
+        || relative.components().any(|part| {
+            !matches!(part, std::path::Component::Normal(_) | std::path::Component::CurDir)
+        })
+    {
+        return Err(outside(requested.to_path_buf()));
+    }
+    let candidate = root.join(&relative);
+    let parent = std::fs::canonicalize(candidate.parent().unwrap_or(&root))
+        .map_err(|error| io_refusal(&root, error))?;
+    if !parent.starts_with(&root) {
+        return Err(outside(candidate));
+    }
+    let Some(name) = candidate.file_name() else {
+        return Err(outside(candidate));
+    };
+    let target = parent.join(name);
+    // Симлинк разрешается только внутрь корня: иначе запись ушла бы за workspace,
+    // хотя лексически путь внутри.
+    if let Ok(meta) = std::fs::symlink_metadata(&target) {
+        if meta.file_type().is_symlink() {
+            let real = std::fs::canonicalize(&target).map_err(|error| io_refusal(&target, error))?;
+            if !real.starts_with(&root) {
+                return Err(outside(target));
+            }
+        }
+    }
+    Ok(target)
 }
 
 /// Сколько ждёт песочница и сколько отведено прогону.
