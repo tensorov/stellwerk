@@ -99,7 +99,7 @@ pub fn run(args: &AddArgs, root: &Path) -> Result<(), AddError> {
 
     // 3. kind-specific command validation
     let is_mcp = matches!(args.kind, crate::cli::KindArg::Mcp);
-    if is_mcp && args.command.as_ref().map_or(true, |c| c.is_empty()) {
+    if is_mcp && args.command.as_ref().is_none_or(|c| c.is_empty()) {
         return Err(AddError::McpNeedsCommand);
     }
     if !is_mcp && args.command.is_some() {
