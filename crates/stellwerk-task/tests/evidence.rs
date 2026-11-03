@@ -13,6 +13,7 @@
 //! Импорт идёт через публичный API крейта, не `#[path]`: тот собрал бы вторую
 //! копию типов контракта, и расхождение обнаружилось бы в чужом коде.
 
+use stellwerk_core::contract::{CommitSha, PolicyDigest, RecipeDigest};
 use stellwerk_task::evidence::{
     evaluate, evidence_status, model_claim, tool_attestation, validation, EvidenceEntry,
     EvidenceKind, EvidenceStatus, CHAIN_TAIL_PENDING, FIXTURE_VALIDATION_LABEL,
@@ -27,6 +28,34 @@ const TEST_CMD: &str = "cargo test -p stellwerk-task --test evidence";
 /// Предмет человеческого решения: кто и что решил. Кладётся в `command` записи
 /// `Validation` — отдельного поля «кто проверял» у `EvidenceEntry` нет.
 const HUMAN_SUBJECT: &str = "owner reviewed the diff and accepted";
+/// Bindings фикстуры ненулевые: `None` и пустая строка не должны сойтись в один
+/// хвост, поэтому тест подмены обязан видеть настоящее значение, а не отсутствие.
+const RECIPE: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+const POLICY: &str = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+const COMMIT: &str = "3333333333333333333333333333333333333333";
+
+/// Привязать удостоверение к рецепту, политике и коммиту. `None` остаётся
+/// отдельным состоянием: конструкторы его не заполняют, а тест дописывает
+/// привязку явно, иначе отсутствие было бы неотличимо от «неприменимо».
+fn bound(mut entry: EvidenceEntry) -> EvidenceEntry {
+    entry.recipe_digest = Some(RecipeDigest(RECIPE.to_owned()));
+    entry.policy_digest = Some(PolicyDigest(POLICY.to_owned()));
+    entry.commit_sha = Some(CommitSha(COMMIT.to_owned()));
+    entry
+}
+
+fn replace_binding(chain: &mut [EvidenceEntry], field: &str, value: Option<&str>) {
+    let tool = chain
+        .iter_mut()
+        .find(|entry| entry.kind == EvidenceKind::ToolAttestation)
+        .expect("фикстура содержит ToolAttestation");
+    match field {
+        "recipe_digest" => tool.recipe_digest = value.map(|v| RecipeDigest(v.to_owned())),
+        "policy_digest" => tool.policy_digest = value.map(|v| PolicyDigest(v.to_owned())),
+        "commit_sha" => tool.commit_sha = value.map(|v| CommitSha(v.to_owned())),
+        other => panic!("неизвестное binding-поле: {other}"),
+    }
+}
 
 fn outcome(verdict: Verdict) -> RunOutcome {
     RunOutcome {
@@ -66,7 +95,7 @@ fn validated_without_attestation() -> Vec<EvidenceEntry> {
 fn attested() -> Vec<EvidenceEntry> {
     vec![
         claim("e-1", "h-claim"),
-        tool_attestation(TASK, "e-2", TEST_CMD, "h-tool", TS),
+        bound(tool_attestation(TASK, "e-2", TEST_CMD, "h-tool", TS)),
     ]
 }
 
@@ -90,7 +119,7 @@ fn attested_and_human_validated() -> Vec<EvidenceEntry> {
 /// другая цепочка.
 fn wrong_order() -> Vec<EvidenceEntry> {
     vec![
-        tool_attestation(TASK, "e-tool", TEST_CMD, "h-tool", TS),
+        bound(tool_attestation(TASK, "e-tool", TEST_CMD, "h-tool", TS)),
         claim("e-claim", "h-claim"),
         validation(TASK, "e-validation", TEST_CMD, "h-tool", TS),
     ]
@@ -209,7 +238,7 @@ fn wrong_order_is_refused_and_names_the_expected_order() {
 fn tool_attestation_without_command_is_refused() {
     let chain = vec![
         claim("e-1", "h-claim"),
-        tool_attestation(TASK, "e-2", "", "h-tool", TS),
+        bound(tool_attestation(TASK, "e-2", "", "h-tool", TS)),
         validation(TASK, "e-3", TEST_CMD, "h-tool", TS),
     ];
     let gate = evaluate(&outcome(Verdict::Valid), &chain);
@@ -234,7 +263,7 @@ fn tool_attestation_without_command_is_refused() {
 fn present_entry_without_digest_is_refused() {
     let chain = vec![
         claim("e-1", ""),
-        tool_attestation(TASK, "e-2", TEST_CMD, "h-tool", TS),
+        bound(tool_attestation(TASK, "e-2", TEST_CMD, "h-tool", TS)),
         validation(TASK, "e-3", TEST_CMD, "h-tool", TS),
     ];
     let gate = evaluate(&outcome(Verdict::Valid), &chain);
@@ -282,13 +311,71 @@ fn chain_tail_is_reproducible_and_follows_the_chain() {
 fn chain_tail_distinguishes_entry_kinds() {
     let run = outcome(Verdict::Valid);
     let claim = model_claim(TASK, "e-1", "h", TS);
-    let tool = tool_attestation(TASK, "e-1", "", "h", TS);
+    let tool = bound(tool_attestation(TASK, "e-1", "", "h", TS));
     let claim_tail = evaluate(&run, &[claim]).chain_tail_hash;
     let tool_tail = evaluate(&run, &[tool]).chain_tail_hash;
     assert_ne!(
         claim_tail, tool_tail,
         "вид записи обязан входить в хвост: иначе ModelClaim и ToolAttestation \
          с одинаковыми прочими полями сойдутся в один хвост"
+    );
+}
+
+#[test]
+fn tool_attestation_bindings_are_required_and_tamper_sensitive() {
+    let run = outcome(Verdict::Valid);
+    let base = evaluate(&run, &attested_and_validated());
+    assert!(
+        base.passed,
+        "полная цепочка с bindings обязана закрывать гейт: {:?}",
+        base.missing
+    );
+
+    for field in ["recipe_digest", "policy_digest", "commit_sha"] {
+        let mut tampered = attested_and_validated();
+        replace_binding(&mut tampered, field, Some("tampered"));
+        let gate = evaluate(&run, &tampered);
+        assert_ne!(
+            base.chain_tail_hash, gate.chain_tail_hash,
+            "подмена {field} обязана менять хвост: иначе привязка не видна проверке"
+        );
+        assert!(
+            gate.passed,
+            "подменённое, но присутствующее значение не выдаётся за отсутствие: {:?}",
+            gate.missing
+        );
+    }
+
+    for field in ["recipe_digest", "policy_digest", "commit_sha"] {
+        let mut missing = attested_and_validated();
+        replace_binding(&mut missing, field, None);
+        let gate = evaluate(&run, &missing);
+        assert!(
+            !gate.passed,
+            "ToolAttestation без {field} не закрывает гейт: {:?}",
+            gate.missing
+        );
+        assert!(
+            gate.missing
+                .iter()
+                .any(|reason| reason.contains("ToolAttestation") && reason.contains(field)),
+            "отказ обязан назвать отсутствующее поле {field}: {:?}",
+            gate.missing
+        );
+    }
+}
+
+#[test]
+fn absent_and_empty_binding_have_different_tails() {
+    let run = outcome(Verdict::Valid);
+    let mut absent = attested_and_validated();
+    replace_binding(&mut absent, "recipe_digest", None);
+    let mut empty = attested_and_validated();
+    replace_binding(&mut empty, "recipe_digest", Some(""));
+    assert_ne!(
+        evaluate(&run, &absent).chain_tail_hash,
+        evaluate(&run, &empty).chain_tail_hash,
+        "None и Some(\"\") — разные состояния: без маркера наличия они сошлись бы в один хвост"
     );
 }
 

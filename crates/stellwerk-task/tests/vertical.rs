@@ -7,7 +7,8 @@ use std::path::Path;
 use std::pin::Pin;
 
 use stellwerk_core::contract::{
-    DataClass, Event, EventRisk, ModelBinding, PolicyLevel, RetentionClass, RiskClass, TaskStatus,
+    CommitSha, DataClass, Event, EventRisk, ModelBinding, PolicyDigest, PolicyLevel, RecipeDigest,
+    RetentionClass, RiskClass, TaskStatus,
 };
 use stellwerk_gateway::permission::{PermissionError, ToolRisk};
 use stellwerk_store::{EventStore, SqliteStore, TaskStore};
@@ -320,6 +321,7 @@ id = "m4-vertical-demo"
 goal = "Дойти до Done с проверенным доказательством"
 workspace_ref = "ws-stellwerk"
 model_ref = "qwen-local"
+profile = "pi"
 packet = "выполнить ровно один разрешённый вызов"
 evidence_policy = "cargo test -p stellwerk-task --test vertical"
 
@@ -407,17 +409,25 @@ fn the_run_gate_closes_only_with_attestation_and_validation() {
         total_input_tokens: 120,
         verdict: Verdict::Valid,
     };
-    let entry = |id: &str, kind: EvidenceKind| EvidenceEntry {
-        id: id.to_owned(),
-        task_id: "m4-vertical-demo".to_owned(),
-        kind,
-        command: "cargo test -p stellwerk-task --test vertical".to_owned(),
-        result_hash: format!("hash-{id}"),
-        ts: "2026-10-01T00:00:00Z".to_owned(),
-        recipe_digest: None,
-        policy_digest: None,
-        model_fingerprint: None,
-        commit_sha: None,
+    let entry = |id: &str, kind: EvidenceKind| {
+        let mut entry = EvidenceEntry {
+            id: id.to_owned(),
+            task_id: "m4-vertical-demo".to_owned(),
+            kind,
+            command: "cargo test -p stellwerk-task --test vertical".to_owned(),
+            result_hash: format!("hash-{id}"),
+            ts: "2026-10-01T00:00:00Z".to_owned(),
+            recipe_digest: None,
+            policy_digest: None,
+            model_fingerprint: None,
+            commit_sha: None,
+        };
+        if kind == EvidenceKind::ToolAttestation {
+            entry.recipe_digest = Some(RecipeDigest("sha256:vertical-recipe".to_owned()));
+            entry.policy_digest = Some(PolicyDigest("sha256:vertical-policy".to_owned()));
+            entry.commit_sha = Some(CommitSha("vertical-commit".to_owned()));
+        }
+        entry
     };
 
     let closed = evaluate(

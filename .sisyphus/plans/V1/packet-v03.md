@@ -2,7 +2,7 @@
 id: v03
 milestone: V1
 status: GREEN
-depends_on: [o01, v02]
+depends_on: [o01, v02, v03b]
 files_allowed: [crates/stellwerk-cli/tests/vertical_v3.rs]
 acceptance: cargo test -p stellwerk-cli --test vertical_v3
 ---

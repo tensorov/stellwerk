@@ -336,6 +336,26 @@ pub fn evaluate(outcome: &RunOutcome, chain: &[EvidenceEntry]) -> GateResult {
                 EvidenceKind::ModelClaim => {}
             }
         }
+        // Привязка — часть доказательства, а не украшение: удостоверение без
+        // рецепта, политики или коммита проверять не по чему. Для остальных видов
+        // `None` остаётся явным «неприменимо» (закон 6).
+        if entry.kind == EvidenceKind::ToolAttestation {
+            if entry.recipe_digest.is_none() {
+                missing.push(
+                    "ToolAttestation без recipe_digest: привязка к рецепту не названа".to_owned(),
+                );
+            }
+            if entry.policy_digest.is_none() {
+                missing.push(
+                    "ToolAttestation без policy_digest: привязка к политике не названа".to_owned(),
+                );
+            }
+            if entry.commit_sha.is_none() {
+                missing.push(
+                    "ToolAttestation без commit_sha: привязка к коммиту не названа".to_owned(),
+                );
+            }
+        }
     }
     if outcome.verdict != Verdict::Valid {
         // Имя вердикта печатается, а решение не пересчитывается: спор о годности
@@ -374,9 +394,45 @@ fn chain_tail(entries: &[EvidenceEntry]) -> String {
             hasher.update((field.len() as u64).to_be_bytes());
             hasher.update(field.as_bytes());
         }
+        hash_optional_text(
+            &mut hasher,
+            entry.recipe_digest.as_ref().map(|digest| digest.0.as_str()),
+        );
+        hash_optional_text(
+            &mut hasher,
+            entry.policy_digest.as_ref().map(|digest| digest.0.as_str()),
+        );
+        hash_optional_text(
+            &mut hasher,
+            entry
+                .model_fingerprint
+                .as_ref()
+                .map(|fingerprint| fingerprint.0.as_str()),
+        );
+        hash_optional_text(
+            &mut hasher,
+            entry.commit_sha.as_ref().map(|sha| sha.0.as_str()),
+        );
         tail = format!("{:x}", hasher.finalize());
     }
     tail
+}
+
+/// Хеш необязательной привязки: маркер наличия, затем длина, затем значение.
+/// `None` (маркер 0) и `Some("")` (маркер 1, длина 0) обязаны различаться:
+/// иначе отсутствие привязки и пустая привязка сошлись бы в один хвост.
+fn hash_optional_text(hasher: &mut Sha256, value: Option<&str>) {
+    match value {
+        Some(text) => {
+            hasher.update([1u8]);
+            hasher.update((text.len() as u64).to_be_bytes());
+            hasher.update(text.as_bytes());
+        }
+        None => {
+            hasher.update([0u8]);
+            hasher.update(0u64.to_be_bytes());
+        }
+    }
 }
 
 /// Имя вида записи в хвосте — те же строки, что у PolyForge и в сериализации
