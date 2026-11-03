@@ -124,6 +124,33 @@ fn gate_passes_when_gate_evaluate_is_ok() {
     assert_eq!(run.code, Some(0), "output: {}", run.output);
 }
 
+/// I02: an unattested bundle is refused by exit code, not by a substring that a
+/// gate which allowed everything would also print. `ok:true` is the control: the
+/// same fixture must then exit 0, so exit 1 cannot be a constant.
+#[test]
+fn unattested_bundle_returns_exit_one() {
+    let dir = TempDir::new();
+    let server = fake_server(&dir);
+    let rejected = run_gate(
+        Some(&server),
+        r#"{"jsonrpc":"2.0","id":2,"result":{"ok":false,"state":"MissingToolAttestation"}}"#,
+        None,
+    );
+    assert_eq!(rejected.code, Some(1), "output: {}", rejected.output);
+    assert!(
+        rejected.output.contains("MissingToolAttestation"),
+        "output: {}",
+        rejected.output
+    );
+
+    let accepted = run_gate(
+        Some(&server),
+        r#"{"jsonrpc":"2.0","id":2,"result":{"ok":true,"state":"Verified"}}"#,
+        None,
+    );
+    assert_eq!(accepted.code, Some(0), "output: {}", accepted.output);
+}
+
 #[test]
 fn gate_fails_closed_when_polyforge_is_missing() {
     let run = run_gate(None, "", Some("/nonexistent"));
