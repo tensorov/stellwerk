@@ -106,3 +106,53 @@ fn refuted_requires_stated_basis() {
         "принятие и опровержение — разные решения"
     );
 }
+
+/// V1/s03: «опровергнуто, но завершено» невозможно. После `Refuted` нет
+/// исходящих переходов, а названное основание остаётся при опровержении, а не
+/// теряется при остановке цепочки.
+#[test]
+fn done_after_refuted_is_rejected() {
+    // Given: принятое опровержение с названным основанием и ссылкой на данные.
+    let accepted = refutation(BASIS, REFUTING_DATA).expect("основание и ссылка названы");
+
+    // (a) Then: опровержение переводит задачу в `Refuted`.
+    assert_eq!(
+        accepted.status(),
+        TaskStatus::Refuted,
+        "принятое опровержение переводит задачу в Refuted"
+    );
+
+    // (b)-(d) Then: из `Refuted` нет перехода ни в завершение, ни в валидацию,
+    // ни в себя. Проверяются точные цели, а не только «не Done».
+    assert!(
+        !TaskStatus::Refuted.can_transition_to(TaskStatus::Done),
+        "опровергнуто, но завершено — запрещено"
+    );
+    assert!(
+        !TaskStatus::Refuted.can_transition_to(TaskStatus::Validated),
+        "опровергнутое доказательство нельзя валидировать"
+    );
+    assert!(
+        !TaskStatus::Refuted.can_transition_to(TaskStatus::Refuted),
+        "переход в себя запрещён и для Refuted"
+    );
+
+    // (e) Then: `Refuted` — явный конец жизненного цикла.
+    assert!(
+        TaskStatus::Refuted.is_terminal(),
+        "Refuted терминален: после опровержения цепочка не продолжается"
+    );
+
+    // (f) Then: основание и ссылка на опровергающие данные не теряются при
+    // остановке — опровержение остаётся проверяемым, а не декоративным.
+    assert_eq!(
+        accepted.basis(),
+        BASIS,
+        "основание сохраняется после остановки цепочки"
+    );
+    assert_eq!(
+        accepted.refuting_data(),
+        REFUTING_DATA,
+        "ссылка на опровергающие данные сохраняется после остановки цепочки"
+    );
+}
