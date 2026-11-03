@@ -6,7 +6,7 @@ depends_on: [o01, v02, o03, o04]
 files_allowed: [crates/stellwerk-task/src/evidence.rs, crates/stellwerk-task/tests/evidence.rs, crates/stellwerk-task/tests/vertical.rs, crates/stellwerk-cli/tests/vertical_v3.rs]
 limit_waiver: C2 — 4 files; src and tests are split because the binding check lives in evidence.rs and the existing vertical gate fixture must carry the same bindings
 overlap_waiver: C9 — N1/07 — `evidence.rs`/`tests/evidence.rs`, последовательное исполнение в одном worktree
-acceptance: cargo test -p stellwerk-task --test evidence && cargo test -p stellwerk-task --test vertical && cargo test -p stellwerk-cli --test vertical_v3
+acceptance: cargo test -p stellwerk-task -p stellwerk-cli --test evidence --test vertical --test vertical_v3
 ---
 
 # v03b — evidence bindings must be visible to the chain check
@@ -47,7 +47,7 @@ acceptance: cargo test -p stellwerk-task --test evidence && cargo test -p stellw
   существующие проверки порядка и digest.
 
 ## Приёмка
-cargo test -p stellwerk-task --test evidence && cargo test -p stellwerk-task --test vertical && cargo test -p stellwerk-cli --test vertical_v3
+cargo test -p stellwerk-task -p stellwerk-cli --test evidence --test vertical --test vertical_v3
 
 ## Запрещено
 - Не принимать цепочку с `ToolAttestation` без `recipe_digest`, `policy_digest` или
