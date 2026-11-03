@@ -6,4 +6,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: echo "TODO polyforge-action gate_evaluate (M0 packet: contract-change)"
+      - run: ./scripts/integrator/gate.sh "${{ github.head_ref }}"
