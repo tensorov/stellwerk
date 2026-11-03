@@ -18,7 +18,9 @@ use crate::events::now_rfc3339;
 use crate::m5::sandbox_bwrap::Sandbox;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use stellwerk_core::contract::{DataClass, Event, EventRisk, ModelBinding, PolicyLevel, TaskSpec};
+use stellwerk_core::contract::{
+    DataClass, Event, EventRisk, ModelBinding, PolicyLevel, TaskSpec, TaskStatus,
+};
 use stellwerk_gateway::gate::{decide, CallRequest};
 use stellwerk_gateway::permission::{PermissionError, ToolRisk};
 use stellwerk_store::EventStore;
@@ -320,6 +322,21 @@ pub fn authorize(call: &Call, caller: PolicyLevel, registry: &dyn RiskRegistry) 
     GateDecision {
         risk: applied,
         verdict: decide(&request),
+    }
+}
+
+/// Куда ведёт приостановка. Вопрос человеку есть только у `Ask`, поэтому только он
+/// разрешает `AwaitingHumanValidation`. `Suspended` — «спросить некого» — остаётся
+/// отдельным состоянием паузы и в ожидание решения не превращается: тишина не
+/// становится ни разрешением, ни вопросом (закон 6).
+///
+/// `None` — вердикт прогон не приостанавливает. Не `unwrap_or(TaskStatus::Suspended)`:
+/// неприменимый вердикт не должен молча выглядеть как сознательная пауза.
+pub fn suspension_status(verdict: &CallVerdict) -> Option<TaskStatus> {
+    match verdict {
+        CallVerdict::Ask => Some(TaskStatus::AwaitingHumanValidation),
+        CallVerdict::Suspended => Some(TaskStatus::Suspended),
+        CallVerdict::Allow | CallVerdict::Deny { .. } => None,
     }
 }
 
