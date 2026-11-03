@@ -7,11 +7,14 @@
 //! `FIXTURE_VALIDATION_LABEL`, решением человека не является по-прежнему.
 
 use stellwerk_task::evidence::{
-    evidence_status, model_claim, tool_attestation, validation, EvidenceEntry, EvidenceStatus,
-    FIXTURE_VALIDATION_LABEL,
+    evidence_status, model_claim, tool_attestation, validation, EvidenceEntry, EvidenceLedger,
+    EvidenceStatus, LedgerError, FIXTURE_VALIDATION_LABEL,
 };
+use stellwerk_task::runner::resume_after_human_validation;
 
 const TASK: &str = "t-human-validation";
+/// Другая задача: её валидация не является решением о `TASK`.
+const OTHER: &str = "t-other-task";
 /// Время фиксировано: решение человека проверяется, а не время его записи.
 const TS: &str = "2026-11-02T00:00:00Z";
 const TEST_CMD: &str = "cargo test -p stellwerk-task --test human_validation";
@@ -26,6 +29,77 @@ fn attested() -> Vec<EvidenceEntry> {
         model_claim(TASK, "e-claim", "h-claim", TS),
         tool_attestation(TASK, "e-tool", TEST_CMD, "h-tool", TS),
     ]
+}
+
+/// Леджер, который намеренно НЕ фильтрует по задаче: `entries` отдаёт все записи
+/// на любой `task_id`. Так тест доказывает, что собственный фильтр раннера, а не
+/// дисциплина хранилища, не пускает чужую валидацию в возобновление.
+struct LeakyLedger {
+    entries: Vec<EvidenceEntry>,
+}
+
+impl EvidenceLedger for LeakyLedger {
+    fn append(&mut self, _entry: &EvidenceEntry) -> Result<(), LedgerError> {
+        Ok(())
+    }
+
+    fn entries(&self, _task_id: &str) -> Vec<EvidenceEntry> {
+        self.entries.clone()
+    }
+}
+
+#[test]
+fn resume_only_on_own_task_validation() {
+    // Given: удостоверенный прогон TASK и человеческая Validation ЧУЖОЙ задачи.
+    let mut foreign = attested();
+    foreign.push(validation(OTHER, "e-foreign", HUMAN_SUBJECT, "h-tool", TS));
+    let foreign_ledger = LeakyLedger { entries: foreign };
+    assert_eq!(
+        foreign_ledger.entries("unrelated").len(),
+        3,
+        "фейк обязан отдавать все записи, иначе тест не проверяет фильтр раннера"
+    );
+
+    // When/Then (a): валидация чужой задачи не возобновляет прогон TASK.
+    assert_eq!(
+        resume_after_human_validation(&foreign_ledger, TASK),
+        EvidenceStatus::AwaitingHumanValidation,
+        "валидация другой задачи — не решение о TASK"
+    );
+
+    // When (b): в ту же цепочку добавлена Validation самой TASK.
+    let mut own = attested();
+    own.push(validation(OTHER, "e-foreign", HUMAN_SUBJECT, "h-tool", TS));
+    own.push(validation(TASK, "e-own", HUMAN_SUBJECT, "h-tool", TS));
+    let own_ledger = LeakyLedger { entries: own };
+    // Then: собственная явная запись возобновляет прогон.
+    assert_eq!(
+        resume_after_human_validation(&own_ledger, TASK),
+        EvidenceStatus::HumanValidated,
+        "Validation самой TASK возобновляет прогон"
+    );
+
+    // When (c): записи человека нет вовсе.
+    let none_ledger = LeakyLedger {
+        entries: attested(),
+    };
+    // Then: прогон ждёт человека, а не возобновляется.
+    assert_eq!(
+        resume_after_human_validation(&none_ledger, TASK),
+        EvidenceStatus::AwaitingHumanValidation,
+        "без Validation прогон ждёт человека"
+    );
+
+    // When (d): Validation без task_id.
+    let mut no_task = attested();
+    no_task.push(validation("", "e-no-task", HUMAN_SUBJECT, "h-tool", TS));
+    let no_task_ledger = LeakyLedger { entries: no_task };
+    // Then: запись не идентифицирует задачу — возобновления нет.
+    assert_eq!(
+        resume_after_human_validation(&no_task_ledger, TASK),
+        EvidenceStatus::AwaitingHumanValidation,
+        "Validation без task_id не возобновляет прогон"
+    );
 }
 
 #[test]

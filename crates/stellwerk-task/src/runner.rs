@@ -15,6 +15,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::events::now_rfc3339;
+use crate::evidence::{evidence_status, EvidenceEntry, EvidenceLedger, EvidenceStatus};
 use crate::m5::sandbox_bwrap::Sandbox;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -338,6 +339,20 @@ pub fn suspension_status(verdict: &CallVerdict) -> Option<TaskStatus> {
         CallVerdict::Suspended => Some(TaskStatus::Suspended),
         CallVerdict::Allow | CallVerdict::Deny { .. } => None,
     }
+}
+
+/// Возобновление после человеческой валидации: `HumanValidated` возвращается только
+/// для записи, принадлежащей ЭТОЙ задаче. `entries(task_id)` не считается фильтром —
+/// реализация вправе отдать больше (протекающий ledger), поэтому чужие записи
+/// отбрасываются здесь. Иначе валидация другой задачи возобновила бы прогон,
+/// которого человек не видел.
+pub fn resume_after_human_validation(ledger: &dyn EvidenceLedger, task_id: &str) -> EvidenceStatus {
+    let chain: Vec<EvidenceEntry> = ledger
+        .entries(task_id)
+        .into_iter()
+        .filter(|entry| entry.task_id == task_id)
+        .collect();
+    evidence_status(&chain)
 }
 
 // --- M4/packet-05: вертикальный срез — решение обязано дойти до того, что произойдёт ---
