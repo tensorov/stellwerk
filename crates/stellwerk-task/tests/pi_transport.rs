@@ -12,7 +12,9 @@ use std::time::Duration;
 use stellwerk_core::contract::{DataClass, PolicyLevel, RiskClass};
 use stellwerk_gateway::gate::CallRequest;
 use stellwerk_gateway::permission::ToolRisk;
-use stellwerk_task::m5::gate_channel::{AllowBasis, GateChannel, GatePolicy, PolicyVerdict};
+use stellwerk_task::m5::gate_channel::{
+    AllowBasis, GateChannel, GateDecision, GatePolicy, PolicyVerdict,
+};
 use stellwerk_task::m5::model_transport::{
     BackendError, Frame, ModelBackend, ModelProxy, TurnMessage, TurnRequest,
 };
@@ -144,17 +146,20 @@ fn tool_call_goes_to_socket_with_args() {
     assert_eq!(frame["tool"], "write");
     assert_eq!(frame["parent_tool_call_id"], serde_json::Value::Null);
     assert_eq!(frame["path"], "note.txt");
+    // `write` несёт ровно байты `params.content`, а не JSON-обёртку: хост пишет
+    // то же, что подписано digest.
     let argument = frame["argument"].as_str().expect("аргументы строкой");
-    let parsed: serde_json::Value = serde_json::from_str(argument).expect("аргументы — JSON");
-    assert_eq!(parsed["path"], "note.txt");
-    assert_eq!(parsed["content"], "from the host\n");
+    assert_eq!(argument, "from the host\n");
     let digest = frame["content_digest"]
         .as_str()
         .expect("дайджест аргументов записи");
     assert_eq!(digest, format!("{:x}", Sha256::digest(argument.as_bytes())));
-    assert_eq!(
-        std::fs::read_to_string(run.work.join("note.txt")).expect("файл записан"),
-        "from the host\n"
+    // Расширение только просит разрешение; запись применяет хост по `AuthorizedCall`.
+    // Здесь гейт записанный, без `AuthorizedCall`, поэтому файла быть не должно.
+    assert!(
+        !run.work.join("note.txt").exists(),
+        "расширение не пишет само: {}",
+        run.output
     );
 }
 #[test]
@@ -346,9 +351,14 @@ where
             CodemodeState::AbsentAfterConfigLoad,
         )
         .expect("описание сессии");
+        let work = work.clone();
         servers.push(std::thread::spawn(move || {
-            gate.serve_once(&session, &Policy(call(ToolRisk::Classified(class), true)))
+            let (_, decision) = gate
+                .serve_once_logged(&session, &Policy(call(ToolRisk::Classified(class), true)))
                 .expect("вердикт гейта");
+            if let Some(decision) = decision {
+                apply_host_write(&work, &decision);
+            }
         }));
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -370,6 +380,23 @@ where
         gate_seen,
     }
 }
+fn apply_host_write(work: &Path, decision: &GateDecision) {
+    let Some(call) = decision.authorized() else {
+        return;
+    };
+    let actual = format!("{:x}", Sha256::digest(call.argument()));
+    assert_eq!(
+        actual,
+        call.content_digest().as_hex(),
+        "авторизованные байты обязаны нести свой digest"
+    );
+    let target = work.join(call.path());
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).expect("каталог записи");
+    }
+    std::fs::write(&target, call.argument()).expect("хост применяет авторизованную запись");
+}
+
 fn serve_recorded(
     listener: UnixListener,
     seen: Arc<Mutex<Vec<serde_json::Value>>>,
@@ -435,8 +462,36 @@ fn pi_gate_unreachable_blocks() {
 }
 #[test]
 fn pi_allowed_tool_executes() {
-    let run = bash_turn("allow", true, Some(RiskClass::R0), &["bash"]);
-    assert!(run.canary, "allow исполняет: {}", run.output);
+    let run = run(
+        "allow",
+        &["read", "edit", "write"],
+        Some(RiskClass::R0),
+        &["read", "edit", "write"],
+        |_work| {
+            vec![
+                vec![tool_call(
+                    "call-1",
+                    "write",
+                    json!({ "path": "note.txt", "content": "from the host\n" }),
+                )],
+                vec![text_frame("ok")],
+            ]
+        },
+    );
+    let written = std::fs::read_to_string(run.work.join("note.txt"))
+        .expect("разрешённый write применён хостом");
+    assert_eq!(written, "from the host\n");
+    assert!(!run.output.contains("gate_denied"), "{}", run.output);
+}
+#[test]
+fn a_gate_allowed_held_bash_still_never_executes() {
+    let run = bash_turn("held-allow", true, Some(RiskClass::R0), &["bash"]);
+    assert!(!run.canary, "held bash не исполняется: {}", run.output);
+    assert!(
+        run.output.contains("held_tool_unreachable"),
+        "held bash обязан назвать отказ: {}",
+        run.output
+    );
 }
 #[test]
 fn pi_tool_set_mismatch_refused() {
@@ -552,7 +607,31 @@ fn pi_executes_an_edit_the_model_asked_for() {
         },
     );
     let edited = std::fs::read_to_string(run.work.join("src/lib.rs")).expect("файл на месте");
-    assert!(edited.contains("{ 2 }"), "правка: {edited}");
+    assert_eq!(edited, "pub fn one() -> u8 { 2 }\n", "правка: {edited}");
     assert!(!run.output.contains("gate_denied"));
     assert!(run.seen.lock().expect("журнал ходов").len() > 1);
+}
+#[test]
+fn a_non_authorized_decision_writes_nothing() {
+    let run = run(
+        "edit-denied",
+        &["read", "edit", "write"],
+        Some(RiskClass::R5),
+        &["read", "edit", "write"],
+        |work| {
+            std::fs::create_dir_all(work.join("src")).expect("src");
+            std::fs::write(work.join("src/lib.rs"), "pub fn one() -> u8 { 1 }\n").expect("файл");
+            let input = json!({
+                "path": "src/lib.rs",
+                "edits": [{ "oldText": "pub fn one() -> u8 { 1 }", "newText": "pub fn one() -> u8 { 2 }" }]
+            });
+            vec![
+                vec![tool_call("call-1", "edit", input)],
+                vec![text_frame("ok")],
+            ]
+        },
+    );
+    let untouched = std::fs::read_to_string(run.work.join("src/lib.rs")).expect("файл на месте");
+    assert_eq!(untouched, "pub fn one() -> u8 { 1 }\n", "отказ не пишет");
+    assert!(run.output.contains("gate_denied"), "{}", run.output);
 }
