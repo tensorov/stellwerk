@@ -126,7 +126,8 @@ fn text_of(event: &stellwerk_core::contract::Event) -> String {
 
 /// Отказ — не «ничего не случилось»: воркер не тронут, но след обязан лечь с именем
 /// состояния и причиной. Пустой поток сделал бы запрет неотличимым от прогона без
-/// решения, а `Succeeded` — от состоявшегося вызова.
+/// решения, а `Succeeded` — от состоявшегося вызова. Поток несёт один чек вызова
+/// плюс отдельную запись карантина, а не две похожие квитанции.
 #[tokio::test]
 async fn a_refused_call_spawns_nothing_and_leaves_a_named_refusal() {
     let store = store();
@@ -142,8 +143,14 @@ async fn a_refused_call_spawns_nothing_and_leaves_a_named_refusal() {
     assert_eq!(worker.spawned(), 0, "запрещённый вызов не запускает воркер");
 
     let seen = store.list_by_task("t-v02").await.expect("выборка");
-    assert_eq!(seen.len(), 1, "ровно один чек на один вызов: {seen:?}");
-    let receipt = &seen[0];
+    let mut calls = seen.iter().filter(|e| e.event_type == "run.call");
+    let receipt = calls.next().expect("чек вызова");
+    assert!(calls.next().is_none(), "чек вызова ровно один: {seen:?}");
+    let quarantined = seen
+        .iter()
+        .filter(|e| e.event_type == "run.quarantine")
+        .count();
+    assert_eq!(quarantined, 1, "карантин — отдельная запись: {seen:?}");
     assert_eq!(receipt.event_type, "run.call", "это чек вызова");
     assert_eq!(receipt.actor, "policy", "решение приняла политика");
     assert_eq!(

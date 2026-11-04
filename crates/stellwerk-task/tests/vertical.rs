@@ -163,6 +163,21 @@ fn carries(events: &[Event], needle: &str) -> usize {
         .count()
 }
 
+/// Чек вызова — только `run.call`; карантин несёт ту же причину отдельной записью.
+fn carries_call(events: &[Event], needle: &str) -> usize {
+    events
+        .iter()
+        .filter(|e| e.event_type == "run.call" && text_of(e).contains(needle))
+        .count()
+}
+
+fn quarantines(events: &[Event]) -> usize {
+    events
+        .iter()
+        .filter(|e| e.event_type == "run.quarantine")
+        .count()
+}
+
 fn deny_reason(verdict: CallVerdict) -> String {
     let CallVerdict::Deny { reason } = verdict else {
         panic!("ожидался отказ, а не {verdict:?}");
@@ -198,8 +213,9 @@ async fn the_denial_reason_reaches_the_trail_with_its_rule_code() {
     let code = reason.split(':').next().unwrap_or_default();
     // Без этой проверки `contains("")` прошёл бы на пустой причине.
     assert!(!reason.trim().is_empty() && !code.is_empty(), "нет кода");
-    assert_eq!(carries(&seen, &reason), 1, "причина потерялась");
-    assert_eq!(carries(&seen, code), 1, "код правила не в потоке");
+    assert_eq!(carries_call(&seen, &reason), 1, "причина потерялась");
+    assert_eq!(carries_call(&seen, code), 1, "код правила не в потоке");
+    assert_eq!(quarantines(&seen), 1, "карантин — отдельная запись");
 }
 
 /// Отсутствие данных — не нулевой риск: в поток не должен утечь `R0` (закон 6).
@@ -249,7 +265,8 @@ async fn a_suspended_call_is_not_a_policy_refusal_in_the_trail() {
     let bad = run_once(&refused, &worker, &store).await.expect("отказ");
     assert_eq!(worker.spawned(), 0, "воркера не касались");
     let seen = trail(&store, "t-v4").await;
-    assert_eq!(carries(&seen, &deny_reason(bad)), 1, "причина одна");
+    assert_eq!(carries_call(&seen, &deny_reason(bad)), 1, "причина одна");
+    assert_eq!(quarantines(&seen), 1, "карантин — отдельная запись");
 }
 
 /// Разрешённый вызов — единственный, ради которого воркер запускается.
@@ -275,7 +292,8 @@ async fn a_refused_attempt_and_an_executed_call_are_both_visible_in_one_task() {
     assert_eq!(worker.spawned(), 1, "запущен только разрешённый");
     let seen = trail(&store, "t-both").await;
     assert!(seen.len() >= 2, "оба вызова в потоке");
-    assert_eq!(carries(&seen, &deny_reason(bad)), 1, "причина одна");
+    assert_eq!(carries_call(&seen, &deny_reason(bad)), 1, "причина одна");
+    assert_eq!(quarantines(&seen), 1, "карантин — отдельная запись");
 }
 
 /// Сбой — не `Allow`: причина и статус `Failed` обязаны лечь в поток.
