@@ -473,6 +473,11 @@ pub async fn run_once(
                 None,
             )
             .await?;
+            // Отказ уходит в карантин отдельной записью: чек `run.call` говорит
+            // «вызов не состоялся», а карантин — «его артефакт не станет
+            // кандидатом» со своей причиной. Слить их значило бы потерять одно
+            // из двух состояний.
+            quarantine(store, attempt, decision.risk, &reason).await?;
             Ok(CallVerdict::Deny { reason })
         }
         CallVerdict::Suspended => {
@@ -636,6 +641,100 @@ async fn record(
         .append(event)
         .await
         .map_err(|err| RunError(format!("чек не записан: {err}")))
+}
+
+/// Тип события карантина. Отдельный от `run.call`: отказанный прогон не должен
+/// читаться как состоявшийся вызов, а его артефакт — как успешный кандидат.
+const QUARANTINE_EVENT: &str = "run.quarantine";
+
+/// Запись карантина: отказанный прогон и причина отказа. Append-only — запись не
+/// удаляется и не перезаписывается; читается отдельно от обычных чеков.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuarantineRecord {
+    pub task_id: String,
+    pub tool: String,
+    pub module: String,
+    /// Причина отказа. Пустой причины не бывает: запись без неё — не карантин,
+    /// а потерянный отказ (закон 6).
+    pub reason: String,
+}
+
+/// Порядковый номер карантинной записи. Свой счётчик, чтобы id не зависел от
+/// последовательности обычных чеков: `append` отвергает повторный `id`.
+static QUARANTINE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Отправить отказанный прогон в карантин. Причина обязательна: отказ без неё —
+/// это не запись карантина, а его потеря.
+async fn quarantine(
+    store: &impl EventStore,
+    attempt: &CallAttempt,
+    applied_risk: ToolRisk,
+    reason: &str,
+) -> Result<(), RunError> {
+    if reason.trim().is_empty() {
+        return Err(RunError(format!(
+            "карантин без причины: отказ по `{}`/`{}` не записан",
+            attempt.call.tool, attempt.call.module
+        )));
+    }
+    let mut payload: BTreeMap<String, String> = BTreeMap::new();
+    payload.insert("task_id".to_owned(), attempt.task_id.clone());
+    payload.insert("tool".to_owned(), attempt.call.tool.clone());
+    payload.insert("module".to_owned(), attempt.call.module.clone());
+    payload.insert("reason".to_owned(), reason.to_owned());
+    let event = Event {
+        id: format!(
+            "{}-quarantine-{:08}",
+            attempt.task_id,
+            QUARANTINE_SEQ.fetch_add(1, Ordering::Relaxed)
+        ),
+        source: stellwerk_core::contract::EventSource::System,
+        event_type: QUARANTINE_EVENT.to_owned(),
+        actor: "policy".to_owned(),
+        workspace: Some(attempt.workspace_ref.clone()),
+        risk: column_risk(applied_risk),
+        payload,
+        ts: now_rfc3339(),
+    };
+    store
+        .append(event)
+        .await
+        .map_err(|err| RunError(format!("карантин не записан: {err}")))
+}
+
+/// Прочитать карантин задачи. Запись без причины или без идентичности вызова —
+/// ошибка чтения, а не пропуск: молча отброшенная запись неотличима от
+/// несуществующей.
+pub async fn quarantine_entries(
+    store: &impl EventStore,
+    task_id: &str,
+) -> Result<Vec<QuarantineRecord>, RunError> {
+    let events = store
+        .list_by_task(task_id)
+        .await
+        .map_err(|err| RunError(format!("карантин не прочитан: {err}")))?;
+    events
+        .into_iter()
+        .filter(|event| event.event_type == QUARANTINE_EVENT)
+        .map(|event| {
+            let field = |name: &str| {
+                event
+                    .payload
+                    .get(name)
+                    .filter(|value| !value.trim().is_empty())
+                    .cloned()
+                    .ok_or_else(|| {
+                        RunError(format!("карантинная запись `{}` без `{name}`", event.id))
+                    })
+            };
+            Ok(QuarantineRecord {
+                task_id: field("task_id")?,
+                tool: field("tool")?,
+                module: field("module")?,
+                reason: field("reason")?,
+            })
+        })
+        .collect()
 }
 
 /// Риск события в колонке `Event.risk`. Раньше здесь стоял `R1` для
