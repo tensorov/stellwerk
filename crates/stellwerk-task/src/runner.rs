@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::events::now_rfc3339;
 use crate::evidence::{evidence_status, EvidenceEntry, EvidenceLedger, EvidenceStatus};
@@ -647,8 +648,21 @@ async fn record(
 /// читаться как состоявшийся вызов, а его артефакт — как успешный кандидат.
 const QUARANTINE_EVENT: &str = "run.quarantine";
 
-/// Запись карантина: отказанный прогон и причина отказа. Append-only — запись не
-/// удаляется и не перезаписывается; читается отдельно от обычных чеков.
+/// Срок хранения карантинной записи в секундах: семь суток. Срок конечный и явный,
+/// но истечение — только состояние, а не повод удалить доказательство отказа.
+pub const QUARANTINE_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
+
+/// Состояние карантинной записи на момент чтения. `Expired` запись остаётся видимой:
+/// удаление по таймеру уничтожило бы доказательство отказа.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuarantineState {
+    Active,
+    Expired,
+}
+
+/// Запись карантина: отказанный прогон, причина отказа и явные факты срока хранения.
+/// Append-only — запись не удаляется и не перезаписывается; читается отдельно от
+/// обычных чеков.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuarantineRecord {
     pub task_id: String,
@@ -657,11 +671,26 @@ pub struct QuarantineRecord {
     /// Причина отказа. Пустой причины не бывает: запись без неё — не карантин,
     /// а потерянный отказ (закон 6).
     pub reason: String,
+    /// Когда запись создана, epoch-секунды.
+    pub recorded_at_secs: u64,
+    /// Когда истекает срок хранения, epoch-секунды.
+    pub expires_at_secs: u64,
+    /// Активна или истекла на момент чтения; запись присутствует в обоих случаях.
+    pub state: QuarantineState,
 }
 
 /// Порядковый номер карантинной записи. Свой счётчик, чтобы id не зависел от
 /// последовательности обычных чеков: `append` отвергает повторный `id`.
 static QUARANTINE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Текущий момент в epoch-секундах. Ошибка часов — явный отказ, а не нулевое время:
+/// `unwrap_or(0)` сделал бы любую запись «истёкшей с 1970 года».
+fn current_epoch_secs() -> Result<u64, RunError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .map_err(|err| RunError(format!("время до epoch: {err}")))
+}
 
 /// Отправить отказанный прогон в карантин. Причина обязательна: отказ без неё —
 /// это не запись карантина, а его потеря.
@@ -677,11 +706,21 @@ async fn quarantine(
             attempt.call.tool, attempt.call.module
         )));
     }
+    let recorded_at_secs = current_epoch_secs()?;
+    let expires_at_secs = recorded_at_secs
+        .checked_add(QUARANTINE_RETENTION_SECS)
+        .ok_or_else(|| {
+            RunError(format!(
+                "срок хранения карантина переполнен: {recorded_at_secs}"
+            ))
+        })?;
     let mut payload: BTreeMap<String, String> = BTreeMap::new();
     payload.insert("task_id".to_owned(), attempt.task_id.clone());
     payload.insert("tool".to_owned(), attempt.call.tool.clone());
     payload.insert("module".to_owned(), attempt.call.module.clone());
     payload.insert("reason".to_owned(), reason.to_owned());
+    payload.insert("recorded_at_secs".to_owned(), recorded_at_secs.to_string());
+    payload.insert("expires_at_secs".to_owned(), expires_at_secs.to_string());
     let event = Event {
         id: format!(
             "{}-quarantine-{:08}",
@@ -702,12 +741,26 @@ async fn quarantine(
         .map_err(|err| RunError(format!("карантин не записан: {err}")))
 }
 
-/// Прочитать карантин задачи. Запись без причины или без идентичности вызова —
-/// ошибка чтения, а не пропуск: молча отброшенная запись неотличима от
-/// несуществующей.
+/// Прочитать карантин задачи на текущий момент. Тонкая обёртка над
+/// `quarantine_entries_at`, чтобы вызывающий не подставлял часы руками.
 pub async fn quarantine_entries(
     store: &impl EventStore,
     task_id: &str,
+) -> Result<Vec<QuarantineRecord>, RunError> {
+    let now_secs = current_epoch_secs()?;
+    quarantine_entries_at(store, task_id, now_secs).await
+}
+
+/// Прочитать карантин задачи на ЯВНЫЙ момент `now_secs`. Истечение срока — производное
+/// состояние чтения: запись навсегда остаётся в append-only следе, а `now_secs`
+/// позволяет проверить границу без сна и без подмены системных часов.
+///
+/// Запись без причины, идентичности вызова или фактов срока — ошибка чтения, а не
+/// пропуск и не умолчание: отброшенная запись неотличима от несуществующей.
+pub async fn quarantine_entries_at(
+    store: &impl EventStore,
+    task_id: &str,
+    now_secs: u64,
 ) -> Result<Vec<QuarantineRecord>, RunError> {
     let events = store
         .list_by_task(task_id)
@@ -727,11 +780,36 @@ pub async fn quarantine_entries(
                         RunError(format!("карантинная запись `{}` без `{name}`", event.id))
                     })
             };
+            let number = |name: &str| {
+                let raw = field(name)?;
+                raw.parse::<u64>().map_err(|_| {
+                    RunError(format!(
+                        "карантинная запись `{}` с нечисловым `{name}`: {raw:?}",
+                        event.id
+                    ))
+                })
+            };
+            let recorded_at_secs = number("recorded_at_secs")?;
+            let expires_at_secs = number("expires_at_secs")?;
+            if expires_at_secs < recorded_at_secs {
+                return Err(RunError(format!(
+                    "карантинная запись `{}` истекает раньше, чем записана: {expires_at_secs} < {recorded_at_secs}",
+                    event.id
+                )));
+            }
+            let state = if now_secs > expires_at_secs {
+                QuarantineState::Expired
+            } else {
+                QuarantineState::Active
+            };
             Ok(QuarantineRecord {
                 task_id: field("task_id")?,
                 tool: field("tool")?,
                 module: field("module")?,
                 reason: field("reason")?,
+                recorded_at_secs,
+                expires_at_secs,
+                state,
             })
         })
         .collect()

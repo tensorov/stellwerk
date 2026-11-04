@@ -18,8 +18,8 @@ use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, RetentionCl
 use stellwerk_gateway::permission::{PermissionError, ToolRisk};
 use stellwerk_store::{EventStore, SqliteStore};
 use stellwerk_task::runner::{
-    quarantine_entries, run_once, Call, CallAttempt, CallVerdict, ExecOutcome, RiskRegistry,
-    Worker, WorkerError,
+    quarantine_entries, quarantine_entries_at, run_once, Call, CallAttempt, CallVerdict,
+    ExecOutcome, QuarantineState, RiskRegistry, Worker, WorkerError, QUARANTINE_RETENTION_SECS,
 };
 
 struct FakeWorker {
@@ -178,5 +178,65 @@ async fn allowed_run_is_not_quarantined() {
     assert!(
         entries.is_empty(),
         "успешный прогон попал в карантин: {entries:?}"
+    );
+}
+
+#[tokio::test]
+async fn expired_entry_is_marked_not_deleted() {
+    let store = SqliteStore::open(Path::new(":memory:")).expect("открыто");
+    let worker = FakeWorker::new();
+    let task = "t-q02";
+    let refused = attempt(task, "r2");
+
+    let verdict = run_once(&refused, &worker, &store).await.expect("отказ");
+    let CallVerdict::Deny { reason } = verdict else {
+        panic!("ожидался отказ, получено {verdict:?}");
+    };
+    assert_eq!(worker.spawned(), 0, "отказ не должен запускать воркер");
+
+    let fresh = quarantine_entries(&store, task).await.expect("карантин");
+    assert_eq!(fresh.len(), 1, "отказ не попал в карантин: {fresh:?}");
+    let entry = &fresh[0];
+    assert!(
+        entry.expires_at_secs > entry.recorded_at_secs,
+        "срок хранения карантина обязан быть конечным и положительным"
+    );
+    assert_eq!(
+        entry.expires_at_secs,
+        entry.recorded_at_secs + QUARANTINE_RETENTION_SECS,
+        "срок хранения не сохранён в записи"
+    );
+    assert_eq!(
+        entry.state,
+        QuarantineState::Active,
+        "свежая запись обязана быть активной"
+    );
+    assert_eq!(entry.reason, reason, "причина отказа изменена по дороге");
+
+    // Запись старше срока помечается истёкшей, но НЕ исчезает: читаем сразу за
+    // границей срока и требуем ту же самую запись с той же причиной.
+    let expired = quarantine_entries_at(&store, task, entry.expires_at_secs + 1)
+        .await
+        .expect("карантин");
+    assert_eq!(
+        expired.len(),
+        1,
+        "истёкшая запись исчезла без явного решения: {expired:?}"
+    );
+    let stale = &expired[0];
+    assert_eq!(stale.state, QuarantineState::Expired, "срок не помечен");
+    assert_eq!(stale.reason, reason, "истёкшая запись потеряла причину");
+    assert_eq!(stale.recorded_at_secs, entry.recorded_at_secs);
+    assert_eq!(stale.expires_at_secs, entry.expires_at_secs);
+
+    // Пути удаления не было: событие карантина остаётся в append-only следе.
+    let trail = store.list_by_task(task).await.expect("след");
+    let quarantined = trail
+        .iter()
+        .filter(|event| event.event_type == "run.quarantine")
+        .count();
+    assert_eq!(
+        quarantined, 1,
+        "истёкший карантин удалён из append-only следа: {trail:?}"
     );
 }
