@@ -18,8 +18,10 @@ use stellwerk_core::contract::{
 };
 use stellwerk_gateway::permission::{PermissionError, ToolRisk};
 use stellwerk_store::{EventStore, SqliteStore};
+use stellwerk_task::evidence::{tool_attestation, EvidenceEntry, EvidenceLedger, LedgerError};
 use stellwerk_task::runner::{
-    run_once, Call, CallAttempt, CallVerdict, ExecOutcome, RiskRegistry, Worker, WorkerError,
+    run_once, run_once_resuming, Call, CallAttempt, CallVerdict, ExecOutcome, ResumeOutcome,
+    RiskRegistry, Worker, WorkerError,
 };
 use stellwerk_task::runner::{stop_reason_from, StopFacts};
 use stellwerk_task::runner::{verdict_for, Progress, StopReason, Verdict};
@@ -584,4 +586,122 @@ async fn suspended_and_deny_are_distinct() {
     assert!(!paused_reason.trim().is_empty(), "причина паузы пуста");
     assert!(!denied_reason.trim().is_empty(), "причина отказа пуста");
     assert_ne!(paused_reason, denied_reason, "причины схлопнулись");
+}
+
+// --- V2-03: возобновление решается статусом доказательств ДО запуска воркера ---
+
+const RESUME_TASK: &str = "t-resume";
+const RESUME_TS: &str = "2026-11-10T00:00:00Z";
+
+/// Реестр, разрешающий R0: нужен, чтобы `Allow` дошёл до РЕАЛЬНОГО вызова воркера,
+/// и счётчик запусков что-то доказывал.
+#[derive(Default)]
+struct AllowRegistry;
+
+impl RiskRegistry for AllowRegistry {
+    fn risk_of(&self, _tool: &str, _module: &str) -> Result<ToolRisk, PermissionError> {
+        Ok(ToolRisk::Classified(RiskClass::R0))
+    }
+}
+
+/// Счётный воркер: число запусков отделено от факта записи события, поэтому
+/// «воркер не вызван» нельзя вывести из отсутствия чека.
+#[derive(Default)]
+struct AllowWorker {
+    launches: Cell<usize>,
+    registry: AllowRegistry,
+}
+
+impl Worker for AllowWorker {
+    fn exec(&self, _workspace_ref: &str, _call: &Call) -> Exec<'_> {
+        self.launches.set(self.launches.get() + 1);
+        Box::pin(ready(Ok(ExecOutcome {
+            output: String::new(),
+        })))
+    }
+
+    fn spawned(&self) -> usize {
+        self.launches.get()
+    }
+
+    fn registry(&self) -> &dyn RiskRegistry {
+        &self.registry
+    }
+}
+
+fn allow_attempt(task: &str) -> CallAttempt {
+    CallAttempt {
+        task_id: task.into(),
+        call: Call {
+            tool: "r0".into(),
+            module: "fs".into(),
+            risk: ToolRisk::Classified(RiskClass::R0),
+            data: DataClass::Public,
+            model: holds_any_data(),
+            interactive: false,
+        },
+        caller: PolicyLevel::L2Contributor,
+        workspace_ref: "ws-stellwerk".into(),
+    }
+}
+
+/// Леджер из готовой цепочки: тест задаёт статус доказательств, не хранилище.
+struct VecLedger(Vec<EvidenceEntry>);
+
+impl EvidenceLedger for VecLedger {
+    fn append(&mut self, _entry: &EvidenceEntry) -> Result<(), LedgerError> {
+        Ok(())
+    }
+
+    fn entries(&self, _task_id: &str) -> Vec<EvidenceEntry> {
+        self.0.clone()
+    }
+}
+
+#[tokio::test]
+async fn resume_unattested_proceeds_and_runs_worker_exactly_once() {
+    // Given: пустой ledger — предъявлять нечего.
+    let store = SqliteStore::open(Path::new(":memory:")).expect("открыто");
+    let worker = AllowWorker::default();
+    let ledger = VecLedger(Vec::new());
+
+    // When: возобновление неаттестованного прогона.
+    let outcome = run_once_resuming(&allow_attempt(RESUME_TASK), &worker, &store, &ledger)
+        .await
+        .expect("возобновление");
+
+    // Then: прогон продолжается и воркер запущен ровно один раз.
+    assert_eq!(outcome, ResumeOutcome::Proceeded(CallVerdict::Allow));
+    assert_eq!(
+        worker.spawned(),
+        1,
+        "неаттестованный прогон — ровно один запуск"
+    );
+}
+
+#[tokio::test]
+async fn resume_attested_without_validation_does_not_run_worker() {
+    // Given: удостоверение есть, решения человека нет.
+    let store = SqliteStore::open(Path::new(":memory:")).expect("открыто");
+    let worker = AllowWorker::default();
+    let ledger = VecLedger(vec![tool_attestation(
+        RESUME_TASK,
+        "e-tool",
+        "cargo test",
+        "h-tool",
+        RESUME_TS,
+    )]);
+
+    // When: возобновление.
+    let outcome = run_once_resuming(&allow_attempt(RESUME_TASK), &worker, &store, &ledger)
+        .await
+        .expect("возобновление");
+
+    // Then: результат ждёт человека, воркер НЕ запускается.
+    assert_eq!(outcome, ResumeOutcome::AwaitingHumanValidation);
+    assert_eq!(
+        worker.spawned(),
+        0,
+        "ожидание человека не перезапускает прогон"
+    );
 }

@@ -6,11 +6,22 @@
 //! неотличимый от разрешения дефект за приёмку (закон 6). Фикстура, помеченная
 //! `FIXTURE_VALIDATION_LABEL`, решением человека не является по-прежнему.
 
+use std::cell::Cell;
+use std::future::{ready, Future};
+use std::path::Path;
+use std::pin::Pin;
+
+use stellwerk_core::contract::{DataClass, ModelBinding, PolicyLevel, RetentionClass, RiskClass};
+use stellwerk_gateway::permission::{PermissionError, ToolRisk};
+use stellwerk_store::SqliteStore;
 use stellwerk_task::evidence::{
     evidence_status, model_claim, tool_attestation, validation, EvidenceEntry, EvidenceLedger,
     EvidenceStatus, LedgerError, FIXTURE_VALIDATION_LABEL,
 };
-use stellwerk_task::runner::resume_after_human_validation;
+use stellwerk_task::runner::{
+    resume_after_human_validation, run_once_resuming, Call, CallAttempt, ExecOutcome,
+    ResumeOutcome, RiskRegistry, Worker, WorkerError,
+};
 
 const TASK: &str = "t-human-validation";
 /// Другая задача: её валидация не является решением о `TASK`.
@@ -173,4 +184,113 @@ fn transition_requires_explicit_record() {
         EvidenceStatus::AwaitingHumanValidation,
         "метка фикстуры не выдаёт тест за приёмку"
     );
+}
+
+// --- V2-03: возобновление решается статусом доказательств ДО запуска воркера ---
+
+/// Реестр, разрешающий R0: нужен, чтобы неаттестованный путь дошёл до РЕАЛЬНОГО
+/// вызова воркера, и счётчик запусков что-то доказывал.
+#[derive(Default)]
+struct AllowRegistry;
+
+impl RiskRegistry for AllowRegistry {
+    fn risk_of(&self, _tool: &str, _module: &str) -> Result<ToolRisk, PermissionError> {
+        Ok(ToolRisk::Classified(RiskClass::R0))
+    }
+}
+
+/// Счётный воркер: число запусков отделено от факта записи события, поэтому
+/// «воркер не вызван» нельзя вывести из отсутствия чека.
+#[derive(Default)]
+struct CountingWorker {
+    launches: Cell<usize>,
+    registry: AllowRegistry,
+}
+
+type Exec<'a> = Pin<Box<dyn Future<Output = Result<ExecOutcome, WorkerError>> + Send + 'a>>;
+
+impl Worker for CountingWorker {
+    fn exec(&self, _workspace_ref: &str, _call: &Call) -> Exec<'_> {
+        self.launches.set(self.launches.get() + 1);
+        Box::pin(ready(Ok(ExecOutcome {
+            output: String::new(),
+        })))
+    }
+
+    fn spawned(&self) -> usize {
+        self.launches.get()
+    }
+
+    fn registry(&self) -> &dyn RiskRegistry {
+        &self.registry
+    }
+}
+
+fn public_binding() -> ModelBinding {
+    ModelBinding {
+        id: "b".into(),
+        provider: "neuraldeep".into(),
+        model_id: "m".into(),
+        data_class: DataClass::Public,
+        retention: RetentionClass::FirstParty,
+        context_window: 200_000,
+        max_output: 8_000,
+        budget_tokens_per_task: 43_000,
+    }
+}
+
+fn allow_attempt(task: &str) -> CallAttempt {
+    CallAttempt {
+        task_id: task.into(),
+        call: Call {
+            tool: "r0".into(),
+            module: "fs".into(),
+            risk: ToolRisk::Classified(RiskClass::R0),
+            data: DataClass::Public,
+            model: public_binding(),
+            interactive: false,
+        },
+        caller: PolicyLevel::L2Contributor,
+        workspace_ref: "ws-stellwerk".into(),
+    }
+}
+
+#[tokio::test]
+async fn resume_outcome_reports_own_validation_without_running_worker() {
+    // Given: удостоверение и человеческая Validation самой TASK.
+    let mut own = attested();
+    own.push(validation(OTHER, "e-foreign", HUMAN_SUBJECT, "h-tool", TS));
+    own.push(validation(TASK, "e-own", HUMAN_SUBJECT, "h-tool", TS));
+    let ledger = LeakyLedger { entries: own };
+    let store = SqliteStore::open(Path::new(":memory:")).expect("открыто");
+    let worker = CountingWorker::default();
+
+    // When: возобновление уже принятого прогона.
+    let outcome = run_once_resuming(&allow_attempt(TASK), &worker, &store, &ledger)
+        .await
+        .expect("возобновление");
+
+    // Then: прогон уже принят человеком, воркер НЕ запускается.
+    assert_eq!(outcome, ResumeOutcome::AlreadyHumanValidated);
+    assert_eq!(worker.spawned(), 0, "принятый прогон не перезапускается");
+}
+
+#[tokio::test]
+async fn resume_outcome_foreign_validation_is_not_already_validated() {
+    // Given: удостоверение TASK, но Validation принадлежит ДРУГОЙ задаче.
+    let mut foreign = attested();
+    foreign.push(validation(OTHER, "e-foreign", HUMAN_SUBJECT, "h-tool", TS));
+    let ledger = LeakyLedger { entries: foreign };
+    let store = SqliteStore::open(Path::new(":memory:")).expect("открыто");
+    let worker = CountingWorker::default();
+
+    // When: возобновление TASK.
+    let outcome = run_once_resuming(&allow_attempt(TASK), &worker, &store, &ledger)
+        .await
+        .expect("возобновление");
+
+    // Then: чужая валидация не возобновляет прогон — результат ждёт человека.
+    assert_eq!(outcome, ResumeOutcome::AwaitingHumanValidation);
+    assert_ne!(outcome, ResumeOutcome::AlreadyHumanValidated);
+    assert_eq!(worker.spawned(), 0, "чужая валидация не запускает воркер");
 }

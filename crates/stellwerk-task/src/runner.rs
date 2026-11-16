@@ -535,6 +535,45 @@ pub async fn run_once(
     }
 }
 
+/// Итог возобновления прогона: доказательства решают, запускать ли воркер вообще.
+/// `Proceeded` несёт вердикт `run_once`, а два других варианта означают, что запуск
+/// не состоялся: уже принято человеком или ещё ждёт его решения. Слить их с
+/// «продолжили» значило бы выдать тишину за разрешение (закон 6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResumeOutcome {
+    /// Человек уже принял результат этой задачи: перезапуск не нужен.
+    AlreadyHumanValidated,
+    /// Удостоверение есть, решения человека нет: прогон ждёт его.
+    AwaitingHumanValidation,
+    /// Предъявлять нечего: прогон продолжается и отдаёт вердикт `run_once`.
+    Proceeded(CallVerdict),
+}
+
+/// Возобновить прогон с учётом статуса доказательств: решение принимается ДО
+/// запуска воркера, а не после. `HumanValidated`/`AwaitingHumanValidation`
+/// возвращаются без вызова воркера; `Unattested` — единственный путь к `run_once`.
+///
+/// Статус берётся из `resume_after_human_validation`: там же живёт проверка, что
+/// человеческая `Validation` принадлежит ЭТОЙ задаче. Своя, более слабая проверка
+/// здесь пустила бы чужую валидацию в возобновление.
+pub async fn run_once_resuming(
+    attempt: &CallAttempt,
+    worker: &dyn Worker,
+    store: &impl EventStore,
+    ledger: &dyn EvidenceLedger,
+) -> Result<ResumeOutcome, RunError> {
+    match resume_after_human_validation(ledger, &attempt.task_id) {
+        EvidenceStatus::HumanValidated => Ok(ResumeOutcome::AlreadyHumanValidated),
+        EvidenceStatus::AwaitingHumanValidation => Ok(ResumeOutcome::AwaitingHumanValidation),
+        // Refuted проверяется здесь ДО `Unattested` (V2-07c): опровергнутая цепочка
+        // не должна проваливаться в запуск как «предъявлять нечего».
+        EvidenceStatus::Unattested => {
+            let verdict = run_once(attempt, worker, store).await?;
+            Ok(ResumeOutcome::Proceeded(verdict))
+        }
+    }
+}
+
 /// Итог прохода по запрошенным вызовам. «Дошёл до конца» и «остановлен» — разные
 /// состояния (закон 6), поэтому это вариант, а не длина вектора.
 #[derive(Debug, Clone, PartialEq, Eq)]
