@@ -183,8 +183,8 @@ fn suspended_from_running_stays_suspended() {
     );
 
     // When:
-    let landed = apply_suspension(&store, "t-4", &CallVerdict::Suspended)
-        .expect("приостановка применяется");
+    let landed =
+        apply_suspension(&store, "t-4", &CallVerdict::Suspended).expect("приостановка применяется");
 
     // Then:
     assert_eq!(landed, Some(TaskStatus::Suspended));
