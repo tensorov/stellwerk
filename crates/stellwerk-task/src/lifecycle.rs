@@ -24,6 +24,8 @@ use stellwerk_core::contract::TaskStatus;
 use stellwerk_store::{StoreError, TaskStore};
 use thiserror::Error;
 
+use crate::runner::{suspension_status_from, CallVerdict};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Errors
 // ═══════════════════════════════════════════════════════════════════════════
@@ -104,4 +106,33 @@ pub fn advance(
     }
 
     Ok(next)
+}
+
+/// Применить приостановку от ФАКТИЧЕСКОГО статуса задачи и вернуть последний
+/// записанный статус.
+///
+/// `suspension_status_from` может требовать нескольких легальных шагов: `Ask` из
+/// `Running` идёт `Running -> Suspended -> AwaitingHumanValidation`, потому что
+/// прямой переход к человеку контракт запрещает. Цикл останавливается, когда
+/// очередной шаг нелегален (`None`) — это отсутствие легального продолжения, а не
+/// молчаливый `Suspended`. Отсутствие задачи — `NotFound`, а не `None`:
+/// неизвестное не должно выглядеть как «перехода не было».
+pub fn apply_suspension(
+    store: &impl TaskStore,
+    id: &str,
+    verdict: &CallVerdict,
+) -> Result<Option<TaskStatus>, LifecycleError> {
+    let rt = tokio::runtime::Runtime::new()?;
+
+    let found = rt.block_on(store.status_of(id))?;
+    let Some(mut current) = found else {
+        return Err(StoreError::NotFound(format!("task not found: {id}")).into());
+    };
+
+    let mut last = None;
+    while let Some(next) = suspension_status_from(current, verdict) {
+        current = advance(store, id, next)?;
+        last = Some(current);
+    }
+    Ok(last)
 }

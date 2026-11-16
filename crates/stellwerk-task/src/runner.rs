@@ -342,6 +342,33 @@ pub fn suspension_status(verdict: &CallVerdict) -> Option<TaskStatus> {
     }
 }
 
+/// Тот же вопрос, но с учётом фактического статуса задачи: `from` — то, что
+/// вызывающий прочитал у хранилища, а не вымышленное состояние.
+///
+/// `Ask` ведёт к человеку только тогда, когда контракт это разрешает; иначе
+/// остаётся паузой. Прямой `Running -> AwaitingHumanValidation` запрещён, поэтому
+/// из `Running` первый шаг — `Suspended`, а второй — `AwaitingHumanValidation`.
+/// `Allow`/`Deny` прогон не приостанавливают. `None` здесь означает «легального
+/// шага нет», а не молчаливую паузу: неприменимый вердикт не должен выглядеть как
+/// сознательный `Suspended`.
+pub fn suspension_status_from(from: TaskStatus, verdict: &CallVerdict) -> Option<TaskStatus> {
+    match verdict {
+        CallVerdict::Ask => {
+            if from.can_transition_to(TaskStatus::AwaitingHumanValidation) {
+                Some(TaskStatus::AwaitingHumanValidation)
+            } else if from.can_transition_to(TaskStatus::Suspended) {
+                Some(TaskStatus::Suspended)
+            } else {
+                None
+            }
+        }
+        CallVerdict::Suspended => from
+            .can_transition_to(TaskStatus::Suspended)
+            .then_some(TaskStatus::Suspended),
+        CallVerdict::Allow | CallVerdict::Deny { .. } => None,
+    }
+}
+
 /// Возобновление после человеческой валидации: `HumanValidated` возвращается только
 /// для записи, принадлежащей ЭТОЙ задаче. `entries(task_id)` не считается фильтром —
 /// реализация вправе отдать больше (протекающий ledger), поэтому чужие записи

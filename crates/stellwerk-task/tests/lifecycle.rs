@@ -17,7 +17,8 @@ use std::path::Path;
 
 use stellwerk_core::contract::{DataClass, TaskLimits, TaskSpec, TaskStatus};
 use stellwerk_store::{SqliteStore, TaskStore};
-use stellwerk_task::lifecycle::{advance, LifecycleError};
+use stellwerk_task::lifecycle::{advance, apply_suspension, LifecycleError};
+use stellwerk_task::runner::{suspension_status_from, CallVerdict};
 
 fn spec(id: &str) -> TaskSpec {
     TaskSpec {
@@ -126,4 +127,89 @@ fn forbidden_advance_leaves_status_untouched() {
         Some(TaskStatus::Done),
         "запрещённый переход обязан оставить статус прежним"
     );
+}
+
+#[test]
+fn ask_from_running_reaches_awaiting_human_validation() {
+    let store = store();
+    let rt = rt();
+    rt.block_on(task_in(&store, "t-3", TaskStatus::Running));
+
+    // Given: вопрос человеку из `Running` — прямой переход контрактом запрещён,
+    // поэтому путь обязан идти через `Suspended`.
+    assert_eq!(
+        suspension_status_from(TaskStatus::Running, &CallVerdict::Ask),
+        Some(TaskStatus::Suspended),
+        "первый шаг вопроса из Running — пауза"
+    );
+    assert_eq!(
+        suspension_status_from(TaskStatus::Suspended, &CallVerdict::Ask),
+        Some(TaskStatus::AwaitingHumanValidation),
+        "второй шаг — ожидание человека"
+    );
+    assert!(
+        !TaskStatus::Running.can_transition_to(TaskStatus::AwaitingHumanValidation),
+        "Running -> AwaitingHumanValidation обязан быть запрещён"
+    );
+
+    // When: шов применяет приостановку от фактического статуса задачи.
+    let landed =
+        apply_suspension(&store, "t-3", &CallVerdict::Ask).expect("приостановка применяется");
+
+    // Then: последний записанный статус — ожидание человека.
+    assert_eq!(landed, Some(TaskStatus::AwaitingHumanValidation));
+    let after = rt
+        .block_on(store.status_of("t-3"))
+        .expect("чтение обязано удаться");
+    assert_eq!(after, Some(TaskStatus::AwaitingHumanValidation));
+}
+
+#[test]
+fn suspended_from_running_stays_suspended() {
+    let store = store();
+    let rt = rt();
+    rt.block_on(task_in(&store, "t-4", TaskStatus::Running));
+
+    // Given: «спросить некого» из `Running` — один легальный шаг, дальше пауза
+    // сама себя не продолжает.
+    assert_eq!(
+        suspension_status_from(TaskStatus::Running, &CallVerdict::Suspended),
+        Some(TaskStatus::Suspended)
+    );
+    assert_eq!(
+        suspension_status_from(TaskStatus::Suspended, &CallVerdict::Suspended),
+        None,
+        "Suspended не переходит в себя"
+    );
+
+    // When:
+    let landed = apply_suspension(&store, "t-4", &CallVerdict::Suspended)
+        .expect("приостановка применяется");
+
+    // Then:
+    assert_eq!(landed, Some(TaskStatus::Suspended));
+    let after = rt
+        .block_on(store.status_of("t-4"))
+        .expect("чтение обязано удаться");
+    assert_eq!(after, Some(TaskStatus::Suspended));
+}
+
+#[test]
+fn direct_running_to_awaiting_is_illegal() {
+    let store = store();
+    let rt = rt();
+    rt.block_on(task_in(&store, "t-5", TaskStatus::Running));
+
+    // When: прямой переход к человеку, минуя паузу.
+    let refused = advance(&store, "t-5", TaskStatus::AwaitingHumanValidation);
+
+    // Then: контракт запрещает — шов обязан пройти через `Suspended`.
+    assert!(
+        matches!(refused, Err(LifecycleError::IllegalTransition { .. })),
+        "прямой Running -> AwaitingHumanValidation обязан быть IllegalTransition, получено {refused:?}"
+    );
+    let after = rt
+        .block_on(store.status_of("t-5"))
+        .expect("чтение обязано удаться");
+    assert_eq!(after, Some(TaskStatus::Running));
 }
