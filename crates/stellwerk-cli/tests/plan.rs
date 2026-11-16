@@ -5,11 +5,13 @@
 
 use std::path::PathBuf;
 
+use stellwerk_cli::build_runner::BuildOutcome;
 use stellwerk_cli::plan::{
-    build_backend_at, build_prompt, build_request, load_session, parse_reply, render_plan,
-    resolve_mode, save_session, session_path, BuildRefusal, PlanDraft, PlanSession, PlannerMode,
-    Reply, Stage, Turn, View, PLANNER_CONFIG_JSON, PLANNER_MODEL,
+    build_backend_at, build_prompt, build_request, build_status, load_session, parse_reply,
+    render_plan, resolve_mode, save_session, session_path, BuildRefusal, PlanDraft, PlanSession,
+    PlannerMode, Reply, Stage, Turn, View, PLANNER_CONFIG_JSON, PLANNER_MODEL,
 };
+use stellwerk_task::runner::CallVerdict;
 
 fn draft(goal: &str) -> PlanDraft {
     PlanDraft {
@@ -706,4 +708,47 @@ fn a_scope_entry_without_a_file_is_not_guessed() {
         \"allowed_changes\":[{\"change\":\"добавить two\"}],\
         \"acceptance\":[],\"checks\":[],\"constraints\":[]}";
     assert!(matches!(parse_reply(raw), Reply::Unrecognized { .. }));
+}
+
+fn outcome(decision: CallVerdict, output: &str) -> BuildOutcome {
+    BuildOutcome {
+        model_turns: 2,
+        gate_requests: 0,
+        gate: vec![],
+        output: output.to_string(),
+        decision,
+        candidate: vec![],
+    }
+}
+
+/// Одна строка о Build несёт все четыре факта: решение авторизации, число ходов
+/// модели, решения гейта и ответ агента. Отказ политики не должен теряться, а пустой
+/// ответ агента — притворяться успехом или пустым суффиксом.
+#[test]
+fn build_status_names_every_decision() {
+    let allow = build_status(&outcome(CallVerdict::Allow, "агент ответил"));
+    assert!(allow.contains("verdict: Allow"), "{allow}");
+    assert!(allow.contains("ходов модели 2"), "{allow}");
+    assert!(allow.contains("решений нет"), "{allow}");
+    assert!(allow.contains("агент ответил"), "{allow}");
+
+    let deny = build_status(&outcome(
+        CallVerdict::Deny {
+            reason: "политика запрещает bash".to_string(),
+        },
+        "",
+    ));
+    assert!(
+        deny.contains("verdict: Deny reason=политика запрещает bash"),
+        "{deny}"
+    );
+    assert!(deny.contains("пустой ответ агента"), "{deny}");
+    assert_ne!(deny, "Build: ");
+    assert!(!deny.ends_with("· вывод: "), "{deny}");
+
+    let suspended = build_status(&outcome(CallVerdict::Suspended, "приостановлено"));
+    assert!(suspended.contains("verdict: Suspended"), "{suspended}");
+
+    let ask = build_status(&outcome(CallVerdict::Ask, "спросить человека"));
+    assert!(ask.contains("verdict: Ask"), "{ask}");
 }

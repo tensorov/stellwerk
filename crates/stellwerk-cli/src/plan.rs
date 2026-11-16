@@ -1017,6 +1017,25 @@ fn apply_reply(session: &mut PlanSession, reply: Reply, ui: &mut PlanUi) {
     }
 }
 
+/// Одна строка о том, что решил Build. Несёт все четыре факта разом: решение
+/// авторизации (`verdict_name`), число ходов модели, решения гейта и ответ агента.
+/// Пустой ответ назван отдельным состоянием, а не пустым суффиксом: «агент ничего не
+/// сказал» — факт, отличный от успеха.
+pub fn build_status(outcome: &BuildOutcome) -> String {
+    let verdict = crate::verdict_name(&outcome.decision);
+    let gate = build_runner::gate_summary(&outcome.gate);
+    let answer = build_runner::answer_text(&outcome.output);
+    let text = if answer.is_empty() {
+        "пустой ответ агента".to_string()
+    } else {
+        answer
+    };
+    format!(
+        "Build: verdict: {verdict} · ходов модели {} · гейт: {gate} · вывод: {text}",
+        outcome.model_turns
+    )
+}
+
 impl PlanUi {
     fn start(
         &mut self,
@@ -1049,12 +1068,7 @@ impl PlanUi {
         self.build = None;
         match received {
             Ok(outcome) => {
-                let text = crate::build_runner::answer_text(&outcome.output);
-                let gate = crate::build_runner::gate_summary(&outcome.gate);
-                self.error = Some(format!(
-                    "Build: ходов модели {} · гейт: {gate} · вывод: {text}",
-                    outcome.model_turns
-                ));
+                self.error = Some(build_status(&outcome));
                 self.stage = Stage::Approved;
             }
             Err(why) => {
