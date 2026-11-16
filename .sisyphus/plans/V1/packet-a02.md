@@ -2,7 +2,7 @@
 id: a02
 milestone: V1
 status: GREEN
-depends_on: [a01, r03]
+depends_on: [a01, a01b, r03]
 files_allowed: [crates/stellwerk-task/src/m5/gate_channel.rs, crates/stellwerk-cli/src/build_runner.rs, crates/stellwerk-cli/tests/host_tools.rs]
 overlap_waiver: C9 — N2/00e, N2/00i1, N2/00h3b, N2/00h3c, N2/00h3d, N2/00j1, последовательное исполнение
 acceptance: cargo test -p stellwerk-cli --test host_tools

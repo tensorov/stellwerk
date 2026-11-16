@@ -3,8 +3,9 @@ id: r02
 milestone: V1
 status: GREEN
 depends_on: [02, 01]
-files_allowed: [crates/stellwerk-task/src/taskfile.rs, crates/stellwerk-task/src/execution.rs, crates/stellwerk-task/tests/taskfile.rs]
+files_allowed: [crates/stellwerk-task/src/taskfile.rs, crates/stellwerk-task/src/execution.rs, crates/stellwerk-task/tests/taskfile.rs, crates/stellwerk-task/src/cli.rs, crates/stellwerk-task/tests/cli_watch.rs, crates/stellwerk-cli/examples/n1-smoke.toml, crates/stellwerk-cli/examples/pi-smoke.toml]
 overlap_waiver: C9 — N1/02 — `execution.rs`, последовательное исполнение
+limit_waiver: 7 файлов > 3 — профиль обязан быть принят на всех путях, иначе workspace красный: разбор (`taskfile.rs`), тест, два тест-хелпера, пишущие `task.toml` (`src/cli.rs:322`, `tests/cli_watch.rs:59`) и два example-фикстуры `crates/stellwerk-cli/examples/*.toml`
 acceptance: cargo test -p stellwerk-task --test taskfile
 ---
 

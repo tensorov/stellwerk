@@ -7,7 +7,9 @@ files_allowed: [.github/workflows/polyforge.yml, crates/stellwerk-cli/tests/ci_g
 acceptance: cargo test -p stellwerk-cli --test ci_gate
 ---
 
-# i02 — Негативный тест CI-гейта
+# i02 — contract-change: Негативный тест CI-гейта
+
+**label:** `contract-change` — owner approved 2026-11-03 for `.github/workflows/polyforge.yml`.
 
 ## Цель
 Бандл без аттестации даёт exit 1 с названной причиной, и тест проверяет код возврата, потому что мягкая проверка подстроки проходит на гейте, который ничего не запретил.

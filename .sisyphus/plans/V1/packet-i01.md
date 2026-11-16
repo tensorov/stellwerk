@@ -7,7 +7,9 @@ files_allowed: [.github/workflows/polyforge.yml, scripts/integrator/gate.sh, cra
 acceptance: cargo test -p stellwerk-cli --test ci_gate
 ---
 
-# i01 — CI-гейт PolyForge вместо заглушки
+# i01 — contract-change: CI-гейт PolyForge вместо заглушки
+
+**label:** `contract-change` — owner approved 2026-11-03 for `.github/workflows/polyforge.yml`.
 
 ## Цель
 CI-гейт поднимает `polyforge-mcp` по stdio и зовёт `gate_evaluate`, а при отсутствии команды падает с exit 2 и `MissingPolyForge`, потому что гейт, который печатает `TODO`, не отличает проверенный бандл от непроверенного.
