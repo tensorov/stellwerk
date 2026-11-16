@@ -56,12 +56,13 @@ fn run_main(cli: &Cli) -> Result<(), String> {
         Commands::Run { path } => {
             let result = run_task(path.as_path())?;
             println!(
-                "verdict={} receipt={} store={} risk={} gate={}",
+                "verdict={} receipt={} store={} risk={} gate={} ledger={}",
                 result.verdict,
                 result.receipt_id,
                 result.store_path.display(),
                 result.risk,
-                result.gate
+                result.gate,
+                result.ledger_path.display()
             );
         }
         Commands::Module { args } => {

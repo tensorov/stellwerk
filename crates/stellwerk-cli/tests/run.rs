@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use stellwerk_cli::build_runner::{run_build, BuildRun};
 use stellwerk_cli::plan::BuildRequest;
 use stellwerk_store::{EventStore, SqliteStore};
+use stellwerk_task::evidence::{EvidenceKind, EvidenceLedger};
+use stellwerk_task::ledger_sqlite::SqliteEvidenceLedger;
 use stellwerk_task::m5::model_transport::{BackendError, Frame, ModelBackend, TurnMessage};
 use tokio::runtime::Runtime;
 
@@ -72,15 +74,25 @@ fn pi_extension() -> PathBuf {
 }
 
 fn run_cli_with(task_path: &Path, pi: Option<&Path>, home: &Path) -> RunResult {
+    run_cli_with_cwd(task_path, pi, home, &workspace_root())
+}
+
+/// Тот же запуск, но рабочий каталог задаёт тест: привязка к коммиту выводится
+/// из cwd, и отказ без `.git` проверяется только из чужого каталога.
+///
+/// Токен кладётся в `HOME/.config/stellwerk`: `ModelConfig::from_env` ищет его
+/// там, а `XDG_CONFIG_HOME` снят, чтобы машина разработчика не подсунула свой.
+fn run_cli_with_cwd(task_path: &Path, pi: Option<&Path>, home: &Path, cwd: &Path) -> RunResult {
+    let config = home.join(".config/stellwerk");
+    std::fs::create_dir_all(&config).expect("create agent config dir");
+    std::fs::write(config.join("neuraldeep.token"), "test-token\n").expect("write dummy token");
     let mut command = Command::new(env!("CARGO_BIN_EXE_stellwerk"));
-    command
-        .current_dir(workspace_root())
-        .arg("run")
-        .arg(task_path);
+    command.current_dir(cwd).arg("run").arg(task_path);
     // Изоляция от машины разработчика: отсутствие Pi проверяется на пустом HOME,
     // а не на установленном у владельца.
     command.env_remove("PI_BIN");
     command.env_remove("STELLWERK_PI_EXTENSION");
+    command.env_remove("XDG_CONFIG_HOME");
     command.env("HOME", home);
     if let Some(pi) = pi {
         command.env("PI_BIN", pi);
@@ -156,6 +168,38 @@ fn run_writes_receipt_to_sqlite() {
     );
 
     let _ = std::fs::remove_file(&store_path);
+}
+
+/// Успешное удостоверение обязано нести все три привязки: рецепт, политику и
+/// коммит. `None` в любом из них — это удостоверение без привязки, а не успех.
+#[test]
+fn run_attestation_carries_bindings() {
+    let fixture = workspace_root().join("crates/stellwerk-cli/examples/n1-smoke.toml");
+    let result = run_cli(&fixture);
+    assert_eq!(result.status, Some(0), "stderr: {}", result.stderr);
+    let ledger_path = field(&result.stdout, "ledger")
+        .expect("run prints its ledger path")
+        .to_string();
+    let ledger = SqliteEvidenceLedger::open(Path::new(&ledger_path)).expect("open ledger");
+    let entries = ledger.entries("n1-smoke");
+    let attest = entries
+        .iter()
+        .find(|entry| entry.kind == EvidenceKind::ToolAttestation)
+        .expect("ToolAttestation must be appended");
+    assert!(
+        attest.recipe_digest.is_some(),
+        "recipe_digest must be bound: {attest:?}"
+    );
+    assert!(
+        attest.policy_digest.is_some(),
+        "policy_digest must be bound: {attest:?}"
+    );
+    assert!(
+        attest.commit_sha.is_some(),
+        "commit_sha must be bound: {attest:?}"
+    );
+
+    let _ = std::fs::remove_file(&ledger_path);
 }
 
 /// Провал запуска обязан быть провалом: ненулевой код выхода, НЕТ `verdict=`.
@@ -246,6 +290,96 @@ fn missing_engine_is_named_refusal() {
         "run must not name the fixture script: {}",
         present.stderr
     );
+}
+
+/// Прогон без `.git` в предках cwd обязан отказать названно и НЕ писать
+/// `ToolAttestation`: привязка к коммиту — часть удостоверения, а не украшение.
+#[test]
+fn run_without_git_head_refuses() {
+    let dir = scratch_dir("no-git");
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).expect("create home");
+    let cwd = dir.join("scratch");
+    std::fs::create_dir_all(&cwd).expect("create scratch cwd");
+    let task_path = dir.join("task.toml");
+    let toml = "[task]\nid = \"n1-no-git\"\ngoal = \"echo hello\"\nworkspace_ref = \"ws\"\nmodel_ref = \"m\"\npacket = \"V2/01\"\nprofile = \"pi\"\nevidence_policy = \"e\"\n\n[task.limits]\nmax_files = 1\nmax_diff_lines = 1\ntimeout_seconds = 30\nmax_retries = 0\ncontext_budget_tokens = 1\ndata_class = \"internal\"\n";
+    std::fs::write(&task_path, toml).expect("write task");
+    let pi = fake_pi(&dir, "FAKE_PI_INVOKED");
+
+    let result = run_cli_with_cwd(&task_path, Some(&pi), &home, &cwd);
+    assert_ne!(
+        result.status,
+        Some(0),
+        "a run without a git HEAD must refuse; stdout: {}",
+        result.stdout
+    );
+    assert!(
+        !result.stdout.contains("verdict="),
+        "stdout must not claim a verdict: {}",
+        result.stdout
+    );
+    assert!(
+        result.stderr.contains("MissingAttestationBinding"),
+        "stderr must name the missing binding: {}",
+        result.stderr
+    );
+    let ledger_path = field(&result.stderr, "ledger")
+        .expect("refusal must print ledger= to stderr")
+        .to_string();
+    let ledger = SqliteEvidenceLedger::open(Path::new(&ledger_path)).expect("open refusal ledger");
+    let entries = ledger.entries("n1-no-git");
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry.kind == EvidenceKind::ToolAttestation),
+        "no ToolAttestation may be appended on refusal: {entries:?}"
+    );
+}
+
+/// Связанная worktree: `.git` — файл-указатель, `HEAD` и `commondir` лежат в
+/// каталоге worktree, а ссылка — в общем `.git`. Без `commondir` коммит бы не
+/// нашёлся, поэтому синтетическая раскладка фиксирует эту ветку без `git worktree`.
+#[test]
+fn run_attestation_reads_linked_worktree_commit() {
+    const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+    let dir = scratch_dir("linked-worktree");
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).expect("create home");
+    let main_git = dir.join("main/.git");
+    let gitdir = main_git.join("worktrees/w1");
+    std::fs::create_dir_all(&gitdir).expect("create worktree gitdir");
+    std::fs::write(gitdir.join("HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+    std::fs::write(gitdir.join("commondir"), "../..\n").expect("write commondir");
+    std::fs::create_dir_all(main_git.join("refs/heads")).expect("create refs");
+    std::fs::write(main_git.join("refs/heads/main"), format!("{COMMIT}\n")).expect("write ref");
+    let worktree = dir.join("wt");
+    std::fs::create_dir_all(&worktree).expect("create worktree");
+    std::fs::write(worktree.join(".git"), "gitdir: ../main/.git/worktrees/w1\n")
+        .expect("write .git pointer");
+    let task_path = dir.join("task.toml");
+    let toml = "[task]\nid = \"n1-worktree\"\ngoal = \"echo hello\"\nworkspace_ref = \"ws\"\nmodel_ref = \"m\"\npacket = \"V2/01\"\nprofile = \"pi\"\nevidence_policy = \"e\"\n\n[task.limits]\nmax_files = 1\nmax_diff_lines = 1\ntimeout_seconds = 30\nmax_retries = 0\ncontext_budget_tokens = 1\ndata_class = \"internal\"\n";
+    std::fs::write(&task_path, toml).expect("write task");
+    let pi = fake_pi(&dir, "FAKE_PI_INVOKED");
+
+    let result = run_cli_with_cwd(&task_path, Some(&pi), &home, &worktree);
+    assert_eq!(result.status, Some(0), "stderr: {}", result.stderr);
+    let ledger_path = field(&result.stdout, "ledger")
+        .expect("run prints its ledger path")
+        .to_string();
+    let ledger = SqliteEvidenceLedger::open(Path::new(&ledger_path)).expect("open ledger");
+    let entries = ledger.entries("n1-worktree");
+    let attest = entries
+        .iter()
+        .find(|entry| entry.kind == EvidenceKind::ToolAttestation)
+        .expect("ToolAttestation must be appended");
+    assert_eq!(
+        attest.commit_sha.as_ref().map(|sha| sha.0.as_str()),
+        Some(COMMIT),
+        "commit_sha must come from the common dir through commondir: {attest:?}"
+    );
+
+    let _ = std::fs::remove_file(&ledger_path);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Отсутствующий файл задачи — операционная ошибка, ненулевой код и никакого вердикта.

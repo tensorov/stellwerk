@@ -17,10 +17,15 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use stellwerk_core::contract::{ModelBinding, PolicyLevel, RetentionClass, RiskClass};
+use sha2::{Digest, Sha256};
+use stellwerk_core::contract::{
+    CommitSha, ModelBinding, PolicyDigest, PolicyLevel, RecipeDigest, RetentionClass, RiskClass,
+};
 use stellwerk_gateway::permission::ToolRisk;
 use stellwerk_store::{EventStore, SqliteStore};
-use stellwerk_task::evidence::{evidence_status, model_claim, tool_attestation, EvidenceLedger};
+use stellwerk_task::evidence::{
+    evidence_status, model_claim, tool_attestation, EvidenceEntry, EvidenceLedger,
+};
 use stellwerk_task::ledger_sqlite::SqliteEvidenceLedger;
 use stellwerk_task::m5::sandbox_bwrap::Sandbox;
 use stellwerk_task::m5::FixtureEngine;
@@ -91,8 +96,202 @@ pub struct RunResult {
     pub verdict: String,
     pub receipt_id: String,
     pub store_path: PathBuf,
+    pub ledger_path: PathBuf,
     pub gate: String,
     pub risk: String,
+}
+
+fn missing_binding(detail: impl std::fmt::Display) -> String {
+    format!("MissingAttestationBinding: commit_sha {detail}")
+}
+
+fn sha256_hex(value: &str) -> String {
+    format!("{:x}", Sha256::digest(value.as_bytes()))
+}
+
+/// Привязки production-удостоверения: рецепт исполнения, политика и коммит.
+/// Все три обязательны: удостоверение без любой из них не привязано, а лишь
+/// перечисляет два из трёх.
+struct AttestationBindings {
+    recipe_digest: RecipeDigest,
+    policy_digest: PolicyDigest,
+    commit_sha: CommitSha,
+}
+
+impl AttestationBindings {
+    fn resolve(program: &Path, args: &[String]) -> Result<Self, String> {
+        let recipe = std::iter::once(program.display().to_string())
+            .chain(args.iter().cloned())
+            .collect::<Vec<_>>()
+            .join("\0");
+        Ok(Self {
+            recipe_digest: RecipeDigest(sha256_hex(&recipe)),
+            policy_digest: PolicyDigest(sha256_hex("stellwerk-cli|pi|R0|L2Contributor")),
+            commit_sha: CommitSha(read_commit_sha(&git_root()?)?),
+        })
+    }
+}
+
+fn is_commit_sha(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Ближайший предок cwd, содержащий `.git`: cwd может лежать в подкаталоге
+/// рабочего дерева, и требовать `.git` именно в нём значило бы отказать
+/// законному прогону.
+fn git_root() -> Result<PathBuf, String> {
+    let cwd = std::env::current_dir()
+        .map_err(|e| missing_binding(format!("needs a working directory: {e}")))?;
+    cwd.ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            missing_binding(format!(
+                "has no `.git` in any ancestor of `{}`",
+                cwd.display()
+            ))
+        })
+}
+
+/// SHA коммита рабочего дерева. `.git` может быть каталогом, файлом-указателем
+/// (worktree) или отсутствовать; `commondir` переносит ссылки в общий каталог.
+/// Любая неоднозначность — названный отказ: выдуманный SHA привязал бы
+/// удостоверение к чужому коммиту.
+fn read_commit_sha(root: &Path) -> Result<String, String> {
+    let dot_git = root.join(".git");
+    let gitdir = if dot_git.is_dir() {
+        dot_git
+    } else if dot_git.is_file() {
+        let pointer = std::fs::read_to_string(&dot_git)
+            .map_err(|e| missing_binding(format!("`{}` is unreadable: {e}", dot_git.display())))?;
+        let target = pointer
+            .lines()
+            .next()
+            .and_then(|line| line.strip_prefix("gitdir: "))
+            .ok_or_else(|| {
+                missing_binding(format!(
+                    "`{}` is not a `gitdir: <path>` pointer",
+                    dot_git.display()
+                ))
+            })?
+            .trim();
+        let path = PathBuf::from(target);
+        if path.is_absolute() {
+            path
+        } else {
+            root.join(path)
+        }
+    } else {
+        return Err(missing_binding(format!(
+            "`{}` is neither a directory nor a file",
+            dot_git.display()
+        )));
+    };
+
+    let head_path = gitdir.join("HEAD");
+    let head = std::fs::read_to_string(&head_path).map_err(|e| {
+        missing_binding(format!("HEAD `{}` is unreadable: {e}", head_path.display()))
+    })?;
+    let head = head.trim();
+    let Some(refname) = head.strip_prefix("ref: ") else {
+        if is_commit_sha(head) {
+            return Ok(head.to_owned());
+        }
+        return Err(missing_binding(format!(
+            "HEAD `{}` is neither a ref nor a commit",
+            head_path.display()
+        )));
+    };
+    let refname = refname.trim();
+
+    let common = gitdir.join("commondir");
+    let refroot = if common.exists() {
+        let text = std::fs::read_to_string(&common).map_err(|e| {
+            missing_binding(format!(
+                "commondir `{}` is unreadable: {e}",
+                common.display()
+            ))
+        })?;
+        let line = text.lines().next().unwrap_or("").trim();
+        if line.is_empty() {
+            return Err(missing_binding(format!(
+                "commondir `{}` is empty",
+                common.display()
+            )));
+        }
+        let path = PathBuf::from(line);
+        if path.is_absolute() {
+            path
+        } else {
+            gitdir.join(path)
+        }
+    } else {
+        gitdir.clone()
+    };
+
+    let ref_path = refroot.join(refname);
+    if let Ok(value) = std::fs::read_to_string(&ref_path) {
+        let value = value.trim();
+        if is_commit_sha(value) {
+            return Ok(value.to_owned());
+        }
+        return Err(missing_binding(format!(
+            "ref `{}` holds `{value}`, not a 40-hex commit",
+            ref_path.display()
+        )));
+    }
+
+    let packed_path = refroot.join("packed-refs");
+    let packed = std::fs::read_to_string(&packed_path).map_err(|e| {
+        missing_binding(format!(
+            "ref `{refname}` is absent from `{}` and `{}` is unreadable: {e}",
+            ref_path.display(),
+            packed_path.display()
+        ))
+    })?;
+    for line in packed.lines() {
+        if line.starts_with('#') || line.starts_with('^') {
+            continue;
+        }
+        if let Some((sha, name)) = line.split_once(' ') {
+            if name == refname && is_commit_sha(sha) {
+                return Ok(sha.to_owned());
+            }
+        }
+    }
+    Err(missing_binding(format!(
+        "ref `{refname}` is absent from `{}` and `{}`",
+        ref_path.display(),
+        packed_path.display()
+    )))
+}
+
+struct AttestationInput<'a> {
+    task_id: &'a str,
+    id: &'a str,
+    command: &'a str,
+    result_hash: &'a str,
+    ts: &'a str,
+}
+
+/// `ToolAttestation` с привязками. Конструктор `tool_attestation` остаётся
+/// единственным местом формы записи, поэтому EvidenceEntry здесь не собирается
+/// заново — только дополняется обязательными полями.
+fn bound_attestation(input: AttestationInput<'_>, bindings: &AttestationBindings) -> EvidenceEntry {
+    let mut entry = tool_attestation(
+        input.task_id,
+        input.id,
+        input.command,
+        input.result_hash,
+        input.ts,
+    );
+    entry.recipe_digest = Some(bindings.recipe_digest.clone());
+    entry.policy_digest = Some(bindings.policy_digest.clone());
+    entry.commit_sha = Some(bindings.commit_sha.clone());
+    entry
 }
 
 /// Единственный путь исполнения для Run и Plan-Build.
@@ -125,6 +324,11 @@ pub fn run_task(path: &Path) -> Result<RunResult, String> {
     let ledger_path = unique_temp_path("evidence", "db")?;
     let mut ledger = SqliteEvidenceLedger::open(&ledger_path)
         .map_err(|e| format!("open evidence ledger `{}`: {e}", ledger_path.display()))?;
+
+    let args = pi_transport_args(&extension, &[]);
+    let bindings = AttestationBindings::resolve(&pi, &args).inspect_err(|_| {
+        eprintln!("ledger={}", ledger_path.display());
+    })?;
 
     let work = unique_temp_path("work", "")?;
     let tmp = unique_temp_path("tmp", "")?;
@@ -215,19 +419,19 @@ pub fn run_task(path: &Path) -> Result<RunResult, String> {
             }
 
             let command = format!("{} {}", pi.display(), args.join(" "));
+            let attest_id = format!("{}-attest", attempt.task_id);
+            let claim_id = format!("{}-claim", attempt.task_id);
             let chain = vec![
-                model_claim(
-                    &attempt.task_id,
-                    &format!("{}-claim", attempt.task_id),
-                    &digest,
-                    &ts,
-                ),
-                tool_attestation(
-                    &attempt.task_id,
-                    &format!("{}-attest", attempt.task_id),
-                    &command,
-                    &digest,
-                    &ts,
+                model_claim(&attempt.task_id, &claim_id, &digest, &ts),
+                bound_attestation(
+                    AttestationInput {
+                        task_id: &attempt.task_id,
+                        id: &attest_id,
+                        command: &command,
+                        result_hash: &digest,
+                        ts: &ts,
+                    },
+                    &bindings,
                 ),
             ];
             for entry in &chain {
@@ -240,6 +444,7 @@ pub fn run_task(path: &Path) -> Result<RunResult, String> {
                 verdict: verdict_name(&verdict),
                 receipt_id: id,
                 store_path: db_path,
+                ledger_path,
                 gate: status.to_string(),
                 risk,
             })
