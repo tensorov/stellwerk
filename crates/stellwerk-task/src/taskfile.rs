@@ -1,4 +1,6 @@
-use crate::execution::{EngineProfile, REGISTRY};
+use crate::execution::{
+    EngineProfile, ExecutionRefusal, ExecutionSpec, ResolvedExecution, REGISTRY,
+};
 use serde::{Deserialize, Serialize};
 use stellwerk_core::contract::{DataClass, TaskLimits, TaskSpec};
 use thiserror::Error;
@@ -27,6 +29,11 @@ pub enum TaskFileError {
         /// Что вообще разрешено в этой сборке.
         known: Vec<String>,
     },
+    /// Программа запуска не названа: `program` пуст. Отдельное состояние, а не
+    /// `MissingProfile` и не значение по умолчанию: профиль назван, но запускать
+    /// нечего, и пустая строка не должна читаться как согласие на что-то.
+    #[error("task does not name `program`: it is blank, so there is nothing to launch")]
+    EmptyProgram,
     /// Файл не прочитан. Отдельный вариант, а не Validation: отсутствие файла —
     /// это операционная ошибка, и путать её с опечаткой в содержимом нельзя.
     #[error("io error: {0}")]
@@ -109,14 +116,16 @@ impl TaskFile {
         Self::from_toml_str(&raw)
     }
 
-    /// Разрешить названный профиль против реестра этой сборки.
+    /// Найти названный профиль в реестре этой сборки. Приватно: снаружи допуск
+    /// идёт только через `resolve(program)`, который отдаёт найденный профиль в
+    /// `execution::resolve`; второй публичный путь разрешения расходился бы с ним.
     ///
     /// Отсутствие поля (`None`) — `MissingProfile`, а не подстановка `pi`.
     /// Названное значение ищется в `REGISTRY`, единственном источнике истины о
     /// разрешённых движках; `UnknownProfile` называет отклонённое имя и то, что
     /// вообще разрешено. Двух разных отказов достаточно, чтобы «не названо» и
     /// «названо неверно» нельзя было перепутать.
-    pub fn resolve(&self) -> Result<&'static EngineProfile, TaskFileError> {
+    fn resolve_profile(&self) -> Result<&'static EngineProfile, TaskFileError> {
         let Some(profile) = self.spec.profile.as_deref() else {
             return Err(TaskFileError::MissingProfile);
         };
@@ -128,11 +137,39 @@ impl TaskFile {
             })
     }
 
+    /// Допустить запуск: названный профиль и программа проходят через
+    /// `execution::resolve` — единственную точку допуска. Программа берётся из
+    /// аргумента, движок — из разрешённого профиля.
+    ///
+    /// Пустая программа — `EmptyProgram`: профиль назван, но запускать нечего.
+    pub fn resolve(&self, program: &str) -> Result<ResolvedExecution, TaskFileError> {
+        let profile = self.resolve_profile()?;
+        let spec = ExecutionSpec {
+            program: program.to_owned(),
+            engine: profile.engine().to_owned(),
+        };
+        crate::execution::resolve(Some(&spec), &REGISTRY).map_err(|refusal| match refusal {
+            ExecutionRefusal::EmptyProgram => TaskFileError::EmptyProgram,
+            ExecutionRefusal::UnknownProfile { engine, known } => TaskFileError::UnknownProfile {
+                profile: engine,
+                known,
+            },
+            // Недостижимо по построению: `Some(&spec)` передан всегда, поэтому
+            // `Absent` вернуть нечем. Ветка оставлена явной, чтобы новая причина
+            // отказа не растворилась в wildcard'е; отдельного варианта
+            // `AbsentExecutionSpec` не заводим — «спецификации нет» здесь не наступает.
+            ExecutionRefusal::Absent => TaskFileError::Validation(
+                "execution spec absent: unreachable because resolve always passes Some(&spec)"
+                    .to_owned(),
+            ),
+        })
+    }
+
     fn validate(&self) -> Result<(), TaskFileError> {
         let t = &self.spec;
         // Профиль называется первым: без движка задача не исполнима, и отказ
         // обязан быть про отсутствие/неверный профиль, а не про лимиты.
-        self.resolve()?;
+        self.resolve_profile()?;
         let bad = |m: String| Err(TaskFileError::Validation(m));
         if t.id.trim().is_empty() {
             return bad("id обязан быть непустым".into());

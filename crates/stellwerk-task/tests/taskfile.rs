@@ -182,3 +182,61 @@ fn test_taskfile_into_spec_converts_id_and_goal() {
     assert_eq!(spec.id, "task-001");
     assert_eq!(spec.goal, "Add unit tests for TaskLimits");
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// resolve(program): допуск запуска идёт через execution::resolve
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// `resolve(program)` — единственный вход допуска: названный профиль уходит в
+/// `execution::resolve`, а программа возвращается как была названа вызывающим.
+#[test]
+fn resolve_returns_the_named_program_and_the_profile_engine() {
+    let task_file = TaskFile::from_toml_str(FIXTURE_VALID).expect("валидный TOML");
+    let resolved = task_file
+        .resolve("/opt/pi/bin/pi")
+        .expect("profile = \"pi\" обязан разрешиться");
+    assert_eq!(resolved.program(), "/opt/pi/bin/pi");
+    assert_eq!(resolved.engine(), "pi");
+}
+
+/// Пустая и пробельная программа — `EmptyProgram`: профиль назван, но запускать
+/// нечего. Это отдельное состояние, не `MissingProfile` и не подстановка.
+#[test]
+fn resolve_refuses_a_blank_program_as_empty_program() {
+    let task_file = TaskFile::from_toml_str(FIXTURE_VALID).expect("валидный TOML");
+    for blank in ["", "   "] {
+        let refusal = task_file
+            .resolve(blank)
+            .expect_err("пустая программа обязана быть отвергнута");
+        assert!(
+            matches!(refusal, TaskFileError::EmptyProgram),
+            "программа {blank:?} — EmptyProgram, получено {refusal:?}"
+        );
+    }
+}
+
+/// Отсутствие профиля и неверное имя остаются различимыми и на входе
+/// `resolve(program)`: `MissingProfile` не читается как `UnknownProfile`.
+#[test]
+fn resolve_keeps_missing_and_unknown_profile_distinct() {
+    // `from_toml_str` здесь не годится: он валидирует и падает на самом профиле.
+    // Поэтому TOML разбирается напрямую, чтобы проверить именно `resolve`.
+    let missing: TaskFile = toml::from_str(FIXTURE_MISSING_PROFILE).expect("TOML разбирается");
+    let missing_refusal = missing
+        .resolve("/opt/pi/bin/pi")
+        .expect_err("отсутствие profile обязано быть отвергнуто");
+    assert!(
+        matches!(missing_refusal, TaskFileError::MissingProfile),
+        "ожидался MissingProfile, получено {missing_refusal:?}"
+    );
+
+    let unknown: TaskFile = toml::from_str(FIXTURE_WRONG_PROFILE).expect("TOML разбирается");
+    let unknown_refusal = unknown
+        .resolve("/opt/pi/bin/pi")
+        .expect_err("profile = \"opencode\" обязан быть отвергнут");
+    let TaskFileError::UnknownProfile { profile, known } = unknown_refusal else {
+        panic!("ожидался UnknownProfile, получено {unknown_refusal:?}");
+    };
+    assert_eq!(profile, "opencode");
+    assert_eq!(known, vec!["pi".to_owned()]);
+}

@@ -443,8 +443,14 @@ pub fn run_task_with(
     pi: &Path,
     extension: &Path,
 ) -> Result<RunResult, String> {
-    let spec = TaskFile::load(path)
-        .map_err(|e| format!("task file `{}`: {e}", path.display()))?
+    let task_file =
+        TaskFile::load(path).map_err(|e| format!("task file `{}`: {e}", path.display()))?;
+    let program = pi
+        .to_str()
+        .ok_or_else(|| format!("MissingEngine: program path {} is not UTF-8", pi.display()))?;
+    let resolved = task_file.resolve(program);
+    let resolved = resolved.map_err(|e| format!("task file `{}`: {e}", path.display()))?;
+    let spec = task_file
         .into_spec()
         .map_err(|e| format!("task file `{}`: {e}", path.display()))?;
 
@@ -524,7 +530,7 @@ pub fn run_task_with(
     let worker = SandboxWorker::new(
         FixtureEngine::new(pi.to_path_buf()),
         sandbox,
-        pi.to_path_buf(),
+        resolved.program(),
         args.clone(),
         window,
         vec![
@@ -603,7 +609,7 @@ pub fn run_task_with(
                 ));
             }
 
-            let command = format!("{} {}", pi.display(), args.join(" "));
+            let command = format!("{} {}", resolved.program(), args.join(" "));
             let attest_id = format!("{}-attest", attempt.task_id);
             let claim_id = format!("{}-claim", attempt.task_id);
             let chain = vec![
