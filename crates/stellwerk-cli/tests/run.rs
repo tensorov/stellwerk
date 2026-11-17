@@ -1,13 +1,19 @@
 //! N1-01: чек обязан ЛЕЧЬ в SQLite и читаться обратно, а провал запуска — не
 //! превращаться в `verdict=Allow`.
 
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use stellwerk_cli::build_runner::{run_build, BuildRun};
-use stellwerk_cli::plan::BuildRequest;
+use stellwerk_cli::host_model::ModelConfig;
+use stellwerk_cli::plan::{BuildRequest, HOST_MODEL_ID};
+use stellwerk_cli::run_task_with;
 use stellwerk_store::{EventStore, SqliteStore};
 use stellwerk_task::evidence::{EvidenceKind, EvidenceLedger};
 use stellwerk_task::ledger_sqlite::SqliteEvidenceLedger;
@@ -526,4 +532,178 @@ fn both_entrypoints_share_one_authorization() {
 
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_file(&run_store);
+}
+
+/// Подставной Pi для сквозного сокетного прогона: говорит по unix-сокетам каналов
+/// модели и гейта. Скрипт на Python, потому что shell без внешних утилит кадры не
+/// шлёт. Он спрашивает гейт о `read`, отказывается продолжать при ответе не `allow`
+/// и только потом делает ход модели; события на stdout — ровно доноры `Progress`.
+fn socket_pi(dir: &Path) -> PathBuf {
+    let pi = dir.join("pi-sockets");
+    let script = r#"#!/usr/bin/env python3
+import json, os, socket, sys
+
+def connect(path):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(15)
+    s.connect(path)
+    return s
+
+def gate(path):
+    s = connect(path)
+    s.sendall(b'{"kind":"tool_call","tool":"read","parent_tool_call_id":null}\n')
+    buf = b""
+    while b"\n" not in buf:
+        chunk = s.recv(65536)
+        if not chunk:
+            break
+        buf += chunk
+    s.close()
+    return json.loads(buf.split(b"\n", 1)[0].decode()).get("kind")
+
+def model(path, text):
+    s = connect(path)
+    frame = json.dumps({"kind": "turn", "tools": [], "messages": [{"role": "user", "text": text}]})
+    s.sendall((frame + "\n").encode())
+    buf = b""
+    while True:
+        if b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            if json.loads(line.decode()).get("kind") == "done":
+                break
+            continue
+        chunk = s.recv(65536)
+        if not chunk:
+            break
+        buf += chunk
+    s.close()
+
+answer = gate(os.environ["STELLWERK_GATE_SOCK"])
+if answer != "allow":
+    sys.stderr.write("gate answered %s\n" % answer)
+    sys.exit(3)
+model(os.environ["STELLWERK_MODEL_SOCK"], "go")
+for event in (
+    '{"type":"tool_execution_start","toolCallId":"t1","toolName":"read"}',
+    '{"type":"message_end","message":{"role":"assistant","usage":{"input":10},"stopReason":"toolUse"}}',
+    '{"type":"message_end","message":{"role":"assistant","usage":{"input":10},"stopReason":"stop"}}',
+    '{"type":"turn_end","message":{"role":"assistant","usage":{"input":10},"stopReason":"stop"}}',
+):
+    print(event)
+"#;
+    std::fs::write(&pi, script).expect("write socket pi");
+    let mut mode = std::fs::metadata(&pi).expect("pi metadata").permissions();
+    mode.set_mode(0o755);
+    std::fs::set_permissions(&pi, mode).expect("pi executable");
+    pi
+}
+
+/// Локальный HTTP-бэкенд, считающий ходы. Потолок не «сколько успели»: цикл идёт до
+/// остановки, поэтому после прогона счётчик — точное число model turn'ов.
+struct CountingBackend {
+    base_url: String,
+    requests: Arc<AtomicUsize>,
+    stop: Arc<AtomicBool>,
+    worker: std::thread::JoinHandle<()>,
+}
+
+fn serve_counting(body: &str) -> CountingBackend {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("локальный порт");
+    let port = listener.local_addr().expect("адрес").port();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    let (counted, stopper, body) = (Arc::clone(&requests), Arc::clone(&stop), body.to_owned());
+    let worker = std::thread::spawn(move || {
+        listener.set_nonblocking(true).expect("неблокирующий");
+        while !stopper.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).expect("блокирующий");
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    let mut chunk = [0u8; 4096];
+                    let read = stream.read(&mut chunk).expect("запрос прочитан");
+                    assert!(read > 0, "пустой запрос к модели");
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    stream
+                        .write_all(response.as_bytes())
+                        .expect("ответ записан");
+                    stream.flush().expect("ответ отправлен");
+                }
+                Err(why) if why.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(why) => panic!("соединение модели: {why}"),
+            }
+        }
+    });
+    CountingBackend {
+        base_url: format!("http://127.0.0.1:{port}/v1"),
+        requests,
+        stop,
+        worker,
+    }
+}
+
+/// Сквозной сокетный прогон: fake Pi спрашивает гейт о `read`, получает `allow`,
+/// делает ровно один ход модели. Счётчики `RunResult` — не косвенность: модель
+/// считает бэкенд, гейт — обслуженные заявки в `run_task_with`.
+#[test]
+fn run_task_with_drives_one_model_turn_and_one_gate_request() {
+    let dir = scratch_dir("channels");
+    let token = dir.join("neuraldeep.token");
+    std::fs::write(&token, "test-token\n").expect("токен");
+    let pi = socket_pi(&dir);
+    let backend = serve_counting(r#"{"choices":[{"message":{"content":"pong"}}]}"#);
+    let task_path = dir.join("task.toml");
+    let toml = "[task]\nid = \"v2-05a\"\ngoal = \"echo hello\"\nworkspace_ref = \"ws\"\nmodel_ref = \"m\"\npacket = \"V2/05a\"\nprofile = \"pi\"\nevidence_policy = \"e\"\n\n[task.limits]\nmax_files = 1\nmax_diff_lines = 1\ntimeout_seconds = 30\nmax_retries = 0\ncontext_budget_tokens = 1\ndata_class = \"internal\"\n";
+    std::fs::write(&task_path, toml).expect("write fixture");
+
+    let config = ModelConfig::with_token_path(&backend.base_url, HOST_MODEL_ID, &token)
+        .map_err(|e| e.to_string())
+        .expect("model config");
+    let result = run_task_with(&task_path, config, &pi, &pi_extension()).expect("run");
+
+    backend.stop.store(true, Ordering::SeqCst);
+    backend.worker.join().expect("поток бэкенда");
+
+    assert_eq!(
+        backend.requests.load(Ordering::SeqCst),
+        1,
+        "бэкенд модели получил ровно один ход"
+    );
+    assert_eq!(result.model_turns, 1, "один ход модели обслужен");
+    assert_eq!(result.gate_requests, 1, "ровно одна заявка в гейт");
+    assert_eq!(result.verdict, "Allow", "прогон разрешён");
+
+    let _ = std::fs::remove_file(&result.store_path);
+    let _ = std::fs::remove_file(&result.ledger_path);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Отсутствие настройки модели — названный отказ ДО прогона, а не фикстура и не
+/// пустой вердикт. `HOME`/`XDG_CONFIG_HOME` сняты, значит путь токена не выводится.
+#[test]
+fn run_task_without_model_config_refuses_by_name() {
+    let output = Command::new(env!("CARGO_BIN_EXE_stellwerk"))
+        .arg("run")
+        .arg("does-not-matter.toml")
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("HOME")
+        .env_remove("PI_BIN")
+        .env_remove("STELLWERK_PI_EXTENSION")
+        .output()
+        .expect("cli binary should spawn");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_ne!(output.status.code(), Some(0), "stderr: {stderr}");
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("verdict="),
+        "stdout must not claim a verdict"
+    );
+    assert!(
+        stderr.contains("model setting") && stderr.contains("is not configured"),
+        "stderr must name the unconfigured model setting: {stderr}"
+    );
 }

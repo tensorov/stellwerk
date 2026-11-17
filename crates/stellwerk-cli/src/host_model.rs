@@ -10,6 +10,7 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use stellwerk_task::m5::model_backend::HttpBackend;
 use stellwerk_task::m5::model_transport::{BackendError, ModelProxy, Served};
@@ -140,6 +141,22 @@ impl HostModel {
     /// сколько модель.
     pub fn serve_once(&self) -> std::io::Result<Served> {
         self.proxy.serve_once(&self.backend)
+    }
+
+    /// Обслуживает канал модели, пока `stop` не поднят.
+    ///
+    /// `accept` не просыпается сам: остановка — это поднятый флаг **и** пустое
+    /// подключение (`wake`). Подключение даёт `EOF` → `Served::NoRequest`, цикл видит
+    /// флаг и выходит. Возвращает число обслуженных ходов; ноль — ходов не было, и это
+    /// отличается от «были и все прошли».
+    pub fn serve_until_stopped(&self, stop: &AtomicBool) -> std::io::Result<usize> {
+        let mut served = 0;
+        while !stop.load(Ordering::SeqCst) {
+            if self.serve_once()? != Served::NoRequest {
+                served += 1;
+            }
+        }
+        Ok(served)
     }
 }
 

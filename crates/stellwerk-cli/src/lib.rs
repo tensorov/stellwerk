@@ -14,24 +14,34 @@ pub mod planner_host;
 pub mod tui;
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 use stellwerk_core::contract::{
-    CommitSha, ModelBinding, PolicyDigest, PolicyLevel, RecipeDigest, RetentionClass, RiskClass,
+    CommitSha, DataClass, ModelBinding, PolicyDigest, PolicyLevel, RecipeDigest, RetentionClass,
+    RiskClass,
 };
+use stellwerk_gateway::gate::CallRequest;
 use stellwerk_gateway::permission::ToolRisk;
 use stellwerk_store::{EventStore, SqliteStore};
 use stellwerk_task::evidence::{
     evidence_status, model_claim, tool_attestation, EvidenceEntry, EvidenceLedger,
 };
 use stellwerk_task::ledger_sqlite::SqliteEvidenceLedger;
+use stellwerk_task::m5::gate_channel::{AllowBasis, GateChannel, GatePolicy, PolicyVerdict};
 use stellwerk_task::m5::sandbox_bwrap::Sandbox;
+use stellwerk_task::m5::session_identity::{
+    Adjudication, CodemodeState, SessionDescription, ToolSet,
+};
 use stellwerk_task::m5::FixtureEngine;
 use stellwerk_task::orchestrator::{pi_transport_args, SandboxWorker, StaticRegistry, ToolEntry};
 use stellwerk_task::runner::{run_once, Call, CallAttempt, CallVerdict, Verdict, Worker};
 use stellwerk_task::taskfile::TaskFile;
+
+use crate::build_runner::{serve_gate_until_stopped_logged, wake};
+use crate::host_model::{HostModel, ModelConfig};
+use crate::plan::{HOST_BASE_URL, HOST_MODEL_ID};
 
 /// Реестр инструментов CLI-прогона. Движок — Pi по профилю `pi`; класс риска
 /// объявлен здесь, а не взят из production-реестра оркестратора.
@@ -40,6 +50,43 @@ const CLI_AGENT_TOOLS: &[ToolEntry] = &[ToolEntry {
     tool: "pi",
     class: RiskClass::R0,
 }];
+
+/// Модуль, от имени которого гейт видит инструменты CLI-прогона. Отдельный от
+/// `CLI_AGENT_TOOLS` реестра: реестр отвечает за входной вызов `pi`, а гейт — за
+/// инструменты внутри сессии.
+const CLI_GATE_MODULE: &str = "stellwerk-cli";
+
+/// Таблица рисков гейта CLI: чтение — R0, правка файлов — R1, оболочка — R5.
+/// Класс задан здесь, а не в кадре: агент не вправе назвать себя безопасным.
+const CLI_GATE_TOOLS: &[ToolEntry] = &[
+    ToolEntry {
+        module: CLI_GATE_MODULE,
+        tool: "read",
+        class: RiskClass::R0,
+    },
+    ToolEntry {
+        module: CLI_GATE_MODULE,
+        tool: "edit",
+        class: RiskClass::R1,
+    },
+    ToolEntry {
+        module: CLI_GATE_MODULE,
+        tool: "write",
+        class: RiskClass::R1,
+    },
+    ToolEntry {
+        module: CLI_GATE_MODULE,
+        tool: "bash",
+        class: RiskClass::R5,
+    },
+];
+
+/// Что предложено модели. Набор гейта шире: `bash` удерживается для решения,
+/// а не скрывается.
+const CLI_GATE_OFFERED: &[&str] = &["read", "edit", "write"];
+
+/// Что сессия держит: исчерпывающий перечень, а не список запретов.
+const CLI_GATE_HELD: &[&str] = &["read", "bash", "edit", "write"];
 
 const PI_BIN: &str = "PI_BIN";
 const PI_EXTENSION: &str = "STELLWERK_PI_EXTENSION";
@@ -99,6 +146,10 @@ pub struct RunResult {
     pub ledger_path: PathBuf,
     pub gate: String,
     pub risk: String,
+    /// Обслуженных ходов модели. Ноль — ходов не было, и это не то же, что отказ.
+    pub model_turns: usize,
+    /// Обслуженных заявок гейта. Ноль — никто не просил, и это видно как ноль.
+    pub gate_requests: usize,
 }
 
 fn missing_binding(detail: impl std::fmt::Display) -> String {
@@ -307,14 +358,64 @@ pub(crate) async fn execute(
     run_once(attempt, worker, store).await.map_err(|e| e.0)
 }
 
+/// Политика гейта CLI-прогона. `request_for` возвращает `Some` всегда: неизвестный
+/// инструмент — это `Unclassified` (отдельное состояние), а не «никто не спросил».
+pub struct CliPolicy {
+    pub model: ModelBinding,
+}
+
+impl CliPolicy {
+    fn request(&self, call: &Adjudication) -> CallRequest {
+        let risk = CLI_GATE_TOOLS
+            .iter()
+            .find(|entry| entry.tool == call.tool && entry.module == CLI_GATE_MODULE)
+            .map_or(ToolRisk::Unclassified, |entry| {
+                ToolRisk::Classified(entry.class)
+            });
+        CallRequest {
+            tool: call.tool.clone(),
+            module: CLI_GATE_MODULE.to_owned(),
+            risk,
+            caller: PolicyLevel::L2Contributor,
+            data: DataClass::Public,
+            model: self.model.clone(),
+            // Спросить некого: прогон не интерактивен, и `Ask` стал бы разрешением
+            // по факту ожидания.
+            interactive: false,
+        }
+    }
+}
+
+impl GatePolicy for CliPolicy {
+    fn request_for(&self, call: &Adjudication) -> Option<CallRequest> {
+        Some(self.request(call))
+    }
+
+    fn decide_call(&self, call: &Adjudication, _path: Option<&str>) -> PolicyVerdict {
+        PolicyVerdict::Evaluated {
+            request: self.request(call),
+            basis: AllowBasis::RiskTable,
+        }
+    }
+}
+
 pub fn run_task(path: &Path) -> Result<RunResult, String> {
+    let config = ModelConfig::from_env(HOST_BASE_URL, HOST_MODEL_ID).map_err(|e| e.to_string())?;
+    let pi = pi_program()?;
+    let extension = pi_extension()?;
+    run_task_with(path, config, &pi, &extension)
+}
+
+pub fn run_task_with(
+    path: &Path,
+    config: ModelConfig,
+    pi: &Path,
+    extension: &Path,
+) -> Result<RunResult, String> {
     let spec = TaskFile::load(path)
         .map_err(|e| format!("task file `{}`: {e}", path.display()))?
         .into_spec()
         .map_err(|e| format!("task file `{}`: {e}", path.display()))?;
-
-    let pi = pi_program()?;
-    let extension = pi_extension()?;
 
     let window = Duration::from_secs(spec.limits.timeout_seconds);
     let db_path = unique_temp_path("receipts", "db")?;
@@ -325,17 +426,18 @@ pub fn run_task(path: &Path) -> Result<RunResult, String> {
     let mut ledger = SqliteEvidenceLedger::open(&ledger_path)
         .map_err(|e| format!("open evidence ledger `{}`: {e}", ledger_path.display()))?;
 
-    let args = pi_transport_args(&extension, &[]);
-    let bindings = AttestationBindings::resolve(&pi, &args).inspect_err(|_| {
+    let args = pi_transport_args(extension, CLI_GATE_OFFERED);
+    let bindings = AttestationBindings::resolve(pi, &args).inspect_err(|_| {
         eprintln!("ledger={}", ledger_path.display());
     })?;
 
     let work = unique_temp_path("work", "")?;
     let tmp = unique_temp_path("tmp", "")?;
+    let sock = unique_temp_path("sock", "")?;
     let home = work.join("home");
-    std::fs::create_dir_all(&work).map_err(|e| format!("create work dir: {e}"))?;
-    std::fs::create_dir_all(&tmp).map_err(|e| format!("create tmp dir: {e}"))?;
-    std::fs::create_dir_all(&home).map_err(|e| format!("create agent home: {e}"))?;
+    for dir in [&work, &tmp, &sock, &home] {
+        std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    }
 
     let mut read_only: Vec<PathBuf> = SYSTEM_READ_ONLY.iter().map(PathBuf::from).collect();
     if let Some(bin) = pi.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -350,6 +452,31 @@ pub fn run_task(path: &Path) -> Result<RunResult, String> {
         read_only.push(dir.to_path_buf());
     }
 
+    let host = HostModel::prepare(config, &sock, std::slice::from_ref(&work))
+        .map_err(|e| e.to_string())?;
+    let gate = GateChannel::bind(&sock).map_err(|e| e.to_string())?;
+    let held = SessionDescription::new(
+        &spec.id,
+        &work,
+        ToolSet::listed(CLI_GATE_HELD).map_err(|e| e.to_string())?,
+        window,
+        CodemodeState::AbsentAfterConfigLoad,
+    )
+    .map_err(|e| e.to_string())?;
+    let model = ModelBinding {
+        id: spec.model_ref.clone(),
+        provider: "local".to_string(),
+        model_id: "pi".to_string(),
+        data_class: spec.limits.data_class,
+        retention: RetentionClass::FirstParty,
+        context_window: 1_000,
+        max_output: 1_000,
+        budget_tokens_per_task: 1_000,
+    };
+    let policy = CliPolicy {
+        model: model.clone(),
+    };
+
     let sandbox = Sandbox {
         work: work.clone(),
         tmp: tmp.clone(),
@@ -357,19 +484,28 @@ pub fn run_task(path: &Path) -> Result<RunResult, String> {
         window,
     };
 
-    let args = pi_transport_args(&extension, &[]);
     let worker = SandboxWorker::new(
-        FixtureEngine::new(pi.clone()),
+        FixtureEngine::new(pi.to_path_buf()),
         sandbox,
-        pi.clone(),
+        pi.to_path_buf(),
         args.clone(),
         window,
         vec![
             ("HOME".to_string(), home.display().to_string()),
             ("PATH".to_string(), "/usr/bin:/bin".to_string()),
             ("TMPDIR".to_string(), tmp.display().to_string()),
+            (
+                "STELLWERK_MODEL_SOCK".to_string(),
+                host.socket().display().to_string(),
+            ),
+            (
+                "STELLWERK_GATE_SOCK".to_string(),
+                gate.socket().display().to_string(),
+            ),
         ],
     )
+    .with_sockets(host.socket(), gate.socket())
+    .map_err(|e| e.to_string())?
     .with_registry(StaticRegistry(CLI_AGENT_TOOLS));
 
     let attempt = CallAttempt {
@@ -379,16 +515,7 @@ pub fn run_task(path: &Path) -> Result<RunResult, String> {
             module: "stellwerk-cli".to_string(),
             risk: ToolRisk::Classified(RiskClass::R0),
             data: spec.limits.data_class,
-            model: ModelBinding {
-                id: spec.model_ref.clone(),
-                provider: "local".to_string(),
-                model_id: "pi".to_string(),
-                data_class: spec.limits.data_class,
-                retention: RetentionClass::FirstParty,
-                context_window: 1_000,
-                max_output: 1_000,
-                budget_tokens_per_task: 1_000,
-            },
+            model: model.clone(),
             interactive: false,
         },
         caller: PolicyLevel::L2Contributor,
@@ -396,7 +523,28 @@ pub fn run_task(path: &Path) -> Result<RunResult, String> {
     };
 
     let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {e}"))?;
-    let outcome = runtime.block_on(execute(&attempt, &worker, &store));
+    let stop = AtomicBool::new(false);
+    let (outcome, model_turns, gate_requests) = std::thread::scope(|scope| {
+        let model_thread = scope.spawn(|| host.serve_until_stopped(&stop));
+        let gate_thread =
+            scope.spawn(|| serve_gate_until_stopped_logged(&gate, &held, &policy, &stop, &work));
+        let outcome = runtime.block_on(execute(&attempt, &worker, &store));
+        // Остановка и пробуждение — ДО разбора результата: отказ авторизации не должен
+        // оставлять слуг в `accept`.
+        stop.store(true, Ordering::SeqCst);
+        for socket in [host.socket(), gate.socket()] {
+            wake(socket).map_err(|e| format!("wake {}: {e}", socket.display()))?;
+        }
+        let model_turns = model_thread
+            .join()
+            .map_err(|_| "model thread panicked".to_string())?
+            .map_err(|e| format!("model channel: {e}"))?;
+        let (gate_requests, _answers) = gate_thread
+            .join()
+            .map_err(|_| "gate thread panicked".to_string())?
+            .map_err(|e| format!("gate channel: {e}"))?;
+        Ok::<_, String>((outcome, model_turns, gate_requests))
+    })?;
 
     let receipt = runtime.block_on(receipt(&store, &attempt.task_id));
 
@@ -447,6 +595,8 @@ pub fn run_task(path: &Path) -> Result<RunResult, String> {
                 ledger_path,
                 gate: status.to_string(),
                 risk,
+                model_turns,
+                gate_requests,
             })
         }
         Err(err) => {
