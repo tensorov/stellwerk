@@ -1,7 +1,7 @@
 [task]
 id = "n1-smoke"
 goal = "echo hello"
-workspace_ref = "ws-n1"
+workspace_ref = "."
 model_ref = "m-n1"
 packet = "N1-01"
 profile = "pi"

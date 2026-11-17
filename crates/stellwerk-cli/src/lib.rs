@@ -39,7 +39,7 @@ use stellwerk_task::orchestrator::{pi_transport_args, SandboxWorker, StaticRegis
 use stellwerk_task::runner::{run_once, Call, CallAttempt, CallVerdict, Verdict, Worker};
 use stellwerk_task::taskfile::TaskFile;
 
-use crate::build_runner::{serve_gate_until_stopped_logged, wake};
+use crate::build_runner::{copy_workspace, serve_gate_until_stopped_logged, wake};
 use crate::host_model::{HostModel, ModelConfig};
 use crate::plan::{HOST_BASE_URL, HOST_MODEL_ID};
 
@@ -154,6 +154,10 @@ pub struct RunResult {
 
 fn missing_binding(detail: impl std::fmt::Display) -> String {
     format!("MissingAttestationBinding: commit_sha {detail}")
+}
+
+fn missing_workspace(detail: impl std::fmt::Display) -> String {
+    format!("MissingWorkspace: {detail}")
 }
 
 fn sha256_hex(value: &str) -> String {
@@ -399,6 +403,33 @@ impl GatePolicy for CliPolicy {
     }
 }
 
+/// Дерево, о котором говорит задача. Абсолютный `workspace_ref` берётся как есть,
+/// относительный — от каталога файла задачи, а не от cwd процесса: cwd задаёт
+/// вызывающий, и он не должен менять смысл задачи. Отсутствие каталога — названный
+/// отказ, а не пустой `work`.
+fn resolve_workspace(task_path: &Path, workspace_ref: &str) -> Result<PathBuf, String> {
+    let named = Path::new(workspace_ref);
+    let resolved = if named.is_absolute() {
+        named.to_path_buf()
+    } else {
+        let parent = task_path.parent().ok_or_else(|| {
+            missing_workspace(format!(
+                "task `{}` has no parent directory",
+                task_path.display()
+            ))
+        })?;
+        parent.join(named)
+    };
+    if !resolved.is_dir() {
+        return Err(missing_workspace(format!(
+            "`{}` (from task `{}`) is not a directory",
+            resolved.display(),
+            task_path.display()
+        )));
+    }
+    Ok(resolved)
+}
+
 pub fn run_task(path: &Path) -> Result<RunResult, String> {
     let config = ModelConfig::from_env(HOST_BASE_URL, HOST_MODEL_ID).map_err(|e| e.to_string())?;
     let pi = pi_program()?;
@@ -438,6 +469,12 @@ pub fn run_task_with(
     for dir in [&work, &tmp, &sock, &home] {
         std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     }
+    // Копия ДО сборки воркера: песочница стартует уже с деревом задачи, а не с
+    // пустым `work`, который выглядел бы как «агенту нечего было читать».
+    let workspace = resolve_workspace(path, &spec.workspace_ref)?;
+    copy_workspace(&workspace, &work).map_err(|e| {
+        missing_workspace(format!("`{}` cannot be copied: {e}", workspace.display()))
+    })?;
 
     let mut read_only: Vec<PathBuf> = SYSTEM_READ_ONLY.iter().map(PathBuf::from).collect();
     if let Some(bin) = pi.parent().filter(|p| !p.as_os_str().is_empty()) {

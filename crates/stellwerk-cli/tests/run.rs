@@ -218,6 +218,7 @@ fn failed_run_is_not_reported_as_success() {
     let dir = scratch_dir("no-engine");
     let home = dir.join("home");
     std::fs::create_dir_all(&home).expect("create home");
+    std::fs::create_dir_all(dir.join("ws")).expect("ws fixture");
     let task_path = dir.join("no-engine.toml");
     let toml = "[task]\nid = \"n1-fail\"\ngoal = \"echo hello\"\nworkspace_ref = \"ws\"\nmodel_ref = \"m\"\npacket = \"N1-10\"\nprofile = \"pi\"\nevidence_policy = \"e\"\n\n[task.limits]\nmax_files = 1\nmax_diff_lines = 1\ntimeout_seconds = 30\nmax_retries = 0\ncontext_budget_tokens = 1\ndata_class = \"internal\"\n";
     std::fs::write(&task_path, toml).expect("write fixture");
@@ -261,6 +262,7 @@ fn missing_engine_is_named_refusal() {
     let dir = scratch_dir("missing-engine");
     let home = dir.join("home");
     std::fs::create_dir_all(&home).expect("create home");
+    std::fs::create_dir_all(dir.join("ws")).expect("ws fixture");
     let task_path = dir.join("task.toml");
     let toml = "[task]\nid = \"r04-engine\"\ngoal = \"echo hello\"\nworkspace_ref = \"ws\"\nmodel_ref = \"m\"\npacket = \"V1/r04\"\nprofile = \"pi\"\nevidence_policy = \"e\"\n\n[task.limits]\nmax_files = 1\nmax_diff_lines = 1\ntimeout_seconds = 30\nmax_retries = 0\ncontext_budget_tokens = 1\ndata_class = \"internal\"\n";
     std::fs::write(&task_path, toml).expect("write task");
@@ -307,6 +309,7 @@ fn run_without_git_head_refuses() {
     std::fs::create_dir_all(&home).expect("create home");
     let cwd = dir.join("scratch");
     std::fs::create_dir_all(&cwd).expect("create scratch cwd");
+    std::fs::create_dir_all(dir.join("ws")).expect("ws fixture");
     let task_path = dir.join("task.toml");
     let toml = "[task]\nid = \"n1-no-git\"\ngoal = \"echo hello\"\nworkspace_ref = \"ws\"\nmodel_ref = \"m\"\npacket = \"V2/01\"\nprofile = \"pi\"\nevidence_policy = \"e\"\n\n[task.limits]\nmax_files = 1\nmax_diff_lines = 1\ntimeout_seconds = 30\nmax_retries = 0\ncontext_budget_tokens = 1\ndata_class = \"internal\"\n";
     std::fs::write(&task_path, toml).expect("write task");
@@ -362,6 +365,7 @@ fn run_attestation_reads_linked_worktree_commit() {
     std::fs::create_dir_all(&worktree).expect("create worktree");
     std::fs::write(worktree.join(".git"), "gitdir: ../main/.git/worktrees/w1\n")
         .expect("write .git pointer");
+    std::fs::create_dir_all(dir.join("ws")).expect("ws fixture");
     let task_path = dir.join("task.toml");
     let toml = "[task]\nid = \"n1-worktree\"\ngoal = \"echo hello\"\nworkspace_ref = \"ws\"\nmodel_ref = \"m\"\npacket = \"V2/01\"\nprofile = \"pi\"\nevidence_policy = \"e\"\n\n[task.limits]\nmax_files = 1\nmax_diff_lines = 1\ntimeout_seconds = 30\nmax_retries = 0\ncontext_budget_tokens = 1\ndata_class = \"internal\"\n";
     std::fs::write(&task_path, toml).expect("write task");
@@ -607,19 +611,27 @@ struct CountingBackend {
     worker: std::thread::JoinHandle<()>,
 }
 
-fn serve_counting(body: &str) -> CountingBackend {
+fn serve_counting(bodies: &[&str]) -> CountingBackend {
     let listener = TcpListener::bind("127.0.0.1:0").expect("локальный порт");
     let port = listener.local_addr().expect("адрес").port();
     let requests = Arc::new(AtomicUsize::new(0));
     let stop = Arc::new(AtomicBool::new(false));
-    let (counted, stopper, body) = (Arc::clone(&requests), Arc::clone(&stop), body.to_owned());
+    let (counted, stopper, bodies) = (
+        Arc::clone(&requests),
+        Arc::clone(&stop),
+        bodies
+            .iter()
+            .map(|body| body.to_string())
+            .collect::<Vec<_>>(),
+    );
     let worker = std::thread::spawn(move || {
         listener.set_nonblocking(true).expect("неблокирующий");
         while !stopper.load(Ordering::SeqCst) {
             match listener.accept() {
                 Ok((mut stream, _)) => {
                     stream.set_nonblocking(false).expect("блокирующий");
-                    counted.fetch_add(1, Ordering::SeqCst);
+                    let turn = counted.fetch_add(1, Ordering::SeqCst);
+                    let body = &bodies[turn.min(bodies.len() - 1)];
                     let mut chunk = [0u8; 4096];
                     let read = stream.read(&mut chunk).expect("запрос прочитан");
                     assert!(read > 0, "пустой запрос к модели");
@@ -655,8 +667,9 @@ fn run_task_with_drives_one_model_turn_and_one_gate_request() {
     let dir = scratch_dir("channels");
     let token = dir.join("neuraldeep.token");
     std::fs::write(&token, "test-token\n").expect("токен");
+    std::fs::create_dir_all(dir.join("ws")).expect("ws fixture");
     let pi = socket_pi(&dir);
-    let backend = serve_counting(r#"{"choices":[{"message":{"content":"pong"}}]}"#);
+    let backend = serve_counting(&[r#"{"choices":[{"message":{"content":"pong"}}]}"#]);
     let task_path = dir.join("task.toml");
     let toml = "[task]\nid = \"v2-05a\"\ngoal = \"echo hello\"\nworkspace_ref = \"ws\"\nmodel_ref = \"m\"\npacket = \"V2/05a\"\nprofile = \"pi\"\nevidence_policy = \"e\"\n\n[task.limits]\nmax_files = 1\nmax_diff_lines = 1\ntimeout_seconds = 30\nmax_retries = 0\ncontext_budget_tokens = 1\ndata_class = \"internal\"\n";
     std::fs::write(&task_path, toml).expect("write fixture");
@@ -706,4 +719,206 @@ fn run_task_without_model_config_refuses_by_name() {
         stderr.contains("model setting") && stderr.contains("is not configured"),
         "stderr must name the unconfigured model setting: {stderr}"
     );
+}
+
+/// Подставной Pi, доказывающий копию workspace: сравнивает `readme.txt` из
+/// текущего каталога (это `work`) с маркером и падает, если в `work` попал
+/// `.git`. Пустой `work` не даст валидного прогона.
+fn workspace_pi(dir: &Path, marker: &str) -> PathBuf {
+    let pi = dir.join("pi-workspace");
+    let script = format!(
+        r#"#!/bin/sh
+[ "$(cat readme.txt)" = '{marker}' ] || exit 7
+[ ! -e .git ] || exit 8
+printf '{{"type":"tool_execution_start","toolCallId":"w1","toolName":"read"}}\n'
+printf '{{"type":"message_end","message":{{"role":"assistant","usage":{{"input":10}},"stopReason":"toolUse"}}}}\n'
+printf '{{"type":"message_end","message":{{"role":"assistant","usage":{{"input":10}},"stopReason":"stop"}}}}\n'
+printf '{{"type":"turn_end","message":{{"role":"assistant","usage":{{"input":10}},"stopReason":"stop"}}}}\n'
+"#
+    );
+    std::fs::write(&pi, script).expect("write workspace pi");
+    let mut mode = std::fs::metadata(&pi).expect("pi metadata").permissions();
+    mode.set_mode(0o755);
+    std::fs::set_permissions(&pi, mode).expect("pi executable");
+    pi
+}
+
+/// Абсолютный `workspace_ref` копируется в `work` до запуска агента: `readme.txt`
+/// виден, `.git` — нет. Пустой `work` стал бы успехом без копии, и этот тест его
+/// ловит: без файла `cat` в фикстуре падает.
+#[test]
+fn run_against_workspace_copy_sees_files() {
+    let dir = scratch_dir("workspace-copy");
+    let ws = dir.join("ws");
+    std::fs::create_dir_all(ws.join(".git")).expect("ws git");
+    std::fs::write(ws.join(".git/HEAD"), "ref: refs/heads/main\n").expect("git head");
+    let marker = format!("workspace-copy-{}", dir.display());
+    std::fs::write(ws.join("readme.txt"), &marker).expect("readme");
+
+    let task_path = dir.join("task.toml");
+    let toml = format!("[task]\nid = \"v2-05b-copy\"\ngoal = \"echo hello\"\nworkspace_ref = \"{}\"\nmodel_ref = \"m\"\npacket = \"V2/05b\"\nprofile = \"pi\"\nevidence_policy = \"e\"\n\n[task.limits]\nmax_files = 1\nmax_diff_lines = 1\ntimeout_seconds = 30\nmax_retries = 0\ncontext_budget_tokens = 1\ndata_class = \"internal\"\n", ws.display());
+    std::fs::write(&task_path, toml).expect("write task");
+
+    let token = dir.join("neuraldeep.token");
+    std::fs::write(&token, "test-token\n").expect("token");
+    let config = ModelConfig::with_token_path("http://127.0.0.1:9/v1", HOST_MODEL_ID, &token)
+        .expect("model config");
+    let pi = workspace_pi(&dir, &marker);
+
+    let result = run_task_with(&task_path, config, &pi, &pi_extension())
+        .expect("run over a workspace copy must be a run, not an error");
+    assert_eq!(result.verdict, "Allow", "copy run must be valid");
+
+    let _ = std::fs::remove_file(&result.store_path);
+    let _ = std::fs::remove_file(&result.ledger_path);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Отсутствующий `workspace_ref` — названный `MissingWorkspace`, а не пустой
+/// прогон: агент не должен стартовать без дерева, о котором задача говорит.
+#[test]
+fn missing_workspace_is_named_refusal() {
+    let dir = scratch_dir("missing-workspace");
+    let task_path = dir.join("task.toml");
+    let absent = dir.join("ws-absent");
+    let toml = format!("[task]\nid = \"v2-05b-missing\"\ngoal = \"echo hello\"\nworkspace_ref = \"{}\"\nmodel_ref = \"m\"\npacket = \"V2/05b\"\nprofile = \"pi\"\nevidence_policy = \"e\"\n\n[task.limits]\nmax_files = 1\nmax_diff_lines = 1\ntimeout_seconds = 30\nmax_retries = 0\ncontext_budget_tokens = 1\ndata_class = \"internal\"\n", absent.display());
+    std::fs::write(&task_path, toml).expect("write task");
+
+    let token = dir.join("neuraldeep.token");
+    std::fs::write(&token, "test-token\n").expect("token");
+    let config = ModelConfig::with_token_path("http://127.0.0.1:9/v1", HOST_MODEL_ID, &token)
+        .expect("model config");
+    let pi = fake_pi(&dir, "FAKE_PI_INVOKED");
+
+    let error = match run_task_with(&task_path, config, &pi, &pi_extension()) {
+        Ok(_) => panic!("a missing workspace must refuse, not run"),
+        Err(error) => error,
+    };
+    assert!(
+        error.contains("MissingWorkspace"),
+        "the refusal must be named: {error}"
+    );
+    assert!(
+        error.contains(&absent.display().to_string()),
+        "the refusal must name the resolved path: {error}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Настоящий Pi: `PI_BIN`, иначе `pi` из PATH. Отсутствие — провал с точным
+/// путём, а не пропуск.
+fn real_pi() -> PathBuf {
+    if let Some(value) = std::env::var_os("PI_BIN") {
+        let path = PathBuf::from(value);
+        assert!(path.is_file(), "real Pi missing: {}", path.display());
+        return path;
+    }
+    let path = std::env::var_os("PATH").expect("PATH is set");
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join("pi");
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    panic!("real Pi missing: PI_BIN is unset and no `pi` is on PATH");
+}
+
+/// Копия managed-layout Pi: launcher и ссылка на `install`. Sandbox монтирует
+/// только каталоги переданной программы, поэтому настоящий Pi должен лежать под
+/// путём, который `run_task_with` получает как `pi`, а не по хостовому пути.
+fn pi_layout(dir: &Path, real: &Path) -> PathBuf {
+    let managed = std::fs::canonicalize(real).expect("canonical real Pi");
+    let agent = managed
+        .parent()
+        .and_then(Path::parent)
+        .expect("managed agent dir");
+    let layout = dir.join("agent");
+    std::fs::create_dir_all(layout.join("bin")).expect("layout bin");
+    let launcher = layout.join("bin/pi");
+    std::fs::copy(&managed, &launcher).expect("copy launcher");
+    let mut mode = std::fs::metadata(&launcher)
+        .expect("launcher metadata")
+        .permissions();
+    mode.set_mode(0o755);
+    std::fs::set_permissions(&launcher, mode).expect("launcher executable");
+    std::os::unix::fs::symlink(agent.join("install"), layout.join("install"))
+        .expect("install link");
+    launcher
+}
+
+/// `run_task_with` подаёт transport-argv, но не провайдера и не первый ход.
+/// Обёртка задаёт их и исполняет настоящий launcher — версия проверяется у того
+/// же бинаря, а не у подставного скрипта.
+fn real_pi_launcher(launcher: &Path) -> PathBuf {
+    let wrapper = launcher.with_file_name("pi-real");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nexec {} \"$@\" --provider stellwerk --model proxy --mode json -p go\n",
+            launcher.display()
+        ),
+    )
+    .expect("write real Pi wrapper");
+    let mut mode = std::fs::metadata(&wrapper)
+        .expect("wrapper metadata")
+        .permissions();
+    mode.set_mode(0o755);
+    std::fs::set_permissions(&wrapper, mode).expect("wrapper executable");
+    wrapper
+}
+
+/// Настоящий Pi 1.0.2 через `run_task_with`: локальный backend отвечает `read`,
+/// Pi читает `readme.txt` из копии workspace и останавливается. Отсутствие Pi —
+/// провал, не пропуск.
+#[test]
+fn run_task_with_real_pi() {
+    let dir = scratch_dir("real-pi");
+    let real = real_pi();
+    let version = Command::new(&real)
+        .arg("--version")
+        .output()
+        .expect("pi --version");
+    let version = String::from_utf8_lossy(&version.stdout).trim().to_owned();
+    assert_eq!(
+        version,
+        "1.0.2",
+        "real Pi must be 1.0.2 at {}: {version:?}",
+        real.display()
+    );
+    eprintln!("real Pi {} -> {version}", real.display());
+
+    let ws = dir.join("ws");
+    std::fs::create_dir_all(ws.join(".git")).expect("ws git");
+    std::fs::write(ws.join(".git/HEAD"), "ref: refs/heads/main\n").expect("git head");
+    let marker = format!("real-pi-{}", dir.display());
+    std::fs::write(ws.join("readme.txt"), &marker).expect("readme");
+
+    let task_path = dir.join("task.toml");
+    let toml = format!("[task]\nid = \"v2-05b-real\"\ngoal = \"echo hello\"\nworkspace_ref = \"{}\"\nmodel_ref = \"m\"\npacket = \"V2/05b\"\nprofile = \"pi\"\nevidence_policy = \"e\"\n\n[task.limits]\nmax_files = 1\nmax_diff_lines = 1\ntimeout_seconds = 30\nmax_retries = 0\ncontext_budget_tokens = 1\ndata_class = \"internal\"\n", ws.display());
+    std::fs::write(&task_path, toml).expect("write task");
+
+    let token = dir.join("neuraldeep.token");
+    std::fs::write(&token, "test-token\n").expect("token");
+    let backend = serve_counting(&[
+        r#"{"choices":[{"message":{"content":null,"tool_calls":[{"id":"r1","function":{"name":"read","arguments":"{\"path\":\"readme.txt\"}"}}]}}]}"#,
+        r#"{"choices":[{"message":{"content":"done"}}]}"#,
+    ]);
+    let config = ModelConfig::with_token_path(&backend.base_url, HOST_MODEL_ID, &token)
+        .expect("model config");
+    let pi = real_pi_launcher(&pi_layout(&dir, &real));
+
+    let result =
+        run_task_with(&task_path, config, &pi, &pi_extension()).expect("real Pi run must complete");
+
+    backend.stop.store(true, Ordering::SeqCst);
+    backend.worker.join().expect("backend thread");
+
+    assert_eq!(result.verdict, "Allow", "real Pi run must be valid");
+    assert_eq!(result.model_turns, 2, "two turns: read and stop");
+    assert!(result.gate_requests >= 1, "read passed the gate");
+
+    let _ = std::fs::remove_file(&result.store_path);
+    let _ = std::fs::remove_file(&result.ledger_path);
+    let _ = std::fs::remove_dir_all(&dir);
 }
