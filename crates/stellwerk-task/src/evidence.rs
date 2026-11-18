@@ -259,6 +259,11 @@ pub enum EvidenceStatus {
     AwaitingHumanValidation,
     /// Человек явно принял результат (человеческая `Validation`, не фикстура).
     HumanValidated,
+    /// Человек опроверг доказательства: это решение о предъявленном, а не
+    /// отсутствие удостоверения и не ожидание решения. Слить `Refuted` с
+    /// `Unattested` или `AwaitingHumanValidation` значило бы сделать «никто не
+    /// удостоверял» неотличимым от «кто-то опроверг» (закон 6).
+    Refuted,
 }
 
 impl EvidenceStatus {
@@ -270,6 +275,7 @@ impl EvidenceStatus {
             EvidenceStatus::Unattested => "нет удостоверения",
             EvidenceStatus::AwaitingHumanValidation => "ждёт человека",
             EvidenceStatus::HumanValidated => "принято человеком",
+            EvidenceStatus::Refuted => "опровергнуто",
         }
     }
 }
@@ -279,7 +285,18 @@ impl EvidenceStatus {
 /// выбрал бы сторону в открытом споре (F-2026-09-29-20).
 ///
 /// Человеческая `Validation` — только та, чей `subject` не равен метке фикстуры.
+///
+/// `Refuted` проверяется ПЕРВЫМ: опровергнутая цепочка остаётся `Refuted`, даже
+/// если в ней есть удостоверение или человеческая `Validation`, — принятие
+/// опровергнутого недействительно, а пустая цепочка без удостоверения не должна
+/// выглядеть как «нечего предъявлять».
 pub fn evidence_status(chain: &[EvidenceEntry]) -> EvidenceStatus {
+    if chain
+        .iter()
+        .any(|entry| entry.kind == EvidenceKind::Refuted)
+    {
+        return EvidenceStatus::Refuted;
+    }
     if !chain
         .iter()
         .any(|entry| entry.kind == EvidenceKind::ToolAttestation)
@@ -318,6 +335,23 @@ fn first_index(chain: &[EvidenceEntry], kind: EvidenceKind) -> Option<usize> {
 /// пересчёт внутри гейта молча выбрал бы сторону в открытом споре.
 pub fn evaluate(outcome: &RunOutcome, chain: &[EvidenceEntry]) -> GateResult {
     let mut missing: Vec<String> = Vec::new();
+    // Опровержение — явное отрицательное решение, а не отсутствие аттестации:
+    // отчитаться о нём как о «нет ToolAttestation» значило бы выдать «кто-то
+    // опроверг» за «никто не ответил» (закон 6). Возврат идёт ДО проверок
+    // удостоверения/валидации/порядка/целостности, чтобы опровергнутая цепочка
+    // не стала ни pass, ни «ждёт человека» по умолчанию.
+    if let Some(entry) = chain
+        .iter()
+        .find(|entry| entry.kind == EvidenceKind::Refuted)
+    {
+        missing.push(format!("refuted: {}", entry.command));
+        return GateResult {
+            passed: false,
+            missing,
+            verified: chain.len() as u64,
+            chain_tail_hash: chain_tail(chain),
+        };
+    }
     // Каждое отсутствующее условие даёт СВОЮ строку, а не одну свёрнутую «invalid»:
     // слитые причины неотличимы от одной неразобранной, и расследование получает
     // выдуманный ответ (закон 6).
@@ -369,10 +403,8 @@ pub fn evaluate(outcome: &RunOutcome, chain: &[EvidenceEntry]) -> GateResult {
                     missing.push("Validation без субъекта: решение не названо".to_owned())
                 }
                 EvidenceKind::ModelClaim => {}
-                // Опровержение как звено цепочки: семантика — в V2-07c (todo 11).
-                // Ветка намеренно пуста, чтобы вариант компилировался; но
-                // неразобранный `Refuted` не должен молча становиться pass —
-                // проверка появится в V2-07c.
+                // Refuted сюда не доходит: опровержение возвращает отказ выше.
+                // Ветка пуста только ради исчерпывающего match.
                 EvidenceKind::Refuted => {}
             }
         }

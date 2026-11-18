@@ -536,15 +536,19 @@ pub async fn run_once(
 }
 
 /// Итог возобновления прогона: доказательства решают, запускать ли воркер вообще.
-/// `Proceeded` несёт вердикт `run_once`, а два других варианта означают, что запуск
-/// не состоялся: уже принято человеком или ещё ждёт его решения. Слить их с
-/// «продолжили» значило бы выдать тишину за разрешение (закон 6).
+/// `Proceeded` несёт вердикт `run_once`, а остальные варианты означают, что запуск
+/// не состоялся: уже принято человеком, ещё ждёт его решения или доказательства
+/// опровергнуты. Слить их с «продолжили» значило бы выдать тишину за разрешение
+/// (закон 6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResumeOutcome {
     /// Человек уже принял результат этой задачи: перезапуск не нужен.
     AlreadyHumanValidated,
     /// Удостоверение есть, решения человека нет: прогон ждёт его.
     AwaitingHumanValidation,
+    /// Доказательства этой задачи опровергнуты человеком: запуск запрещён, и это
+    /// не «продолжили». Опровержение не сливается с провалом прогона.
+    Refuted,
     /// Предъявлять нечего: прогон продолжается и отдаёт вердикт `run_once`.
     Proceeded(CallVerdict),
 }
@@ -567,6 +571,7 @@ pub async fn run_once_resuming(
         EvidenceStatus::AwaitingHumanValidation => Ok(ResumeOutcome::AwaitingHumanValidation),
         // Refuted проверяется здесь ДО `Unattested` (V2-07c): опровергнутая цепочка
         // не должна проваливаться в запуск как «предъявлять нечего».
+        EvidenceStatus::Refuted => Ok(ResumeOutcome::Refuted),
         EvidenceStatus::Unattested => {
             let verdict = run_once(attempt, worker, store).await?;
             Ok(ResumeOutcome::Proceeded(verdict))
