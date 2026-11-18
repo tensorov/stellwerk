@@ -208,6 +208,41 @@ impl Refutation {
     }
 }
 
+/// Запись `Refuted` — опровержение как звено цепочки (ADR-0024). Основание
+/// кладётся в `command`: отдельного поля «почему» у `EvidenceEntry` нет, а
+/// основание — это то, по чему опровержение можно проверить. `result_hash` —
+/// SHA-256 ССЫЛКИ на опровергающие данные, а не текста основания: сверяют данные,
+/// а основание лишь называет причину.
+///
+/// Четыре binding-поля остаются `None`: человеческое опровержение не является
+/// аттестацией запуска, поэтому у него нет ни рецепта, ни политики, ни отпечатка
+/// модели, ни коммита. `None` здесь — явное «неприменимо», а не пропуск (закон 6).
+///
+/// Конструктор authority НЕ является (решение 5): он не решает, было ли
+/// опровержение обоснованным, — это делает человек, и отвечает за это он же.
+/// Здесь фиксируется форма факта, а не право объявить результат опровергнутым.
+pub fn refutation_entry(
+    task_id: &str,
+    id: &str,
+    basis: &str,
+    refuting_data: &str,
+    ts: &str,
+) -> Result<EvidenceEntry, RefutationError> {
+    let refutation = refutation(basis, refuting_data)?;
+    Ok(EvidenceEntry {
+        id: id.to_owned(),
+        task_id: task_id.to_owned(),
+        kind: EvidenceKind::Refuted,
+        command: refutation.basis().to_owned(),
+        result_hash: sha256_hex(refutation.refuting_data().as_bytes()),
+        ts: ts.to_owned(),
+        recipe_digest: None,
+        policy_digest: None,
+        model_fingerprint: None,
+        commit_sha: None,
+    })
+}
+
 /// Состояние результата по отношению к решению человека (решение 5).
 ///
 /// Отдельный тип, а не `bool` и не пустая строка: отсутствие решения и сознательный

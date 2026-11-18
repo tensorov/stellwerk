@@ -13,10 +13,12 @@
 //! Импорт идёт через публичный API крейта, не `#[path]`: тот собрал бы вторую
 //! копию типов контракта, и расхождение обнаружилось бы в чужом коде.
 
+use sha2::{Digest, Sha256};
 use stellwerk_core::contract::{CommitSha, PolicyDigest, RecipeDigest};
 use stellwerk_task::evidence::{
-    evaluate, evidence_status, model_claim, tool_attestation, validation, EvidenceEntry,
-    EvidenceKind, EvidenceStatus, CHAIN_TAIL_PENDING, FIXTURE_VALIDATION_LABEL,
+    evaluate, evidence_status, model_claim, refutation_entry, tool_attestation, validation,
+    EvidenceEntry, EvidenceKind, EvidenceStatus, RefutationError, CHAIN_TAIL_PENDING,
+    FIXTURE_VALIDATION_LABEL,
 };
 use stellwerk_task::runner::{RunOutcome, StopReason, Verdict};
 
@@ -452,11 +454,11 @@ fn only_the_constructors_mint_entries() {
     let source = include_str!("../src/evidence.rs");
     assert_eq!(
         source.matches("kind: EvidenceKind::").count(),
-        3,
-        "структурный литерал EvidenceEntry собирается ровно в трёх конструкторах; \
-         четвёртая точка встречи — второй путь построения"
+        4,
+        "структурный литерал EvidenceEntry собирается ровно в четырёх конструкторах; \
+         пятая точка встречи — второй путь построения"
     );
-    for kind in ["ModelClaim", "ToolAttestation", "Validation"] {
+    for kind in ["ModelClaim", "ToolAttestation", "Validation", "Refuted"] {
         assert_eq!(
             source
                 .matches(&format!("kind: EvidenceKind::{kind}"))
@@ -465,6 +467,78 @@ fn only_the_constructors_mint_entries() {
             "вид {kind} выставляется ровно одним конструктором"
         );
     }
+}
+
+#[test]
+fn refutation_entry_records_the_basis_and_the_hash_of_refuting_data() {
+    let basis = "предъявленный замер снят со стенда другой ревизии";
+    let refuting_data = "перезапуск на ревизии из коммита: пропускная способность ниже на 40%";
+    let entry = refutation_entry(TASK, "e-refuted", basis, refuting_data, TS)
+        .expect("названные основание и данные принимаются");
+    let expected = format!("{:x}", Sha256::digest(refuting_data.as_bytes()));
+    assert_eq!(entry.kind, EvidenceKind::Refuted, "вид записи — Refuted");
+    assert_eq!(
+        entry.command, basis,
+        "основание кладётся в command: отдельного поля «почему» у EvidenceEntry нет"
+    );
+    assert_eq!(
+        entry.result_hash, expected,
+        "result_hash — SHA-256 опровергающих данных, а не текста основания"
+    );
+    assert_eq!(
+        entry.result_hash.len(),
+        64,
+        "хеш — SHA-256 в hex, а не пометка «опровергнуто»"
+    );
+    assert!(
+        entry.result_hash.chars().all(|c| c.is_ascii_hexdigit()),
+        "хеш — hex нижнего регистра: {:?}",
+        entry.result_hash
+    );
+    assert!(
+        entry.recipe_digest.is_none(),
+        "человеческое опровержение не привязано к рецепту: это не аттестация запуска"
+    );
+    assert!(
+        entry.policy_digest.is_none(),
+        "человеческое опровержение не привязано к политике"
+    );
+    assert!(
+        entry.model_fingerprint.is_none(),
+        "человеческое опровержение не привязано к модели"
+    );
+    assert!(
+        entry.commit_sha.is_none(),
+        "человеческое опровержение не привязано к коммиту"
+    );
+    assert_entry(&entry, "e-refuted", EvidenceKind::Refuted, basis, &expected);
+}
+
+#[test]
+fn refutation_entry_rejects_an_empty_basis() {
+    assert_eq!(
+        refutation_entry(TASK, "e-refuted", "", "данные опровержения", TS),
+        Err(RefutationError::MissingBasis),
+        "опровержение без основания неотличимо от отказа без причины (закон 6)"
+    );
+}
+
+#[test]
+fn refutation_entry_rejects_empty_refuting_data() {
+    assert_eq!(
+        refutation_entry(TASK, "e-refuted", "основание названо", "", TS),
+        Err(RefutationError::MissingRefutingData),
+        "опровержение без ссылки на данные нечем сверить, поэтому запись не принимается"
+    );
+}
+
+#[test]
+fn refutation_entry_rejects_a_whitespace_only_basis() {
+    assert_eq!(
+        refutation_entry(TASK, "e-refuted", "   \t  ", "данные опровержения", TS),
+        Err(RefutationError::MissingBasis),
+        "пробелы — отсутствие основания, а не основание (закон 6)"
+    );
 }
 
 #[test]
