@@ -159,10 +159,10 @@ pub enum RefutationError {
 /// Оба поля сохраняются: выброшенная ссылка оставила бы опровержение, которое
 /// нечем сверить с данными, и оно снова стало бы неотличимо от отказа.
 ///
-/// Это `TaskStatus`-уровень, а не новый `EvidenceKind`: `contract.rs` объявляет
-/// `TaskStatus::Refuted`, и дублировать его видом записи значило бы завести второе
-/// определение одного понятия. `status()` возвращает именно `Refuted`, а не
-/// `Failed`: провал прогона и человеческое опровержение — разные факты.
+/// Это `TaskStatus`-уровень: `status()` возвращает именно `Refuted`, а не
+/// `Failed` — провал прогона и человеческое опровержение разные факты. Вид записи
+/// `EvidenceKind::Refuted` (ADR-0024) — другой слой: опровержение как звено
+/// цепочки, а не как статус задачи; совпадение имён намеренно.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Refutation {
     basis: String,
@@ -334,6 +334,11 @@ pub fn evaluate(outcome: &RunOutcome, chain: &[EvidenceEntry]) -> GateResult {
                     missing.push("Validation без субъекта: решение не названо".to_owned())
                 }
                 EvidenceKind::ModelClaim => {}
+                // Опровержение как звено цепочки: семантика — в V2-07c (todo 11).
+                // Ветка намеренно пуста, чтобы вариант компилировался; но
+                // неразобранный `Refuted` не должен молча становиться pass —
+                // проверка появится в V2-07c.
+                EvidenceKind::Refuted => {}
             }
         }
         // Привязка — часть доказательства, а не украшение: удостоверение без
@@ -443,6 +448,7 @@ fn kind_name(kind: EvidenceKind) -> &'static str {
         EvidenceKind::ModelClaim => "ModelClaim",
         EvidenceKind::ToolAttestation => "ToolAttestation",
         EvidenceKind::Validation => "Validation",
+        EvidenceKind::Refuted => "Refuted",
     }
 }
 

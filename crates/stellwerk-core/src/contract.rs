@@ -483,6 +483,12 @@ pub enum EvidenceKind {
     ToolAttestation,
     /// Результат валидации (gate, ревью, сверка).
     Validation,
+    /// Отрицательное решение о предъявленной работе — собственный вид записи.
+    /// Это не `Validation`: отрицательное решение не является результатом проверки.
+    /// Это и не проваленный прогон: сам запуск мог завершиться, а опровергнуто
+    /// именно предъявленное доказательство. Имя совпадает с `TaskStatus::Refuted`
+    /// намеренно — это разные слои (см. ADR-0024).
+    Refuted,
 }
 
 /// Digest рецепта исполнения (SHA-256 в hex). Отдельный тип, чтобы хеш рецепта
@@ -669,3 +675,27 @@ pub enum Source {
 /// Класс риска модуля. Переиспользует `RiskClass`: шкала одна на федерацию,
 /// отдельная шкала для модулей означала бы две несовместимые лестницы.
 pub type ModuleRisk = RiskClass;
+
+#[cfg(test)]
+mod tests {
+    use super::EvidenceKind;
+
+    /// `Refuted` — собственный вид записи, поэтому имя сериализуется как
+    /// `"Refuted"` и переживает обратный разбор. Слитое имя с `Validation`
+    /// сделало бы отрицательное решение неотличимым от результата проверки.
+    #[test]
+    fn refuted_kind_round_trips() -> Result<(), Box<dyn std::error::Error>> {
+        let json = serde_json::to_string(&EvidenceKind::Refuted)?;
+        assert_eq!(json, "\"Refuted\"");
+        let restored: EvidenceKind = serde_json::from_str(&json)?;
+        assert_eq!(restored, EvidenceKind::Refuted);
+        Ok(())
+    }
+
+    /// Неизвестный вид — ошибка разбора, а не ближайший известный вариант:
+    /// иначе опечатка в чужой записи молча стала бы решением (закон 6).
+    #[test]
+    fn unknown_kind_is_rejected() {
+        assert!(serde_json::from_str::<EvidenceKind>("\"Refutation\"").is_err());
+    }
+}
