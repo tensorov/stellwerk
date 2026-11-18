@@ -12,14 +12,14 @@ acceptance: cargo test -p stellwerk-gateway --test session
 # 01 — fmt и clippy в зелёное
 
 ## Цель
-Ручной no-op waker заменён на `Waker::noop()`, и пробуждённая задача действительно продолжает исполнение, потому что зелёный clippy на самодельном waker ничего не говорит о планировании.
+Ручной no-op waker заменён на настоящий: `drive` строит `Unpark(std::thread::current())`, реализующий `Wake` через `unpark`, и спит в `park` на `Pending`, поэтому пробуждённая задача действительно продолжает исполнение — зелёный clippy на самодельном waker ничего не говорит о планировании.
 
 ## Обоснование (измерено)
-- `crates/stellwerk-gateway/src/session.rs:613` — здесь стоит ручной no-op waker, который clippy отвергает и который не гарантирует возобновление задачи.
+- `crates/stellwerk-gateway/src/session.rs:608-637` — `pub fn drive`: `Unpark(thread::current())` + цикл `poll`, где `Poll::Pending` уходит в `park`, а `wake` будит поток через `unpark`.
 - `crates/stellwerk-task/tests/http_wire.rs` — тест попадает в тот же fmt/clippy прогон, поэтому механическая правка касается и его.
 
 ## Шаг 1 — падающий тест
-`crates/stellwerk-gateway/tests/session.rs`, тест `woken_task_continues_after_waker_replacement`: утверждает, что задача после пробуждения исполняется до конца; до замены waker ручной no-op не планирует задачу, поэтому продолжение не наблюдается и тест падает по таймауту ожидания результата.
+`crates/stellwerk-gateway/tests/session.rs`, тест `woken_task_continues_after_waker_replacement`: `WakesOnce` на первом опросе передаёт единственный waker второму потоку и возвращает `Pending`, а `Ready` отдаёт только после `wake`; `drive` опрашивает future на отдельном потоке, `recv_timeout(5s)` превращает потерянное пробуждение в отказ, а `polls <= 100` ловит busy-poll. До замены waker ручной no-op не планирует задачу, поэтому продолжение не наблюдается и тест падает по таймауту ожидания результата.
 
 ## Приёмка
 cargo test -p stellwerk-gateway --test session
