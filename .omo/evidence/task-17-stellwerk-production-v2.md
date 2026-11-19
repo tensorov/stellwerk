@@ -171,3 +171,14 @@ bare command shown above.
 - `.omo/plans/` and `.sisyphus/plans/` were not touched.
 - The accepted dirty baseline (`.omo/omo.jsonc`, `opencode.json`, `tests/test_omo_config.py`,
   `.omo/archive/`, `.omo/drafts/`, `.playwright-mcp/`, `mutants.out*`) was not staged.
+
+## PolyForge chain (V2/packet-13)
+
+- Product commit: `bdd546a3e84c8ea389f3ba06d4cfed7ae4145e2f` (`test(cli): re-measure audit and real-Pi budgets`), 1 file, 173 insertions (evidence only; no code change).
+- `diff_hash`: `d6d72e0e1adca62bb0313bed8ae0cc400951e6b63dba8f442190b02b751864d1`
+- `evidence_append(ModelClaim)`: entry 408, hash `dd46d47da22ed8b83f5f335f26b88e3acdf91e53c826d2db6b2fa773967408cb`, state `ModelClaimed`.
+- `evidence_verify(cargo test -p stellwerk-cli --test audit_live)`: entry 409, exit 0, state `Verified`, stdout_hash `dcca9a46b737b752584c520a5cfadcc09f2e978114e68869c00d338cec758e88`, hash `e7967dd7420e56a0a6409aa8d0ba5bf61070c10ac30ceac85fcb1b4fcb7082ec`.
+- `gate_evaluate(required=[Verified])`: `passed=true`, verified=1, claimed=1, validated=0, missing=[].
+- `chain_tail`: `e7967dd7420e56a0a6409aa8d0ba5bf61070c10ac30ceac85fcb1b4fcb7082ec`
+
+Orchestrator independent verification: `git diff --stat 756fab9..HEAD -- '*.rs' '*.toml' 'Cargo.lock'` empty (zero code change); `cargo test -p stellwerk-cli --test audit_live -- --test-threads=1` -> 7 passed; `cargo test -p stellwerk-cli --test audit_live` -> 7 passed; `PI_BIN=/home/izyabretatel/.pi/agent/bin/pi cargo test -p stellwerk-cli --test build_runner` -> 17 passed; the literal `.local/bin/pi` invocation reproduced the bwrap failure with `Can't find source path /home/izyabretatel/.local/install`, confirming FINDING `F-2026-11-19-01`; `cargo fmt --all -- --check` exit 0; `cargo clippy -p stellwerk-cli --all-targets -- -D warnings` exit 0; commit contains exactly 1 file.
