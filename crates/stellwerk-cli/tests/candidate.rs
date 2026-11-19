@@ -149,6 +149,28 @@ fn deleted_base_file_is_refused() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Смена цели симлинка — это правка, а не «ничего не произошло»: снимок хранит digest
+/// текста ссылки, поэтому `link -> target-b.txt` отличается от `link -> target-a.txt`.
+#[test]
+fn symlink_target_change_is_dirty() {
+    let root = scratch("symlink");
+    let base = root.join("base");
+    let work = root.join("work");
+    write(&base, "target-a.txt", b"a\n");
+    write(&base, "target-b.txt", b"b\n");
+    std::os::unix::fs::symlink("target-a.txt", base.join("link")).expect("ссылка базы");
+    copy_tree(&base, &work);
+    std::fs::remove_file(work.join("link")).expect("удаление копии ссылки");
+    std::os::unix::fs::symlink("target-b.txt", work.join("link")).expect("ссылка work");
+
+    let snapshot = snapshot_workspace(&base).expect("снимок базы");
+    let verdict = accept_candidate(&work, &snapshot, &[]).expect("проверка кандидата");
+
+    assert_eq!(dirty_files(verdict), vec!["link".to_string()]);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// `.git` и служебный файл харнесса — не правки агента и не должны давать грязь.
 #[test]
 fn git_and_harness_files_are_not_false_dirt() {

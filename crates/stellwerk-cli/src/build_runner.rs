@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::future::Future;
 use std::io;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -130,8 +131,9 @@ pub struct CandidateFile {
     pub digest: String,
 }
 
-/// Все обычные файлы под `root` с digest байтов, кроме `.git`. Симлинки не
-/// раскрываются: чтение «за» них вынесло бы в кандидат содержимое вне workspace.
+/// Все файлы под `root` с digest, кроме `.git`: обычный файл — digest байтов, симлинк —
+/// digest текста его цели. Симлинк не раскрывается: чтение «за» него вынесло бы в
+/// кандидат содержимое вне workspace.
 fn workspace_files(root: &Path) -> io::Result<BTreeMap<PathBuf, ContentDigest>> {
     let mut files = BTreeMap::new();
     collect_files(root, Path::new(""), &mut files)?;
@@ -155,6 +157,11 @@ fn collect_files(
             collect_files(root, &path, files)?;
         } else if kind.is_file() {
             files.insert(path, ContentDigest::of(&std::fs::read(entry.path())?));
+        } else if kind.is_symlink() {
+            // Digest текста цели, а не содержимого за ссылкой: смена цели или удаление
+            // ссылки обязаны стать `Dirty`, а не совпасть с отсутствием.
+            let link_target = std::fs::read_link(entry.path())?;
+            files.insert(path, ContentDigest::of(link_target.as_os_str().as_bytes()));
         }
     }
     Ok(())
@@ -181,13 +188,14 @@ fn changed_files(work: &Path, before: &WorkspaceSnapshot) -> io::Result<Vec<Cand
     Ok(changed)
 }
 
-/// База сравнения кандидата: обычные файлы workspace с digest байтов. Пустой базы по
-/// умолчанию нет: снимок строится только обходом дерева.
+/// База сравнения кандидата: файлы workspace с digest байтов, а для симлинка — с digest
+/// текста его цели. Пустой базы по умолчанию нет: снимок строится только обходом дерева.
 #[derive(Debug, Clone)]
 pub struct WorkspaceSnapshot(BTreeMap<PathBuf, ContentDigest>);
 
 /// Снимает базу с того же места, откуда берётся рабочая копия: `.git` пропускается,
-/// симлинки не раскрываются.
+/// симлинк представлен digest своей цели, а не содержимым за ней. Поэтому смена цели или
+/// удаление ссылки различимы как `Dirty`, а не как «ничего не произошло».
 pub fn snapshot_workspace(root: &Path) -> io::Result<WorkspaceSnapshot> {
     workspace_files(root).map(WorkspaceSnapshot)
 }
