@@ -209,7 +209,7 @@ Your next move: start work in a separate session, or ask for a high-accuracy rev
   QA scenarios (name the exact tool + invocation): happy - the refuted-chain test; failure - a refutation without basis/refuting data is not constructible; a `Validation` with `FIXTURE_VALIDATION_LABEL` still does not count as human. Evidence `.omo/evidence/task-11-stellwerk-production-v2.md`.
   Commit: Y | `feat(task): carry refutation into the evidence chain`
 
-- [ ] 12. V2-08 F-09: sync the .omo/plans mirror with canon
+- [x] 12. V2-08 F-09: sync the .omo/plans mirror with canon
   Files (1): `.omo/plans/**`.
   What to do / Must NOT do: re-run `python3 scripts/plan-lint.py`, take the current C8 list as the source of truth, and copy each listed canonical packet from `.sisyphus/plans/` to `.omo/plans/` byte-for-byte; explicitly copy the V2 tree with `cp -a .sisyphus/plans/V2/. .omo/plans/V2/` (C8 cannot see canon-only packets, so it cannot prove the V2 copy), then verify with `diff -rq .sisyphus/plans/V2 .omo/plans/V2`; do the same `diff -rq` for V1 and N2; archive removed versions under `.omo/plans/_archive/`; do not edit canonical packets. For every mirror packet with no canonical counterpart, move it to `.omo/plans/_archive/`; do not delete canonical packets. `.omo/plans` is untracked, so `git diff --stat .omo/plans` is empty; use `git add -A .omo/plans` (bookkeeping, not a product commit) and verify with `git diff --cached --name-only .omo/plans` before the commit and `git ls-files .omo/plans` after. Do not hard-code the prior count: P0 or later edits may change the drift set. Mirror sync is `.omo/plans/**` bookkeeping, not a product packet; the C2 diff budget does not apply. Must NOT edit canon to match the mirror.
   Parallelization: Wave 2 | Blocked by: 1 | Blocks: F1-F4
@@ -218,7 +218,7 @@ Your next move: start work in a separate session, or ask for a high-accuracy rev
   QA scenarios (name the exact tool + invocation): happy - `python3 scripts/plan-lint.py` and `git status --porcelain .omo/plans`; failure - intentionally leave one drift and assert C8 reports it, then fix it. Evidence `.omo/evidence/task-12-stellwerk-production-v2.md`.
   Commit: Y | `chore(plans): sync mirror with canon`
 
-- [ ] 13. V2-09 F-10: mark ADR-0015 superseded by ADR-0021
+- [x] 13. V2-09 F-10: mark ADR-0015 superseded by ADR-0021
   Files (1): `docs/adr/0015-execution-spec-not-task-spec.md`.
   What to do / Must NOT do: change only the status line in `docs/adr/0015-execution-spec-not-task-spec.md` from `Статус: принят` to `Статус: отменён (superseded by ADR-0021)`; add the superseding link if the ADR index has one. Must NOT rewrite the ADR body or history. Must NOT change ADR-0021.
   Parallelization: Wave 2 | Blocked by: 1 | Blocks: F1-F4
@@ -227,7 +227,7 @@ Your next move: start work in a separate session, or ask for a high-accuracy rev
   QA scenarios (name the exact tool + invocation): happy - the `rg` check; failure - `rg "Статус: принят" docs/adr/0015...` must not match. Evidence `.omo/evidence/task-13-stellwerk-production-v2.md`.
   Commit: Y | `docs(adr): mark 0015 superseded by 0021`
 
-- [ ] 14. V2-10 F-11: align V1/packet-01 with the shipped Unpark+park
+- [x] 14. V2-10 F-11: align V1/packet-01 with the shipped Unpark+park
   Files (1): `.sisyphus/plans/V1/packet-01.md`.
   What to do / Must NOT do: replace the `Waker::noop()` prescription in `.sisyphus/plans/V1/packet-01.md` with `Unpark(thread::current()) + park()`; update the goal/step text so it describes the shipped implementation and the existing test. Keep `status: GREEN`. Must NOT change `crates/stellwerk-gateway/src/session.rs` or weaken `tests/session.rs`.
   Parallelization: Wave 2 | Blocked by: 1 | Blocks: F1-F4
@@ -236,7 +236,7 @@ Your next move: start work in a separate session, or ask for a high-accuracy rev
   QA scenarios (name the exact tool + invocation): happy - the `rg` checks and `cargo test -p stellwerk-gateway --test session`; failure - the old `Waker::noop` text must fail the `rg` check. Evidence `.omo/evidence/task-14-stellwerk-production-v2.md`.
   Commit: Y | `docs(plans): align packet-01 with Unpark+park`
 
-- [ ] 15. V2-11 F-01: lock pre-P03 ledger compatibility
+- [x] 15. V2-11 F-01: lock pre-P03 ledger compatibility
   Files (1): `crates/stellwerk-task/tests/ledger_sqlite.rs`.
   What to do / Must NOT do: add a test in `crates/stellwerk-task/tests/ledger_sqlite.rs` that inserts a JSON row with explicit `null` for `recipe_digest`/`policy_digest`/`model_fingerprint`/`commit_sha` into `evidence_ledger`, reads it back through `SqliteEvidenceLedger::entries`, and asserts all four are `None`; assert the chain tail is computed. Add a second test that inserts a JSON row omitting all four binding fields, reads it through `SqliteEvidenceLedger::entries`, and asserts all four are `None` and the chain tail is computed. `deny_unknown_fields` rejects unknown keys, not missing `Option<T>` fields; serde's `missing_field` returns `None` for `Option<T>`. Must NOT change production code, add `#[serde(default)]`, rewrite old rows, or add a migration.
   Parallelization: Wave 3 | Blocked by: 1 | Blocks: F1-F4
@@ -245,7 +245,7 @@ Your next move: start work in a separate session, or ask for a high-accuracy rev
   QA scenarios (name the exact tool + invocation): happy - both the explicit-null and omitted-field tests; failure - corrupt a non-optional field such as `kind` and assert `serde_json::from_str::<EvidenceEntry>` rejects it. Evidence `.omo/evidence/task-15-stellwerk-production-v2.md`.
   Commit: Y | `test(task): lock pre-P03 ledger compatibility`
 
-- [ ] 16. V2-12 F-06: commit H1/09 and mark it GREEN
+- [x] 16. V2-12 F-06: commit H1/09 and mark it GREEN
   Files (1): `.sisyphus/plans/H1/packet-09.md`.
   What to do / Must NOT do: stage `.sisyphus/plans/H1/packet-09.md`; set `status: GREEN` and add the evidence link to `5527e5d` and `cargo test -p xtask --test packet_replay_selftest`. The code fix is already in `5527e5d`; do not re-apply it. Must NOT claim GREEN without the test output. Must NOT change `scripts/packet_replay.py` again.
   Parallelization: Wave 3 | Blocked by: 1 | Blocks: F1-F4
@@ -254,7 +254,7 @@ Your next move: start work in a separate session, or ask for a high-accuracy rev
   QA scenarios (name the exact tool + invocation): happy - the test and the `rg`; failure - the old skip would make `m1_and_m3_packets_are_not_filtered` fail. Evidence `.omo/evidence/task-16-stellwerk-production-v2.md`.
   Commit: Y | `chore(plans): record H1/09 as green`
 
-- [ ] 17. V2-13 F-12/F-13: re-measure audit_live and the real-Pi budget
+- [x] 17. V2-13 F-12/F-13: re-measure audit_live and the real-Pi budget
   Files (1): `.omo/evidence/task-17-stellwerk-production-v2.md`.
   What to do / Must NOT do: run `cargo test -p stellwerk-cli --test audit_live -- --test-threads=1` three times; run `cargo test -p stellwerk-cli --test audit_live` three times; run `PI_BIN=<pi-1.0.2> cargo test -p stellwerk-cli --test build_runner` once. Record wall-clock and pass/fail in `.omo/evidence/task-17-stellwerk-production-v2.md`. If a failure reproduces, create a FINDING and a separate budget packet; do not change `BUILD_WINDOW`/`BUILD_BUDGET` or `TEST_BUDGET_MS` speculatively. If Pi 1.0.2 is absent, return BLOCKED with the path. Must NOT use `#[ignore]` or skip.
   Parallelization: Wave 3 | Blocked by: 1, 7 | Blocks: F1-F4
@@ -263,7 +263,7 @@ Your next move: start work in a separate session, or ask for a high-accuracy rev
   QA scenarios (name the exact tool + invocation): happy - the repeated commands; failure - a reproduced timeout is recorded and a FINDING is opened. Evidence `.omo/evidence/task-17-stellwerk-production-v2.md`.
   Commit: Y | `test(cli): re-measure audit and real-Pi budgets`
 
-- [ ] 18. V2-14 F-14: make deletion/symlink candidates Dirty and lock them
+- [x] 18. V2-14 F-14: make deletion/symlink candidates Dirty and lock them
   Files (2): `crates/stellwerk-cli/src/build_runner.rs`, `crates/stellwerk-cli/tests/candidate.rs`.
   What to do / Must NOT do: make symlink entries visible to the candidate check without following them. In `workspace_files`/`collect_files` (`crates/stellwerk-cli/src/build_runner.rs:128-160`), add a symlink branch that inserts the relative path into the map with `ContentDigest::of(link_target.as_os_str().as_bytes())` from `std::fs::read_link(entry.path())?` (import `std::os::unix::ffi::OsStrExt`), and never read the target file contents; update the `workspace_files`/`WorkspaceSnapshot`/`snapshot_workspace` comments to say a symlink is represented by the digest of its link target path, so a change to that path or removal of the link becomes `Dirty`, not `Removed`. Leave the existing `deleted_base_file_is_refused` test as-is: it already asserts the exact deleted path (`crates/stellwerk-cli/tests/candidate.rs:136-151`). Add one `symlink_target_change_is_dirty` test that first writes `base/target-a.txt` and `base/target-b.txt` (so `copy_tree` can follow the original link), creates `base/link -> target-a.txt` with `std::os::unix::fs::symlink`, copies the tree, removes the copied `work/link`, recreates it as `link -> target-b.txt`, and asserts `CandidateVerdict::Dirty` contains `link`; do not duplicate the deletion test. Must NOT add a `Removed` variant. Must NOT treat deletion or a symlink target change as `Clean`. Must NOT follow a symlink while snapshotting or accepting.
   Parallelization: Wave 3 | Blocked by: 1 | Blocks: F1-F4
@@ -276,10 +276,12 @@ Your next move: start work in a separate session, or ask for a high-accuracy rev
 
 > Runs in parallel after ALL todos. ALL must APPROVE. Surface results and wait for the user's explicit okay before declaring complete.
 
-- [ ] F1. Plan compliance audit: every todo's acceptance command is present in the evidence file; `python3 scripts/plan-lint.py` exits 0 and reports `ЗЕРКАЛО ПАКЕТОВ: совпадает с каноном`; `git status --porcelain .sisyphus/plans/V2 .omo/plans` contains only the expected V2/mirror files. The pre-existing `.omo/omo.jsonc`, `tests/test_omo_config.py`, `.playwright-mcp/`, and `mutants.out*` are the accepted baseline; do not require a globally clean tree. Evidence `.omo/evidence/final-f1-stellwerk-production-v2.md`.
-- [ ] F2. Code quality review: `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `rg -n "#\[allow|#\[ignore\]" crates/` matches only the pre-existing `crates/stellwerk-registry/src/cmd_update.rs:254` `#[allow(clippy::too_many_arguments)]`; record it as FINDING `F-2026-11-10-01` and do not remove it in V2. Evidence `.omo/evidence/final-f2-stellwerk-production-v2.md`.
-- [ ] F3. Real manual QA: `just check`; `cargo test -p stellwerk-cli --test run` with real Pi 1.0.2 via the non-removing helper; `cargo test -p stellwerk-cli --test plan`; `cargo test -p stellwerk-task --test evidence --test human_validation --test suspension --test lifecycle`. Evidence `.omo/evidence/final-f3-stellwerk-production-v2.md`.
-- [ ] F4. Scope fidelity: diff against the V1 base; confirm no new dependency, no `contract.rs` edit outside V2-07a, no `modules.lock`/workflow/root `Cargo.toml` edit, no `CandidateFile::Removed`, and no budget change without a reproduced failure. Evidence `.omo/evidence/final-f4-stellwerk-production-v2.md`.
+Статус 2026-11-19: F1–F4 APPROVE, evidence закоммичены в `82007f3`; чекбоксы закрыты по исходному заданию (тикнуть все, включая волну) после того, как каждый ревьюер вернул APPROVE и гейты перепроверены оркестратором.
+
+- [x] F1. Plan compliance audit: every todo's acceptance command is present in the evidence file; `python3 scripts/plan-lint.py` exits 0 and reports `ЗЕРКАЛО ПАКЕТОВ: совпадает с каноном`; `git status --porcelain .sisyphus/plans/V2 .omo/plans` contains only the expected V2/mirror files. The pre-existing `.omo/omo.jsonc`, `tests/test_omo_config.py`, `.playwright-mcp/`, and `mutants.out*` are the accepted baseline; do not require a globally clean tree. Evidence `.omo/evidence/final-f1-stellwerk-production-v2.md`.
+- [x] F2. Code quality review: `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `rg -n "#\[allow|#\[ignore\]" crates/` matches only the pre-existing `crates/stellwerk-registry/src/cmd_update.rs:254` `#[allow(clippy::too_many_arguments)]`; record it as FINDING `F-2026-11-10-01` and do not remove it in V2. Evidence `.omo/evidence/final-f2-stellwerk-production-v2.md`.
+- [x] F3. Real manual QA: `just check`; `cargo test -p stellwerk-cli --test run` with real Pi 1.0.2 via the non-removing helper; `cargo test -p stellwerk-cli --test plan`; `cargo test -p stellwerk-task --test evidence --test human_validation --test suspension --test lifecycle`. Evidence `.omo/evidence/final-f3-stellwerk-production-v2.md`.
+- [x] F4. Scope fidelity: diff against the V1 base; confirm no new dependency, no `contract.rs` edit outside V2-07a, no `modules.lock`/workflow/root `Cargo.toml` edit, no `CandidateFile::Removed`, and no budget change without a reproduced failure. Evidence `.omo/evidence/final-f4-stellwerk-production-v2.md`.
 
 ## Commit strategy
 
