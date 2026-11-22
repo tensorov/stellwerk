@@ -4,20 +4,20 @@ Semantic check of `.omo/omo.jsonc` and `opencode.json` against the
 repository's model-routing contract:
 
 * 183 `[opencode].agents` + 8 `categories`, each with the ordered chain
-  space-bunny-free -> mimo-v2.6-flash-free -> big-pickle;
-* `momus` and `metis` are reviewers: primary mimo-v2.6-flash-free with
-  space-bunny-free -> big-pickle fallback;
+  deepseek-v4.1-flash-free -> space-bunny-free -> big-pickle;
+* `momus` and `metis` are reviewers: primary deepseek-v4.1-flash-free with
+  space-bunny-free -> big-pickle fallback (same chain as every other agent);
 * big-pickle is never a primary;
 * every primary model has a documented context floor >= 200_000
-  (observed floors: space-bunny 1_048_576, mimo 200_000,
+  (observed floors: space-bunny 1_048_576, deepseek 200_000,
   nemotron 1_000_000);
 * `opencode.json` pins the OMO plugin to `oh-my-openagent@4.19.4`
   (no floating `@latest`);
 * public-only: every referenced model is in the observed public catalog
   and big-pickle occurs only in `fallback_models`, never as `model`.
 
-RED against the current config: the plugin is unpinned and momus/metis
-are not routed to mimo.
+Every agent and category is routed to deepseek-v4.1-flash-free as its
+primary model; space-bunny-free is the first fallback.
 """
 
 from __future__ import annotations
@@ -34,9 +34,9 @@ OPENCODE_PATH = REPO_ROOT / "opencode.json"
 EXPECTED_AGENT_COUNT = 183
 EXPECTED_CATEGORY_COUNT = 8
 
-GENERAL_PRIMARY = "opencode/space-bunny-free"
-GENERAL_FALLBACKS = ["opencode/mimo-v2.6-flash-free", "opencode/big-pickle"]
-REVIEWER_PRIMARY = "opencode/mimo-v2.6-flash-free"
+GENERAL_PRIMARY = "opencode/deepseek-v4.1-flash-free"
+GENERAL_FALLBACKS = ["opencode/space-bunny-free", "opencode/big-pickle"]
+REVIEWER_PRIMARY = "opencode/deepseek-v4.1-flash-free"
 REVIEWER_FALLBACKS = ["opencode/space-bunny-free", "opencode/big-pickle"]
 REVIEWER_AGENTS = frozenset({"momus", "metis"})
 
@@ -49,10 +49,10 @@ PLUGIN_FLOATING = "oh-my-openagent@latest"
 # a primary, so its floor is never consulted.
 MODEL_FLOORS = {
     "opencode/space-bunny-free": 1_048_576,
-    "opencode/mimo-v2.6-flash-free": 200_000,
+    "opencode/deepseek-v4.1-flash-free": 200_000,
     "opencode/nemotron-3-ultra-free": 1_000_000,
 }
-MIN_PRIMARY_FLOOR = 200_000  # mimo's floor: no primary below this.
+MIN_PRIMARY_FLOOR = 200_000  # deepseek's floor: no primary below this.
 PUBLIC_CATALOG = frozenset(MODEL_FLOORS) | {"opencode/big-pickle"}
 
 
@@ -164,7 +164,7 @@ def test_general_model_chain() -> None:
         )
 
 
-def test_reviewer_agents_route_to_mimo() -> None:
+def test_reviewer_agents_route_to_deepseek() -> None:
     cfg = load_omo_config()
     agents = cfg["[opencode]"]["agents"]
     for name in sorted(REVIEWER_AGENTS):
