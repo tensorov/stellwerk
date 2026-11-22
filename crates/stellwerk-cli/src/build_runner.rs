@@ -624,6 +624,16 @@ struct OutputRecording<'a, W: Worker + Sync> {
     output: Mutex<String>,
 }
 
+/// Отравление мьютекса — записанный отказ, а не паника: упавший поток не должен
+/// ронять прогон без следа. Текст ошибки стабилен и называет причину.
+fn record_output(output: &Mutex<String>, text: &str) -> Result<(), WorkerError> {
+    let mut guard = output
+        .lock()
+        .map_err(|_| WorkerError("output mutex poisoned".to_owned()))?;
+    *guard = text.to_owned();
+    Ok(())
+}
+
 impl<W: Worker + Sync> Worker for OutputRecording<'_, W> {
     fn exec(
         &self,
@@ -636,7 +646,7 @@ impl<W: Worker + Sync> Worker for OutputRecording<'_, W> {
         let call = call.clone();
         Box::pin(async move {
             let outcome = inner.exec(&workspace, &call).await?;
-            *output.lock().expect("output mutex poisoned") = outcome.output.clone();
+            record_output(output, &outcome.output)?;
             Ok(outcome)
         })
     }
@@ -936,4 +946,31 @@ pub fn run_build(run: BuildRun<'_>, backend: &dyn ModelBackend) -> Result<BuildO
             candidate,
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    #[test]
+    fn record_output_returns_worker_error_when_mutex_is_poisoned() {
+        // Given: мьютекс вывода, отравленный настоящей паникой потока
+        let output = Mutex::new(String::new());
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            if let Ok(_guard) = output.lock() {
+                panic!("poison");
+            }
+        }));
+        assert!(output.is_poisoned(), "mutex must be poisoned by the panic");
+
+        // When: сохраняем вывод в отравленный мьютекс
+        let result = record_output(&output, "agent answer");
+
+        // Then: типизированная WorkerError, а не паника
+        assert_eq!(
+            result,
+            Err(WorkerError("output mutex poisoned".to_owned()))
+        );
+    }
 }

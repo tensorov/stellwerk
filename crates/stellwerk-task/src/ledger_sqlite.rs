@@ -62,7 +62,7 @@ impl SqliteEvidenceLedger {
     /// `entries` не возвращает `Result`, поэтому отказ чтения здесь ещё можно
     /// выразить, а в трейте — уже нет.
     fn read(&self, task_id: &str) -> Result<Vec<EvidenceEntry>, LedgerError> {
-        let conn = self.conn.lock().expect("evidence ledger mutex poisoned");
+        let conn = self.conn.lock().map_err(|_| LedgerError::Poisoned)?;
         let mut stmt = conn
             .prepare("SELECT data FROM evidence_ledger WHERE task_id = ?1 ORDER BY seq")
             .map_err(unavailable)?;
@@ -90,7 +90,7 @@ fn unavailable(error: impl std::fmt::Display) -> LedgerError {
 impl EvidenceLedger for SqliteEvidenceLedger {
     fn append(&mut self, entry: &EvidenceEntry) -> Result<(), LedgerError> {
         let data = serde_json::to_string(entry).map_err(unavailable)?;
-        let conn = self.conn.lock().expect("evidence ledger mutex poisoned");
+        let conn = self.conn.lock().map_err(|_| LedgerError::Poisoned)?;
         conn.execute(
             "INSERT INTO evidence_ledger (task_id, id, data) VALUES (?1, ?2, ?3)",
             rusqlite::params![&entry.task_id, &entry.id, data],
@@ -108,5 +108,46 @@ impl EvidenceLedger for SqliteEvidenceLedger {
             // отказ чтения останавливает вызывающего громко (закон 6).
             Err(error) => panic!("evidence ledger read failed: {error}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::evidence::model_claim;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    /// Отравляет мьютекс настоящей паникой потока, удерживавшего блокировку.
+    fn poisoned_ledger() -> SqliteEvidenceLedger {
+        let ledger = SqliteEvidenceLedger::open(Path::new(":memory:"))
+            .expect("open in-memory ledger for test");
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            if let Ok(_guard) = ledger.conn.lock() {
+                panic!("poison");
+            }
+        }));
+        assert!(ledger.conn.is_poisoned(), "mutex must be poisoned by the panic");
+        ledger
+    }
+
+    #[test]
+    fn read_returns_poisoned_when_mutex_is_poisoned() {
+        // Given: цепочка с отравленным мьютексом
+        let ledger = poisoned_ledger();
+        // When: читаем записи задачи
+        let result = ledger.read("t");
+        // Then: типизированная ошибка, а не паника
+        assert_eq!(result, Err(LedgerError::Poisoned));
+    }
+
+    #[test]
+    fn append_returns_poisoned_when_mutex_is_poisoned() {
+        // Given: цепочка с отравленным мьютексом и запись
+        let mut ledger = poisoned_ledger();
+        let entry = model_claim("t", "id", "hash", "ts");
+        // When: добавляем запись
+        let result = ledger.append(&entry);
+        // Then: типизированная ошибка, а не паника
+        assert_eq!(result, Err(LedgerError::Poisoned));
     }
 }
