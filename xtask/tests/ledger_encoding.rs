@@ -9,9 +9,11 @@ use std::path::{Path, PathBuf};
 
 const REPLACEMENT: char = '\u{FFFD}';
 
-/// Исторический уровень повреждения, измеренный и подтверждённый против `HEAD`:
-/// `.stellwerk/FINDINGS.md` — 4 символа на 2 строках, `.night/STATE.md` — 2 символа на 1 строке.
-const BASELINE: &[(&str, usize)] = &[(".stellwerk/FINDINGS.md", 4), (".night/STATE.md", 2)];
+/// Исторический уровень повреждения, зафиксированный в минимальных синтетических фикстурах:
+/// `FINDINGS.md` — 4 символа на 2 строках, `STATE.md` — 2 символа на 1 строке.
+/// Живой журнал `.stellwerk/FINDINGS.md` внутренний и не публикуется; фикстура замораживает
+/// исторический baseline кодировки, чтобы тест не зависел от приватных файлов.
+const BASELINE: &[(&str, usize)] = &[("xtask/tests/fixtures/ledger_encoding/FINDINGS.md", 4), ("xtask/tests/fixtures/ledger_encoding/STATE.md", 2)];
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
