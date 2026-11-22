@@ -1128,13 +1128,14 @@ def main():
     ap.add_argument('--gating', action='store_true',
                     help='код возврата определяет только C7 (сверка risk_class '
                          'с contract.rs); C1-C6 остаются информационными')
+    ap.add_argument('--root', help='корень репозитория для canon/mirror/contract.rs')
     a = ap.parse_args()
 
     if a.self_test:
         return self_test()
 
     here = os.path.dirname(os.path.abspath(__file__))   # …/stellwerk/scripts
-    root = os.path.dirname(here)                        # …/stellwerk
+    root = os.path.abspath(a.root) if a.root else os.path.dirname(here)
     targets = a.plans
     if not targets:
         base = os.path.join(root, '.sisyphus', 'plans')
@@ -1201,6 +1202,7 @@ def main():
     # канону.
     c8 = check_mirror_drift(root)
     if c8:
+        total += len(c8)
         print('ЗЕРКАЛО ПАКЕТОВ: расхождений %d — .omo/plans НЕ является источником' % len(c8))
         for code, where, msg in c8[:12]:
             print('  [%s] %s: %s' % (code, where, msg))
