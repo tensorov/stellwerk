@@ -1,5 +1,0 @@
-### packet-08 (lane m1/store-task-crud)
-  gate: VALIDITY GATE: VALID (pi_exit=0 stop=stop turns=79 steps=38 input_cum=650318)
-  (b) тест пакета: cargo test -p stellwerk-store --test task_crud
-      test result: FAILED. 4 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
-  FAIL(b): тест не зелёный: test result: FAILED. 4 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s

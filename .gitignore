@@ -49,3 +49,10 @@
 .omo/boulder.json
 .omo/notepads/
 .run/
+/.night/
+/.stellwerk/
+/.ablation-pi/
+/mutation-evidence/
+/PLACEHOLDER/
+/docs/diagnostics/
+**/mutants.out*/
