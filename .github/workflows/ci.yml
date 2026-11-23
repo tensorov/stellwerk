@@ -1,48 +1,90 @@
 name: ci
 on: { push: { branches: [main] }, pull_request: {} }
+
+# Tier-1 strict gate: mirrors `just check`. Every job below is required — a
+# failure in any job fails the workflow. The RED spec suite is a separate
+# workflow (task 19) and is intentionally absent here. Required checks are
+# configured in branch protection, not in this file (ADR-0027).
 jobs:
-  check:
+  fmt:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+        with: { fetch-depth: 0 }
+      - uses: dtolnay/rust-toolchain@1.99.0
         with: { components: "rustfmt, clippy" }
+      - run: cargo fmt --all -- --check
 
-      # ── GATE: строгие шаги, падение блокирует мерж ──────────────────────
-      - name: fmt (gate)
-        run: cargo fmt --all -- --check
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with: { components: "rustfmt, clippy" }
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # Работает и на todo!()/unimplemented!(): задумка clippy — ловить
-      # предупреждения, а не падения. Сломанный предикат это не ломает.
-      - name: clippy (gate)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+  registry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - run: cargo test -p stellwerk-registry --locked
 
-      - name: test registry (gate)
-        run: cargo test -p stellwerk-registry --locked --no-fail-fast
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - run: cargo test -p stellwerk-core --locked
 
-      # ── INFORMATIONAL: core/store содержат RED-спецификацию ────────────
-      # Падение ожидаемо: это записанная падающими тестами будущая работа
-      # (см. .sisyphus/plans/M1 и docs/PIVOT.md). continue-on-error не даёт
-      # красному CI скрывать настоящие регрессии, но и не блокирует мерж
-      # зелёного кода, пока спецификация не превращена в GREEN пакетами M1.
-      - name: test core (informational)
-        continue-on-error: true
-        run: cargo test -p stellwerk-core --locked --no-fail-fast
+  store:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - run: cargo test -p stellwerk-store --locked
 
-      - name: test store (informational)
-        continue-on-error: true
-        run: cargo test -p stellwerk-store --locked --no-fail-fast
+  risk-tables:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - run: cargo test -p xtask --test ledger_encoding
 
-      # Сводка по спецификации: видно в логе, сколько RED осталось.
-      - name: spec status (informational)
-        if: always()
-        run: |
-          for c in stellwerk-core stellwerk-store; do
-            counts=$(cargo test -p "$c" --no-fail-fast 2>&1 \
-              | grep -E "^test result:" \
-              | awk -F'[ ;.]+' '{p+=$4; f+=$6} END {print p+0, f+0}' || true)
-            set -- $counts
-            echo "$c: $1/$(( $1 + $2 )) ($2 RED, expected — architecture spec)"
-          done
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: extractions/setup-just@v2
+      - run: just scripts
 
-      - run: ./scripts/plan-lint.sh || true   # информативно
+  repo-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - run: cargo test -p stellwerk-registry --test repo_hygiene
+
+  history:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - run: bash scripts/scan-history.sh
+
+  plan-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - run: ./scripts/plan-lint.sh
