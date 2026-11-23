@@ -1,9 +1,0 @@
-# ⚠️verify: подключить tensorov/polyforge-action после пиннинга rev в modules.toml
-name: polyforge
-on: { pull_request: {} }
-jobs:
-  gate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: ./scripts/integrator/gate.sh "${{ github.head_ref }}"
