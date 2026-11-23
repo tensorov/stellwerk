@@ -56,3 +56,6 @@
 /PLACEHOLDER/
 /docs/diagnostics/
 **/mutants.out*/
+.omo/evidence/
+.omo/drafts/
+.omo/archive/
