@@ -36,6 +36,8 @@ There is no `stellwerk task` subcommand. The task runner is `stellwerk-task task
 
 See [docs/quickstart.md](docs/quickstart.md) for prerequisites, the two verification tiers, and a worked example. Build Stellwerk from a checkout; a fresh clone still needs the prerequisites and local configuration listed there.
 
+`just check` is the strict gate: it fails on any broken invariant. `just status` is the informational RED report — it prints the active milestones' test counters and does not fail the gate.
+
 ## License
 
 Licensed under either of

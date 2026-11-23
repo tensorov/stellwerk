@@ -59,10 +59,26 @@ test-status:
         echo "$c: $passed/$total ($failed RED, expected — активный milestone)"; \
     done
 
-check-status: test-status
+# Информационный RED-отчёт по активным milestone. Не входит в строгий gate
+# и не роняет его кодом возврата: test-status считает счётчики, а не вердикт.
+status: test-status
+    @echo "test-status: informational RED report — does not fail the gate"
 
-# Основная точка входа. Строгий gate + обязательная сводка по спецификации.
-check: check-gate check-risk-tables test-status
+# Обратная совместимость: прежний псевдоним теперь ведёт в informational-сводку.
+check-status: status
+
+# Строгие проверки публикации: история, наборы скриптов и публичное дерево.
+history:
+    bash scripts/scan-history.sh
+
+scripts:
+    for f in scripts/tests/*.sh; do bash "$f"; done
+
+public-tree:
+    cargo test -p stellwerk-registry --test repo_hygiene
+
+# Основная точка входа. Только строгий gate; RED-отчёт вызывается отдельно.
+check: check-gate check-risk-tables history scripts public-tree
 
 # Полный прогон всего, включая падающие наборы. Падает — для ручной отладки.
 test-all:

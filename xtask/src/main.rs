@@ -89,10 +89,12 @@ const TASKS: &[(&str, Task)] = &[
         },
     ),
     (
+        // gate → just check status: строгий гейт плюс информационный RED-отчёт.
+        // `status` не влияет на код возврата, но остаётся видимым в логе гейта.
         "gate",
         Task {
             program: "just",
-            args: &["check"],
+            args: &["check", "status"],
         },
     ),
     (
