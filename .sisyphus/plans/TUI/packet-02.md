@@ -67,7 +67,7 @@ overlap_waiver: C9 — N1 и N2 делят crates/stellwerk-cli/src/main.rs, п�
 ## Приёмка
 
 ```sh
-ssh 192.168.1.11 'cd ~/gits/stellwerk && cargo test --workspace --no-fail-fast'; echo "WS_EXIT=$?"
+ssh <dev-host> 'cd ~/gits/stellwerk && cargo test --workspace --no-fail-fast'; echo "WS_EXIT=$?"
 ```
 
 `WS_EXIT=0`. База на момент планирования — 533 passed / 0 failed; число
@@ -75,13 +75,13 @@ ssh 192.168.1.11 'cd ~/gits/stellwerk && cargo test --workspace --no-fail-fast';
 командой выше и опираться на него, а не на память.
 
 ```sh
-ssh 192.168.1.11 'cd ~/gits/stellwerk && cargo test -p stellwerk-cli --test tui_render'; echo "RENDER_EXIT=$?"
+ssh <dev-host> 'cd ~/gits/stellwerk && cargo test -p stellwerk-cli --test tui_render'; echo "RENDER_EXIT=$?"
 ```
 
 `RENDER_EXIT=0`.
 
 ```sh
-ssh 192.168.1.11 'cd ~/gits/stellwerk && grep -rn "name = \"stellwerk\"" crates/*/Cargo.toml | wc -l'
+ssh <dev-host> 'cd ~/gits/stellwerk && grep -rn "name = \"stellwerk\"" crates/*/Cargo.toml | wc -l'
 ```
 
 Ровно `1`.

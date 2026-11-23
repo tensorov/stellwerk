@@ -23,10 +23,10 @@
 1. Полная картина на хосте:
 
 ```sh
-ssh -p 228 zeitoven.ru 'cd ~/gits/stellwerk && cargo build --workspace --all-targets'; echo "BUILD_EXIT=$?"
-ssh -p 228 zeitoven.ru 'cd ~/gits/stellwerk && cargo test --workspace --no-fail-fast'; echo "WS_EXIT=$?"
-ssh -p 228 zeitoven.ru 'cd ~/gits/stellwerk && cargo fmt --all -- --check'; echo "FMT_EXIT=$?"
-ssh -p 228 zeitoven.ru 'cd ~/gits/stellwerk && cargo clippy --workspace --all-targets -- -D warnings'; echo "CLIPPY_EXIT=$?"
+ssh -p <port> <host> 'cd ~/gits/stellwerk && cargo build --workspace --all-targets'; echo "BUILD_EXIT=$?"
+ssh -p <port> <host> 'cd ~/gits/stellwerk && cargo test --workspace --no-fail-fast'; echo "WS_EXIT=$?"
+ssh -p <port> <host> 'cd ~/gits/stellwerk && cargo fmt --all -- --check'; echo "FMT_EXIT=$?"
+ssh -p <port> <host> 'cd ~/gits/stellwerk && cargo clippy --workspace --all-targets -- -D warnings'; echo "CLIPPY_EXIT=$?"
 ```
 
 Все четыре — `0`.
@@ -34,14 +34,14 @@ ssh -p 228 zeitoven.ru 'cd ~/gits/stellwerk && cargo clippy --workspace --all-ta
 2. **Реальный терминал — процедура на tmux** (взамен неисполнимого `ssh -tt`):
 
 ```sh
-ssh -p 228 zeitoven.ru "tmux kill-session -t tuiq 2>/dev/null; tmux new-session -d -s tuiq 'cd ~/gits/stellwerk && cargo run -p stellwerk-cli -- tui crates/stellwerk-cli/examples/pi-smoke.toml'"
+ssh -p <port> <host> "tmux kill-session -t tuiq 2>/dev/null; tmux new-session -d -s tuiq 'cd ~/gits/stellwerk && cargo run -p stellwerk-cli -- tui crates/stellwerk-cli/examples/pi-smoke.toml'"
 sleep 6
-ssh -p 228 zeitoven.ru "tmux capture-pane -p -t tuiq"
-ssh -p 228 zeitoven.ru "tmux send-keys -t tuiq Enter"
+ssh -p <port> <host> "tmux capture-pane -p -t tuiq"
+ssh -p <port> <host> "tmux send-keys -t tuiq Enter"
 sleep 6
-ssh -p 228 zeitoven.ru "tmux capture-pane -p -t tuiq" > /tmp/opencode/tui-after-start.txt
+ssh -p <port> <host> "tmux capture-pane -p -t tuiq" > /tmp/opencode/tui-after-start.txt
 cat /tmp/opencode/tui-after-start.txt
-ssh -p 228 zeitoven.ru "tmux kill-session -t tuiq 2>/dev/null"
+ssh -p <port> <host> "tmux kill-session -t tuiq 2>/dev/null"
 ```
 
 Снимок **до** `START` обязан показывать task-файл, агента и действие `START`,
@@ -66,7 +66,7 @@ id receipt, риск и строку «ждёт человека». Оба сн�
 **Доказательство, что всё исполнялось на хосте:**
 
 ```sh
-ssh -p 228 zeitoven.ru 'ls -d ~/gits/stellwerk/target >/dev/null && echo REMOTE_BUILD_OK || echo LOCAL_ONLY'
+ssh -p <port> <host> 'ls -d ~/gits/stellwerk/target >/dev/null && echo REMOTE_BUILD_OK || echo LOCAL_ONLY'
 ```
 
 Обязан напечатать `REMOTE_BUILD_OK`.

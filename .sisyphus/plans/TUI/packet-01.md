@@ -47,7 +47,7 @@ overlap_waiver: C9 — N1/packet-01 и TUI/01 делят crates/stellwerk-cli/Ca
 **Дискриминирующая проверка пакета** (отличает «добавлено» от «не добавлено»):
 
 ```sh
-ssh 192.168.1.11 'cd ~/gits/stellwerk && cargo tree -p stellwerk-cli | grep -c "ratatui v"; echo "RATATUI_EXIT=$?"'
+ssh <dev-host> 'cd ~/gits/stellwerk && cargo tree -p stellwerk-cli | grep -c "ratatui v"; echo "RATATUI_EXIT=$?"'
 ```
 
 `RATATUI_EXIT=0` и счётчик ≥ 1. Сборка сама по себе критерием не является —
@@ -68,19 +68,19 @@ ssh 192.168.1.11 'cd ~/gits/stellwerk && cargo tree -p stellwerk-cli | grep -c "
 ## Приёмка
 
 ```sh
-ssh 192.168.1.11 'cd ~/gits/stellwerk && cargo build --workspace --all-targets'; echo "BUILD_EXIT=$?"
+ssh <dev-host> 'cd ~/gits/stellwerk && cargo build --workspace --all-targets'; echo "BUILD_EXIT=$?"
 ```
 
 `BUILD_EXIT=0`.
 
 ```sh
-ssh 192.168.1.11 'cd ~/gits/stellwerk && cargo tree -p stellwerk-cli | grep -c "ratatui v"'; echo "RESOLVES=$?"
+ssh <dev-host> 'cd ~/gits/stellwerk && cargo tree -p stellwerk-cli | grep -c "ratatui v"'; echo "RESOLVES=$?"
 ```
 
 Обязан напечатать `1` (или больше) и `RESOLVES=0`.
 
 ```sh
-ssh 192.168.1.11 'cd ~/gits/stellwerk && grep -nE "^(ratatui|crossterm)[[:space:]]*=" Cargo.toml'; echo "MANIFEST_EXIT=$?"
+ssh <dev-host> 'cd ~/gits/stellwerk && grep -nE "^(ratatui|crossterm)[[:space:]]*=" Cargo.toml'; echo "MANIFEST_EXIT=$?"
 ```
 
 Ровно две строки. ADR обязан содержать `Пакет: TUI-01` и совпадать с

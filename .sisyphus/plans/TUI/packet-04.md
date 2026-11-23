@@ -23,10 +23,10 @@
 1. Полная картина на хосте:
 
 ```sh
-ssh 192.168.1.11 'cd ~/gits/stellwerk && cargo build --workspace --all-targets'; echo "BUILD_EXIT=$?"
-ssh 192.168.1.11 'cd ~/gits/stellwerk && cargo test --workspace --no-fail-fast'; echo "WS_EXIT=$?"
-ssh 192.168.1.11 'cd ~/gits/stellwerk && cargo fmt --all -- --check'; echo "FMT_EXIT=$?"
-ssh 192.168.1.11 'cd ~/gits/stellwerk && cargo clippy --workspace --all-targets -- -D warnings'; echo "CLIPPY_EXIT=$?"
+ssh <dev-host> 'cd ~/gits/stellwerk && cargo build --workspace --all-targets'; echo "BUILD_EXIT=$?"
+ssh <dev-host> 'cd ~/gits/stellwerk && cargo test --workspace --no-fail-fast'; echo "WS_EXIT=$?"
+ssh <dev-host> 'cd ~/gits/stellwerk && cargo fmt --all -- --check'; echo "FMT_EXIT=$?"
+ssh <dev-host> 'cd ~/gits/stellwerk && cargo clippy --workspace --all-targets -- -D warnings'; echo "CLIPPY_EXIT=$?"
 ```
 
 Все четыре — `0`.
@@ -34,14 +34,14 @@ ssh 192.168.1.11 'cd ~/gits/stellwerk && cargo clippy --workspace --all-targets 
 2. **Реальный терминал — процедура на tmux** (взамен неисполнимого `ssh -tt`):
 
 ```sh
-ssh 192.168.1.11 "tmux kill-session -t tuiq 2>/dev/null; tmux new-session -d -s tuiq 'cd ~/gits/stellwerk && cargo run -p stellwerk-cli -- tui crates/stellwerk-cli/examples/pi-smoke.toml'"
+ssh <dev-host> "tmux kill-session -t tuiq 2>/dev/null; tmux new-session -d -s tuiq 'cd ~/gits/stellwerk && cargo run -p stellwerk-cli -- tui crates/stellwerk-cli/examples/pi-smoke.toml'"
 sleep 6
-ssh 192.168.1.11 "tmux capture-pane -p -t tuiq"
-ssh 192.168.1.11 "tmux send-keys -t tuiq Enter"
+ssh <dev-host> "tmux capture-pane -p -t tuiq"
+ssh <dev-host> "tmux send-keys -t tuiq Enter"
 sleep 6
-ssh 192.168.1.11 "tmux capture-pane -p -t tuiq" > /tmp/opencode/tui-after-start.txt
+ssh <dev-host> "tmux capture-pane -p -t tuiq" > /tmp/opencode/tui-after-start.txt
 cat /tmp/opencode/tui-after-start.txt
-ssh 192.168.1.11 "tmux kill-session -t tuiq 2>/dev/null"
+ssh <dev-host> "tmux kill-session -t tuiq 2>/dev/null"
 ```
 
 Снимок **до** `START` обязан показывать task-файл, агента и действие `START`,
@@ -66,7 +66,7 @@ id receipt, риск и строку «ждёт человека». Оба сн�
 **Доказательство, что всё исполнялось на хосте:**
 
 ```sh
-ssh 192.168.1.11 'ls -d ~/gits/stellwerk/target >/dev/null && echo REMOTE_BUILD_OK || echo LOCAL_ONLY'
+ssh <dev-host> 'ls -d ~/gits/stellwerk/target >/dev/null && echo REMOTE_BUILD_OK || echo LOCAL_ONLY'
 ```
 
 Обязан напечатать `REMOTE_BUILD_OK`.

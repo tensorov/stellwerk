@@ -46,7 +46,7 @@
 **Дискриминирующая проверка пакета** (отличает «добавлено» от «не добавлено»):
 
 ```sh
-ssh -p 228 zeitoven.ru 'cd ~/gits/stellwerk && cargo tree -p stellwerk-cli | grep -c "ratatui v"; echo "RATATUI_EXIT=$?"'
+ssh -p <port> <host> 'cd ~/gits/stellwerk && cargo tree -p stellwerk-cli | grep -c "ratatui v"; echo "RATATUI_EXIT=$?"'
 ```
 
 `RATATUI_EXIT=0` и счётчик ≥ 1. Сборка сама по себе критерием не является —
@@ -67,19 +67,19 @@ ssh -p 228 zeitoven.ru 'cd ~/gits/stellwerk && cargo tree -p stellwerk-cli | gre
 ## Приёмка
 
 ```sh
-ssh -p 228 zeitoven.ru 'cd ~/gits/stellwerk && cargo build --workspace --all-targets'; echo "BUILD_EXIT=$?"
+ssh -p <port> <host> 'cd ~/gits/stellwerk && cargo build --workspace --all-targets'; echo "BUILD_EXIT=$?"
 ```
 
 `BUILD_EXIT=0`.
 
 ```sh
-ssh -p 228 zeitoven.ru 'cd ~/gits/stellwerk && cargo tree -p stellwerk-cli | grep -c "ratatui v"'; echo "RESOLVES=$?"
+ssh -p <port> <host> 'cd ~/gits/stellwerk && cargo tree -p stellwerk-cli | grep -c "ratatui v"'; echo "RESOLVES=$?"
 ```
 
 Обязан напечатать `1` (или больше) и `RESOLVES=0`.
 
 ```sh
-ssh -p 228 zeitoven.ru 'cd ~/gits/stellwerk && grep -nE "^(ratatui|crossterm)[[:space:]]*=" Cargo.toml'; echo "MANIFEST_EXIT=$?"
+ssh -p <port> <host> 'cd ~/gits/stellwerk && grep -nE "^(ratatui|crossterm)[[:space:]]*=" Cargo.toml'; echo "MANIFEST_EXIT=$?"
 ```
 
 Ровно две строки. ADR обязан содержать `Пакет: TUI-01` и совпадать с

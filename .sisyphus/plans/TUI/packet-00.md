@@ -2,6 +2,7 @@
 
 **label:** — · **mutation_gate:** no (инфраструктура, кода продукта нет)
 **depends_on:** [] · **ADR:** не требуется
+эндпоинты заменены плейсхолдерами при публикации; старый домен больше не принадлежит автору
 
 ## Цель
 
@@ -9,7 +10,7 @@
 → `No such file or directory`. Без этого пакета каждая команда приёмки
 обрывается на `cd` и даёт ложный `EXIT=1`.
 
-Хост: `ssh 192.168.1.11`, hostname `headless`, cargo 1.98.0, rustc 1.98.0,
+Хост: `ssh <dev-host>`, hostname `<name>`, cargo 1.98.0, rustc 1.98.0,
 rsync 3.5.1, tmux и script на месте, 124 G свободно.
 
 ## production_call
@@ -25,7 +26,7 @@ rsync 3.5.1, tmux и script на месте, 124 G свободно.
 1. Создать каталог на хосте:
 
 ```sh
-ssh 192.168.1.11 'mkdir -p ~/gits/stellwerk'
+ssh <dev-host> 'mkdir -p ~/gits/stellwerk'
 ```
 
 2. Синхронизация — **точная команда**, обязательная перед каждой сборкой
@@ -37,7 +38,7 @@ rsync -az --delete \
   --exclude 'mutants.out/' \
   --exclude 'verify/' --exclude '.worktrees/' --exclude '.ablation/' --exclude '.opencode/' \
   -e 'ssh' \
-  ./ 192.168.1.11:~/gits/stellwerk/
+  ./ <dev-host>:~/gits/stellwerk/
 ```
 
 `--delete` обязателен: без него файл, удалённый локально, остаётся на хосте
@@ -49,7 +50,7 @@ rsync -az --delete \
 
 ```sh
 LOCAL=$(git -C /home/izyabretatel/gits/stellwerk rev-parse HEAD)
-REMOTE=$(ssh 192.168.1.11 'git -C ~/gits/stellwerk rev-parse HEAD')
+REMOTE=$(ssh <dev-host> 'git -C ~/gits/stellwerk rev-parse HEAD')
 test "$LOCAL" = "$REMOTE" && echo "SYNCED=$LOCAL" || echo "STALE local=$LOCAL remote=$REMOTE"
 ```
 
@@ -62,7 +63,7 @@ test "$LOCAL" = "$REMOTE" && echo "SYNCED=$LOCAL" || echo "STALE local=$LOCAL re
 ## Приёмка
 
 ```sh
-ssh 192.168.1.11 'ls -d ~/gits/stellwerk && git -C ~/gits/stellwerk rev-parse HEAD && cargo --version'; echo "HOST_EXIT=$?"
+ssh <dev-host> 'ls -d ~/gits/stellwerk && git -C ~/gits/stellwerk rev-parse HEAD && cargo --version'; echo "HOST_EXIT=$?"
 ```
 
 `HOST_EXIT=0`, напечатаны sha и версия cargo.
@@ -73,7 +74,7 @@ ssh 192.168.1.11 'ls -d ~/gits/stellwerk && git -C ~/gits/stellwerk rev-parse HE
 `target` на хосте существует; его mtime проверен так:
 
 ```sh
-ssh 192.168.1.11 'stat -c %y ~/gits/stellwerk/target 2>/dev/null || echo NO_TARGET'
+ssh <dev-host> 'stat -c %y ~/gits/stellwerk/target 2>/dev/null || echo NO_TARGET'
 ```
 
 Отсутствие `NO_TARGET` — доказательство, что сборка шла на хосте.

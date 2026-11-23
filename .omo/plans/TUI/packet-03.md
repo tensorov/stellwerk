@@ -64,19 +64,19 @@ ledger, `evidence_status` `:233`).
 ## Приёмка
 
 ```sh
-ssh -p 228 zeitoven.ru 'cd ~/gits/stellwerk && cargo test --workspace --no-fail-fast'; echo "WS_EXIT=$?"
+ssh -p <port> <host> 'cd ~/gits/stellwerk && cargo test --workspace --no-fail-fast'; echo "WS_EXIT=$?"
 ```
 
 `WS_EXIT=0`, база не убывает.
 
 ```sh
-ssh -p 228 zeitoven.ru 'cd ~/gits/stellwerk && cargo test -p stellwerk-cli --test tui_start'; echo "START_EXIT=$?"
+ssh -p <port> <host> 'cd ~/gits/stellwerk && cargo test -p stellwerk-cli --test tui_start'; echo "START_EXIT=$?"
 ```
 
 `START_EXIT=0`.
 
 ```sh
-ssh -p 228 zeitoven.ru 'cd ~/gits/stellwerk && cargo test -p stellwerk-cli --test run'; echo "RUN_EXIT=$?"
+ssh -p <port> <host> 'cd ~/gits/stellwerk && cargo test -p stellwerk-cli --test run'; echo "RUN_EXIT=$?"
 ```
 
 `RUN_EXIT=0` — контракт существующей подкоманды `run` не сломан.

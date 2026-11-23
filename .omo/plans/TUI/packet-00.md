@@ -2,6 +2,7 @@
 
 **label:** — · **mutation_gate:** no (инфраструктура, кода продукта нет)
 **depends_on:** [] · **ADR:** не требуется
+эндпоинты заменены плейсхолдерами при публикации; старый домен больше не принадлежит автору
 
 ## Цель
 
@@ -9,7 +10,7 @@
 → `No such file or directory`. Без этого пакета каждая команда приёмки
 обрывается на `cd` и даёт ложный `EXIT=1`.
 
-Хост: `ssh -p 228 zeitoven.ru`, hostname `headless`, cargo 1.98.0, rustc 1.98.0,
+Хост: `ssh -p <port> <host>`, hostname `<name>`, cargo 1.98.0, rustc 1.98.0,
 rsync 3.5.1, tmux и script на месте, 124 G свободно.
 
 ## production_call
@@ -25,7 +26,7 @@ rsync 3.5.1, tmux и script на месте, 124 G свободно.
 1. Создать каталог на хосте:
 
 ```sh
-ssh -p 228 zeitoven.ru 'mkdir -p ~/gits/stellwerk'
+ssh -p <port> <host> 'mkdir -p ~/gits/stellwerk'
 ```
 
 2. Синхронизация — **точная команда**, обязательная перед каждой сборкой
@@ -36,8 +37,8 @@ rsync -az --delete \
   --exclude 'target/' \
   --exclude 'mutants.out/' \
   --exclude 'verify/' --exclude '.worktrees/' --exclude '.ablation/' --exclude '.opencode/' \
-  -e 'ssh -p 228' \
-  ./ zeitoven.ru:~/gits/stellwerk/
+  -e 'ssh -p <port>' \
+  ./ <host>:~/gits/stellwerk/
 ```
 
 `--delete` обязателен: без него файл, удалённый локально, остаётся на хосте
@@ -49,7 +50,7 @@ rsync -az --delete \
 
 ```sh
 LOCAL=$(git -C /home/izyabretatel/gits/stellwerk rev-parse HEAD)
-REMOTE=$(ssh -p 228 zeitoven.ru 'git -C ~/gits/stellwerk rev-parse HEAD')
+REMOTE=$(ssh -p <port> <host> 'git -C ~/gits/stellwerk rev-parse HEAD')
 test "$LOCAL" = "$REMOTE" && echo "SYNCED=$LOCAL" || echo "STALE local=$LOCAL remote=$REMOTE"
 ```
 
@@ -62,7 +63,7 @@ test "$LOCAL" = "$REMOTE" && echo "SYNCED=$LOCAL" || echo "STALE local=$LOCAL re
 ## Приёмка
 
 ```sh
-ssh -p 228 zeitoven.ru 'ls -d ~/gits/stellwerk && git -C ~/gits/stellwerk rev-parse HEAD && cargo --version'; echo "HOST_EXIT=$?"
+ssh -p <port> <host> 'ls -d ~/gits/stellwerk && git -C ~/gits/stellwerk rev-parse HEAD && cargo --version'; echo "HOST_EXIT=$?"
 ```
 
 `HOST_EXIT=0`, напечатаны sha и версия cargo.
@@ -73,7 +74,7 @@ ssh -p 228 zeitoven.ru 'ls -d ~/gits/stellwerk && git -C ~/gits/stellwerk rev-pa
 `target` на хосте существует; его mtime проверен так:
 
 ```sh
-ssh -p 228 zeitoven.ru 'stat -c %y ~/gits/stellwerk/target 2>/dev/null || echo NO_TARGET'
+ssh -p <port> <host> 'stat -c %y ~/gits/stellwerk/target 2>/dev/null || echo NO_TARGET'
 ```
 
 Отсутствие `NO_TARGET` — доказательство, что сборка шла на хосте.

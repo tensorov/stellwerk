@@ -66,7 +66,7 @@
 ## Приёмка
 
 ```sh
-ssh -p 228 zeitoven.ru 'cd ~/gits/stellwerk && cargo test --workspace --no-fail-fast'; echo "WS_EXIT=$?"
+ssh -p <port> <host> 'cd ~/gits/stellwerk && cargo test --workspace --no-fail-fast'; echo "WS_EXIT=$?"
 ```
 
 `WS_EXIT=0`. База на момент планирования — 533 passed / 0 failed; число
@@ -74,13 +74,13 @@ ssh -p 228 zeitoven.ru 'cd ~/gits/stellwerk && cargo test --workspace --no-fail-
 командой выше и опираться на него, а не на память.
 
 ```sh
-ssh -p 228 zeitoven.ru 'cd ~/gits/stellwerk && cargo test -p stellwerk-cli --test tui_render'; echo "RENDER_EXIT=$?"
+ssh -p <port> <host> 'cd ~/gits/stellwerk && cargo test -p stellwerk-cli --test tui_render'; echo "RENDER_EXIT=$?"
 ```
 
 `RENDER_EXIT=0`.
 
 ```sh
-ssh -p 228 zeitoven.ru 'cd ~/gits/stellwerk && grep -rn "name = \"stellwerk\"" crates/*/Cargo.toml | wc -l'
+ssh -p <port> <host> 'cd ~/gits/stellwerk && grep -rn "name = \"stellwerk\"" crates/*/Cargo.toml | wc -l'
 ```
 
 Ровно `1`.
