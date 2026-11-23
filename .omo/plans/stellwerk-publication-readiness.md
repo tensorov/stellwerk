@@ -100,7 +100,7 @@ Your next move: подтвердить три пункта выше и пере�
 ## Todos
 > Implementation + Test = ONE todo. Never separate.
 <!-- APPEND TASK BATCHES BELOW THIS LINE WITH edit/apply_patch - never rewrite the headers above. -->
-- [ ] 23. (Wave 0 — выполняется первой; номер 23, потому что todos 1–22 уже согласованы, порядок задаёт волна) Resolve the tracked working tree left by the completed V2 boulder
+- [x] 23. (Wave 0 — выполняется первой; номер 23, потому что todos 1–22 уже согласованы, порядок задаёт волна) Resolve the tracked working tree left by the completed V2 boulder
   What to do: (a) прогнать routing-контракт: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_omo_config.py -q` (сейчас 8 passed; голый `pytest` падает на сломанном плагине `pytest_aiohttp` — это окружение, не тест, поэтому флаг обязателен). (b) при зелёном — закоммитить `opencode.json`, `.omo/omo.jsonc`, `tests/test_omo_config.py` одним config-пакетом (`model`/`small_model` + 183 цепочки агентов + контракт-тест), evidence в `.omo/evidence/publication/task-0-stellwerk-publication-readiness.md`; при красном — `git checkout -- opencode.json .omo/omo.jsonc tests/test_omo_config.py`, записать причину в evidence, routing остаётся на HEAD. (c) закоммитить `.omo/plans/stellwerk-production-v2.md` (тики `[x]` после брудера) и `.omo/plans/stellwerk-publication-readiness.md` отдельным artifact-коммитом. (d) в evidence зафиксировать полный `git status --porcelain` до/после: остаться должны только untracked, которые закрывают todos 7/11/12/16.
   Must NOT do: не трогать untracked (`.omo/evidence`, `.omo/drafts`, `.omo/archive`, `.omo/start-work`, `.playwright-mcp`, `mutants*`, `.sisyphus/plans/{H1,N1,N2,TUI}`) — это работа todos 7/11/12/16; не коммитить `.omo/drafts/**` (приватный, todo 12); не менять код; не пушить; не «дочищать» `.sisyphus`.
   Parallelization: Wave 0 | Blocked by: — | Blocks: 22
@@ -109,7 +109,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — tracked-модификаций 0, тест `8 passed`; failure — оставить `opencode.json` изменённым, первая проверка непустая. Evidence `.omo/evidence/publication/task-0-stellwerk-publication-readiness.md`
   Commit: Y | `chore(config): repin agent routing to deepseek-v4.1-flash-free` + `chore(plans): add publication plan and tick V2 boulder`
 
-- [ ] 1. Add dual license files
+- [x] 1. Add dual license files
   What to do: `LICENSE-MIT` (MIT, `Copyright (c) 2026 Aleksei Molchanov`) и `LICENSE-APACHE` (полный Apache-2.0, copyright `2026 Aleksei Molchanov`).
   Must NOT do: не трогать `Cargo.toml`; не добавлять badge'ы; не выдумывать второй email.
   Parallelization: Wave 1 | Blocked by: — | Blocks: 9
@@ -118,7 +118,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — команды exit 0; failure — удалить `LICENSE-APACHE`, `test -s` даёт 1. Evidence `.omo/evidence/publication/task-1-stellwerk-publication-readiness.md`
   Commit: Y | `docs(license): add MIT and Apache-2.0 texts`
 
-- [ ] 2. Workspace publication metadata + ADR-0025 + ADR-0028
+- [x] 2. Workspace publication metadata + ADR-0025 + ADR-0028
   What to do: в `[workspace.package]` (`Cargo.toml:5-8`) добавить `description`, `repository = "https://github.com/tensorov/stellwerk"`, `homepage`, `readme = "README.md"`, `authors = ["Aleksei Molchanov <aleksei.v.molchanov@gmail.com>"]`; `license`/`edition`/`rust-version` не менять. ADR-0025: метаданные на workspace, `publish = false` буквально в 7 манифестах, наследование не используется. ADR-0028: лицензии/документы/метаданные проверяются исполняемой приёмкой, а не новым Rust-тестом; ADR-0006 (PolyForge/Riegel) не применим.
   Must NOT do: не менять `members`/`[workspace.dependencies]`; не добавлять `publish` в workspace; не переписывать авторов истории (`.mailmap` не меняет raw-коммиты).
   Parallelization: Wave 1 | Blocked by: — | Blocks: 9,22
@@ -127,7 +127,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — ассерты и `cargo metadata`; failure — убрать `authors`, python падает. Evidence `.omo/evidence/publication/task-2-stellwerk-publication-readiness.md`
   Commit: Y | `chore(manifest): workspace publication metadata` (footer `contract-change`, ADR-0025/0028)
 
-- [ ] 3. Mark core/store/gateway internal
+- [x] 3. Mark core/store/gateway internal
   What to do: `publish = false` в `[package]` трёх манифестов.
   Must NOT do: не трогать версии/зависимости; не добавлять `publish` в workspace.
   Parallelization: Wave 1 | Blocked by: — | Blocks: 22
@@ -136,7 +136,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — цикл 0; failure — убрать строку из `store`, цикл падает. Evidence `.omo/evidence/publication/task-3-stellwerk-publication-readiness.md`
   Commit: Y | `chore(manifest): mark core, store, gateway internal (1/3)`
 
-- [ ] 4. Mark task/registry/cli internal
+- [x] 4. Mark task/registry/cli internal
   What to do: то же для task/registry/cli.
   Must NOT do: не менять `[[bin]]`/features.
   Parallelization: Wave 1 | Blocked by: — | Blocks: 22
@@ -145,7 +145,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — 3/3; failure — убрать из `cli`, падает. Evidence `.omo/evidence/publication/task-4-stellwerk-publication-readiness.md`
   Commit: Y | `chore(manifest): mark task, registry, cli internal (2/3)`
 
-- [ ] 5. Mark xtask internal + prove publish == [] for all 7 members
+- [x] 5. Mark xtask internal + prove publish == [] for all 7 members
   What to do: `publish = false` в `xtask/Cargo.toml`; затем доказать метаданными, что публиковать нечего.
   Must NOT do: не править корневой `Cargo.toml` здесь; не считать «6 крейтов» — пакетов 7.
   Parallelization: Wave 1 | Blocked by: 3,4 | Blocks: 22
@@ -154,7 +154,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — `publish=[] for 7`; failure — убрать строку из `xtask`, `bad=['xtask']`. Evidence `.omo/evidence/publication/task-5-stellwerk-publication-readiness.md`
   Commit: Y | `chore(manifest): mark xtask internal (3/3)`
 
-- [ ] 6. Freeze ledger encoding baseline in fixtures (test-first)
+- [x] 6. Freeze ledger encoding baseline in fixtures (test-first)
   What to do: `xtask/tests/ledger_encoding.rs` читает `.stellwerk/FINDINGS.md` и `.night/STATE.md` и падает при их отсутствии (`:14,25-26,41-49`). Сначала поменять `BASELINE` на `xtask/tests/fixtures/ledger_encoding/{FINDINGS.md,STATE.md}` → RED, затем создать два **минимальных** синтетических файла с тем же числом `U+FFFD` (4 символа/2 строки и 2/1). В doc-комментарии: живой журнал внутренний и не публикуется, фикстура замораживает исторический baseline.
   Must NOT do: не копировать 5005-строчный `FINDINGS.md`; не ставить `#[ignore]`/рантайм-skip; не удалять `a_fresh_replacement_char_is_detected`.
   Parallelization: Wave 1 | Blocked by: — | Blocks: 11,21
@@ -163,7 +163,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — тест зелёный, фикстуры ≤3 строк; failure — удалить фикстуру, тест падает. Evidence `.omo/evidence/publication/task-6-stellwerk-publication-readiness.md`
   Commit: Y | `test(xtask): freeze ledger encoding baseline in fixtures`
 
-- [ ] 7. Commit canon packets and make C8 gate the lint (test-first)
+- [x] 7. Commit canon packets and make C8 gate the lint (test-first)
   What to do: (a) `git add .sisyphus/plans/H1 .sisyphus/plans/N1 .sisyphus/plans/N2 .sisyphus/plans/TUI` (19 файлов; artifact). (b) RED: в `crates/stellwerk-cli/tests/plan_lint.rs` — temp-дерево canon+mirror с расходящимся `depends_on`, вызов через `--root`, ожидание exit 1. (c) GREEN: `scripts/plan-lint.py` — `--root` и `total += len(c8)`; расширить `plan_lint_is_green` проверкой `ЗЕРКАЛО ПАКЕТОВ: совпадает с каноном` и отсутствием `расхождений`.
   Must NOT do: не принимать exit 0 без строки зеркала; не считать 19 «пакетами»; не трогать `_archive`.
   Parallelization: Wave 1 | Blocked by: — | Blocks: 16,17,21
@@ -172,7 +172,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — тест + self-test + строки; failure — удалить один mirror-пакет, новый тест падает. Evidence `.omo/evidence/publication/task-7-stellwerk-publication-readiness.md`
   Commit: Y | `fix(plan-lint): gate mirror drift` + `docs(plans): commit H1/N1/N2/TUI canon`
 
-- [ ] 8. Typed error on poisoned mutex (3 sites, TDD)
+- [x] 8. Typed error on poisoned mutex (3 sites, TDD)
   What to do: тестом первым добавить `Poisoned` в ошибку леджера; заменить `lock().expect(...)` на `map_err(|_| Poisoned)` в `ledger_sqlite.rs:65,93` и `build_runner.rs:639`.
   Must NOT do: не трогать 18 сайтов `store/sqlite.rs`, `tui.rs`, `task/cli.rs`; не менять trait сигнатуры; не оставлять панику без записи.
   Parallelization: Wave 1 | Blocked by: — | Blocks: 21
@@ -181,7 +181,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — тест на `Poisoned` зелёный; failure — вернуть `expect`, тест падает. Evidence `.omo/evidence/publication/task-8-stellwerk-publication-readiness.md`
   Commit: Y | `fix(ledger): return typed error on poisoned mutex`
 
-- [ ] 9. README + docs/quickstart.md
+- [x] 9. README + docs/quickstart.md
   What to do: README (сейчас 10 строк, «M0»): one-liner, pre-1.0, 6 крейтов, **два бинаря** (`stellwerk`, `stellwerk-task`) + `cargo xtask` (алиас в `.cargo/config.toml`), явно: `stellwerk task` не существует, задача — `stellwerk-task task ...`. quickstart: `rust-toolchain.toml` пинит **1.99.0**, MSRV `Cargo.toml:8` — **1.88**; prerequisites (rustup+rustfmt+clippy, `nightly-2026-10-01` только для мутаций, `python3`, `bwrap`, Pi 1.0.2 через `PI_BIN`/`$HOME/.pi/agent/bin/pi`, `STELLWERK_PI_EXTENSION`, token-файл, `gh`); **tier-1** `just check` (включая `just history`) и **tier-2** `cargo test --workspace --exclude xtask` + `cargo test -p xtask --test ledger_encoding`; команды сборки/запуска и примеры; строка: untracked = HEAD, история содержит внутренние артефакты (ссылка на SECURITY).
   Must NOT do: не заявлять crates.io; не писать «`just check` = весь test»; не обещать «чистый клон без предпосылок»; badge, который 404.
   Parallelization: Wave 2 | Blocked by: 1,2 | Blocks: 22
@@ -190,7 +190,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — все `rg`; failure — убрать `tier-1`, ассерт падает. F3 исполняет tier-1 команды. Evidence `.omo/evidence/publication/task-9-stellwerk-publication-readiness.md`
   Commit: Y | `docs(readme): public quickstart with two verification tiers`
 
-- [ ] 10. Honest `just doctor` (fail-closed) + test
+- [x] 10. Honest `just doctor` (fail-closed) + test
   What to do: вынести проверки в `scripts/doctor.sh` (POSIX), рецепт `doctor` = вызов. `cargo`, `rustc`, `opencode`, `polyforge-mcp`, `gh` (мягко), Pi (`PI_BIN` или `$HOME/.pi/agent/bin/pi`), `STELLWERK_PI_EXTENSION` (OK/MISSING/UNCONFIGURED), token-файл читаем и непуст, `bwrap`. Обязательное отсутствует → `<name>: MISSING|UNCONFIGURED (<hint>)`, exit 1. `scripts/tests/test_doctor.sh`: happy со стабами; failure `PI_BIN=/nonexistent`; снятый extension → UNCONFIGURED.
   Must NOT do: не «ок» на отсутствие; не `|| true`; не требовать сеть; не править `docs/p00-baseline.md`.
   Parallelization: Wave 2 | Blocked by: — | Blocks: 21
@@ -199,7 +199,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — стабы 0; failure — `/nonexistent` даёт 1 и `pi: MISSING`. Evidence `.omo/evidence/publication/task-10-stellwerk-publication-readiness.md`
   Commit: Y | `feat(doctor): fail closed on missing runtime prerequisites`
 
-- [ ] 11. Untrack internal run artifacts + ignore rules
+- [x] 11. Untrack internal run artifacts + ignore rules
   What to do: после todo 6 `git rm -r --cached .night .stellwerk .ablation-pi mutation-evidence PLACEHOLDER docs/diagnostics scripts/ablation/__pycache__`; `.gitignore` += `/.night/`, `/.stellwerk/`, `/.ablation-pi/`, `/mutation-evidence/`, `/PLACEHOLDER/`, `/docs/diagnostics/`, `**/mutants.out*/`.
   Must NOT do: не удалять с диска; не трогать `.omo/plans`; не добавлять `/.ablation-solpi/`/`/.ablation-omp/`.
   Parallelization: Wave 2 | Blocked by: 6 | Blocks: 15,16,21
@@ -208,7 +208,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — все проверки; failure — `git add -f .night/STATE.md`, ассерт падает. Evidence `.omo/evidence/publication/task-11-stellwerk-publication-readiness.md`
   Commit: Y | `chore(repo): untrack internal run artifacts`
 
-- [ ] 12. Keep OMO plans public, runtime private
+- [x] 12. Keep OMO plans public, runtime private
   What to do: `git rm -r --cached .omo/evidence .omo/run-continuation .omo/drafts`; `.gitignore` += `.omo/evidence/`, `.omo/drafts/`, `.omo/archive/`; оставить `.omo/plans/**` и `.omo/omo.jsonc`.
   Must NOT do: не трогать `.omo/plans`/`_archive`; не удалять evidence с диска.
   Parallelization: Wave 2 | Blocked by: — | Blocks: 16,21
@@ -217,7 +217,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — пусто; failure — `git add -f .omo/evidence/x`, ассерт падает. Evidence `.omo/evidence/publication/task-12-stellwerk-publication-readiness.md`
   Commit: Y | `chore(omo): publish plans only`
 
-- [ ] 13. Redact live endpoints from public plans (canon + mirror)
+- [x] 13. Redact live endpoints from public plans (canon + mirror)
   What to do: в `.omo/plans/TUI/packet-00..04.md`, `.omo/plans/tui.md` и `.sisyphus/plans/TUI/packet-00..04.md` заменить живые эндпоинты на плейсхолдеры: домен → `<host>`, порт → `<port>`, приватный IPv4 → `<dev-host>`; строки вида `ssh -p <port> <host>` и `hostname <name>` переписать с плейсхолдерами. Редакция касается **только** живых эндпоинтов; остальной текст не трогать. В шапке TUI packet-00 добавить строку: «эндпоинты заменены плейсхолдерами при публикации; старый домен больше не принадлежит автору».
   Must NOT do: не менять `depends_on`/`risk_class`/`files`/`deliverable` (C8); не трогать `/home/izyabretatel` (идентичность принята); не править ADR; не пытаться «почистить» историю.
   Parallelization: Wave 2 | Blocked by: — | Blocks: 16,21,22
@@ -226,7 +226,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — `rg` пуст, `plan-lint` 0 и зеркало совпадает; failure — вернуть домен в один пакет, первый `rg` падает. Evidence `.omo/evidence/publication/task-13-stellwerk-publication-readiness.md`
   Commit: Y | `docs(plans): redact live endpoints before publication`
 
-- [ ] 14. CHANGELOG, SECURITY, CONTRIBUTING
+- [x] 14. CHANGELOG, SECURITY, CONTRIBUTING
   What to do: `CHANGELOG.md` (Keep a Changelog, `[Unreleased]`, `[0.0.1] — 2026-11-19`); `SECURITY.md` — поддержка только main, приватные GitHub advisories, контакт `aleksei.v.molchanov@gmail.com`; **три явных заявления**: (1) идентичность: автор `Aleksei Molchanov`, публичный хэндл `tensorov`; (2) состав истории: HEAD очищен, история содержит имя/адреса автора (старый домен почты, gmail), ранние коммиты под псевдонимом, старый хост/порт, абляции и имена моделей, `Co-authored-by: Sisyphus`, внутренние журналы; rewrite не выполнялся; (3) IP-attestation: «код написан вне рамок найма, это личный open-source проект, права принадлежат автору». `CONTRIBUTING.md` — TDD, packet ≤3 файла/C2, `just check` vs `just status`, запрет `#[allow]`/`cargo add`, порядок main→worktree→merge→attest.
   Must NOT do: не обещать crates.io; не указывать несуществующий email; не заявлять «история очищена»; не дублировать ADR.
   Parallelization: Wave 2 | Blocked by: — | Blocks: 22
@@ -235,7 +235,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — все ассерты; failure — убрать `[0.0.1]`, падает. Evidence `.omo/evidence/publication/task-14-stellwerk-publication-readiness.md`
   Commit: Y | `docs: add changelog, security policy, contributing guide`
 
-- [ ] 15. Replace links to unpublished journals in code and docs
+- [x] 15. Replace links to unpublished journals in code and docs
   What to do: `crates/stellwerk-core/src/hexfmt.rs:4` (`.stellwerk/DUPLICATES.md`) и `crates/stellwerk-store/src/lib.rs:14` (`.night/STATE.md`) — «внутренний журнал (не публикуется)»; `docs/PIVOT.md:114` + преамбула — та же формулировка и строка: ADR-0005/0006/0013, планы и `scripts/worker/*` ссылаются на исторический архив, их не трогаем.
   Must NOT do: не править ADR и планы; не менять `scripts/worker/*`; не менять поведение; не сканировать рабочий каталог обычным `rg` — `docs/diagnostics/**` снят с индекса в todo 11, но остаётся на диске, поэтому приёмка идёт по tracked-файлам (`git grep`).
   Parallelization: Wave 3 | Blocked by: 11 | Blocks: 16,21
@@ -244,7 +244,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — `rg` пуст, тесты зелёные; failure — вернуть ссылку, `rg` падает. Evidence `.omo/evidence/publication/task-15-stellwerk-publication-readiness.md`
   Commit: Y | `docs: replace links to unpublished internal journals`
 
-- [ ] 16. Repository hygiene guard + all-history secret scan
+- [x] 16. Repository hygiene guard + all-history secret scan
   What to do: (a) `crates/stellwerk-registry/tests/repo_hygiene.rs`: `git ls-files -z`; нет классов `.night/`, `.stellwerk/`, `.ablation-pi/`, `mutation-evidence/`, `PLACEHOLDER/`, `docs/diagnostics/`, `.omo/archive/`, `__pycache__/`, `mutants.out`; вне `.omo/plans/**`/`.sisyphus/plans/**` нет `/home/izyabretatel`; `LICENSE-*`/`SECURITY.md`/`.omo/omo.jsonc` трекаются; в `.omo/{evidence,run-continuation,drafts}/` нет трекаемых; в `crates/**/*.rs` и `docs/**` (кроме `docs/adr/**`) нет ссылок на снятые пути; **в планах нет живых эндпоинтов** (`ssh -p <digits> <host>`, приватные IPv4). (b) `scripts/scan-history.sh`: перебрать все blobs (`git rev-list --objects --all` + `git cat-file --batch`); паттерны `ghp_`, `github_pat_`, `gho_`, `xox[baprs]-`, `AKIA[0-9A-Z]{16}`, `AIza…`, `sk-[A-Za-z0-9]{20,}`, `-----BEGIN [A-Z ]*PRIVATE KEY-----`, `(API_KEY|TOKEN|SECRET|PASSWORD)\s*=\s*[A-Za-z0-9/+_-]{20,}`, `Bearer [A-Za-z0-9._-]{30,}`; печатать только `commit:path`; exit 0 clean / 1 findings / **2 если репозиторий shallow или нет `git`**. (c) `scripts/tests/test_scan_history.sh`: temp-репо с фейковым `ghp_…` в коммите → exit 1 и значение не печатается; чистый → 0; shallow → 2.
   Must NOT do: не тянуть зависимости; не проверять untracked; не печатать найденные значения; не хардкодить 117 имён; не трактовать «скан не запустился» как «чисто».
   Parallelization: Wave 3 | Blocked by: 7,11,12,13,15 | Blocks: 17,21,22
@@ -253,16 +253,16 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — 3 команды; failure — `git add -f mutants.out/x` → guard падает; фейковый `ghp_` в temp → скан exit 1. Evidence `.omo/evidence/publication/task-16-stellwerk-publication-readiness.md`
   Commit: Y | `test(repo): guard the public tree and scan all history`
 
-- [ ] 17. Separate the strict gate from the RED report (`just` + `xtask gate`)
+- [x] 17. Separate the strict gate from the RED report (`just` + `xtask gate`)
   What to do: `check` = `check-gate check-risk-tables history scripts public-tree` (без `test-status`); `status` = `test-status` + пояснение «informational»; `history` = `bash scripts/scan-history.sh`; `scripts` = inline-цикл `for f in scripts/tests/*.sh; do bash "$$f"; done`; `public-tree` = `cargo test -p stellwerk-registry --test repo_hygiene`. `xtask/src/main.rs` `gate` → `just check status`; строка в README (`just check` — строгий гейт, `just status` — сводка).
   Must NOT do: не менять тело `test-status`; не `|| true`; не ломать `check-status` (перевести на `status`).
   Parallelization: Wave 3 | Blocked by: 7,16 | Blocks: 18,21
   References: `justfile:15-29,45-65`; `xtask/src/main.rs:91-96`; `README.md:9`.
-  Acceptance: `just --dry-run check | rg -q 'scan-history\.sh' && just --dry-run check | rg -q 'repo_hygiene' && ! just --dry-run check | rg -q 'test-status' && just --dry-run status | rg -q 'test-status' && just --dry-run check-status | rg -q 'test-status' && just history && just scripts && cargo test -p stellwerk-registry --test repo_hygiene && rg -q 'just check status' xtask/src/main.rs`
+  Acceptance: `just --dry-run check 2>&1 | rg -q 'scan-history\.sh' && just --dry-run check 2>&1 | rg -q 'repo_hygiene' && ! just --dry-run check 2>&1 | rg -q 'test-status' && just --dry-run status 2>&1 | rg -q 'test-status' && just --dry-run check-status 2>&1 | rg -q 'test-status' && just history && just scripts && cargo test -p stellwerk-registry --test repo_hygiene && rg -q 'just check status' xtask/src/main.rs`
   QA scenarios: happy — всё 0; failure — вернуть `test-status` в `check`, ассерт падает. Evidence `.omo/evidence/publication/task-17-stellwerk-publication-readiness.md`
   Commit: Y | `chore(just): separate strict gate from informational report`
 
-- [ ] 18. CI hard gate + contract test + ADR-0027
+- [x] 18. CI hard gate + contract test + ADR-0027
   What to do: `.github/workflows/ci.yml` — обязательные job'ы `fmt`, `clippy`, `registry`, `core`, `store`, `risk-tables`, `scripts`, `repo-hygiene`, `history`, `plan-lint`; `actions/checkout` с `fetch-depth: 0` (иначе скан истории даёт shallow → exit 2); без `|| true`, без `continue-on-error`; toolchain `1.99.0` (не `@stable`). Создать `crates/stellwerk-registry/tests/ci_contract.rs` (строковые ассерты) и `docs/adr/0027-ci-mirrors-local-gate.md`: жёсткий гейт = tier-1, RED-сьют — отдельный файл (todo 19), обязательные checks живут в branch protection, не в YAML.
   Must NOT do: не менять версии actions; не пинить счётчики тестов; не добавлять Pi/bwrap в жёсткий гейт; не запускать history-скан без полной истории.
   Parallelization: Wave 4 | Blocked by: 17 | Blocks: 19,20,21
@@ -271,7 +271,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — тест + 6 `rg`; failure — убрать `fetch-depth: 0`, тест падает. Evidence `.omo/evidence/publication/task-18-stellwerk-publication-readiness.md`
   Commit: Y | `ci: mirror the local strict gate` (footer `contract-change`, ADR-0027)
 
-- [ ] 19. Explicit expected-RED spec workflow
+- [x] 19. Explicit expected-RED spec workflow
   What to do: `.github/workflows/spec.yml`: job name `spec (expected RED)`; push/PR; `fetch-depth: 0`; `apt-get install -y bubblewrap python3`; `cargo test -p stellwerk-task --locked --no-fail-fast` и `-p stellwerk-gateway`; **без** `continue-on-error`; не входит в branch protection. Расширить `ci_contract.rs`: spec.yml существует, имя содержит `expected RED`, без `continue-on-error`, запускает ровно task+gateway, `ci.yml` его не дублирует.
   Must NOT do: не добавлять `|| true`; не включать task/gateway в `ci.yml`; не притворяться, что workflow зелёный.
   Parallelization: Wave 4 | Blocked by: 18 | Blocks: 21
@@ -280,7 +280,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — тест + `rg`; failure — добавить `continue-on-error`, тест падает. Evidence `.omo/evidence/publication/task-19-stellwerk-publication-readiness.md`
   Commit: Y | `ci: name the expected-RED spec suite` (footer `contract-change`, ADR-0027)
 
-- [ ] 20. Remove the dead polyforge workflow (test-first) + ADR-0026
+- [x] 20. Remove the dead polyforge workflow (test-first) + ADR-0026
   What to do: RED: `crates/stellwerk-cli/tests/ci_gate.rs:165-181` читает `.github/workflows/polyforge.yml`; переписать тест на новый контракт — файла нет, `scripts/integrator/gate.sh` остаётся fail-closed (тесты 155-163 не трогать). GREEN: удалить workflow; ADR-0026: gate требует `polyforge-mcp` + `task_id`, в Actions нет ни того, ни другого; gate локален.
   Must NOT do: не менять `gate.sh`; не переносить гейт в CI; не удалять тест «fail-closed без polyforge».
   Parallelization: Wave 4 | Blocked by: 18 | Blocks: 21
@@ -289,7 +289,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — тест зелёный, файла нет; failure — вернуть файл, тест падает. Evidence `.omo/evidence/publication/task-20-stellwerk-publication-readiness.md`
   Commit: Y | `ci: remove the dead polyforge workflow` (footer `contract-change`, ADR-0026)
 
-- [ ] 21. Fresh-clone proof with two tiers
+- [x] 21. Fresh-clone proof with two tiers
   What to do: `scripts/verify-fresh-clone.sh` (`set -euo pipefail`, trap cleanup): clone `--no-local` в `mktemp -d`; **tier-1** всегда: `cargo build --locked -p stellwerk-cli --bin stellwerk`, `./target/debug/stellwerk --help`, `just check` (включая history), `bash scripts/scan-history.sh`, `cargo test -p xtask --test ledger_encoding`, `git ls-files .omo/evidence | wc -l` = 0; **tier-2** только при rustup+`nightly-2026-10-01`+python3+bwrap+Pi(`PI_BIN`)+`STELLWERK_PI_EXTENSION`+token: `cargo test --workspace --exclude xtask --locked`; иначе `TIER-2 SKIPPED: <missing…>` и **exit 2**. Печать `FRESH CLONE: OK (tier-1)` / `OK (tier-1+tier-2)`.
   Must NOT do: не ставить nightly; не тянуть сеть сверх cargo; не возвращать 0 при отсутствии предпосылок tier-2; не клонировать shallow.
   Parallelization: Wave 4 (хвост, после 18,19,20) | Blocked by: 6,7,8,10,11,12,13,15,16,17,18,19,20 | Blocks: 22
