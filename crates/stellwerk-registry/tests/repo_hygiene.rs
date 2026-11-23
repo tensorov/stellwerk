@@ -17,7 +17,11 @@ fn repo_root() -> PathBuf {
         if dir.join(".git").exists() {
             return dir;
         }
-        assert!(dir.pop(), "no .git found above {}", env!("CARGO_MANIFEST_DIR"));
+        assert!(
+            dir.pop(),
+            "no .git found above {}",
+            env!("CARGO_MANIFEST_DIR")
+        );
     }
 }
 
@@ -96,14 +100,20 @@ fn has_private_ip(line: &str, net: &str) -> bool {
 #[test]
 fn no_internal_artifact_classes_are_tracked() {
     let root = repo_root();
-    let prefixes: Vec<String> = ["night", "stellwerk", "ablation-pi", "mutation-evidence", "PLACEHOLDER"]
-        .iter()
-        .map(|name| format!("{}/", dot(name)))
-        .chain([
-            "docs/diagnostics/".to_owned(),
-            format!("{}/archive/", dot("omo")),
-        ])
-        .collect();
+    let prefixes: Vec<String> = [
+        "night",
+        "stellwerk",
+        "ablation-pi",
+        "mutation-evidence",
+        "PLACEHOLDER",
+    ]
+    .iter()
+    .map(|name| format!("{}/", dot(name)))
+    .chain([
+        "docs/diagnostics/".to_owned(),
+        format!("{}/archive/", dot("omo")),
+    ])
+    .collect();
     let needles = ["__pycache__/", "mutants.out"];
 
     let offenders: Vec<String> = tracked(&root)
@@ -112,7 +122,10 @@ fn no_internal_artifact_classes_are_tracked() {
             prefixes.iter().any(|x| p.starts_with(x)) || needles.iter().any(|x| p.contains(x))
         })
         .collect();
-    assert!(offenders.is_empty(), "tracked internal artifacts: {offenders:#?}");
+    assert!(
+        offenders.is_empty(),
+        "tracked internal artifacts: {offenders:#?}"
+    );
 }
 
 #[test]
@@ -124,14 +137,22 @@ fn no_local_home_paths_outside_plans() {
         .filter(|p| !is_plan(p))
         .filter(|p| content(&root, p).contains(&needle))
         .collect();
-    assert!(offenders.is_empty(), "local home path outside plans: {offenders:#?}");
+    assert!(
+        offenders.is_empty(),
+        "local home path outside plans: {offenders:#?}"
+    );
 }
 
 #[test]
 fn required_public_files_are_tracked() {
     let root = repo_root();
     let files = tracked(&root);
-    for required in ["LICENSE-MIT", "LICENSE-APACHE", "SECURITY.md", ".omo/omo.jsonc"] {
+    for required in [
+        "LICENSE-MIT",
+        "LICENSE-APACHE",
+        "SECURITY.md",
+        ".omo/omo.jsonc",
+    ] {
         assert!(
             files.iter().any(|p| p == required),
             "required public file is not tracked: {required}"
@@ -150,7 +171,10 @@ fn no_private_omo_runtime_is_tracked() {
         .into_iter()
         .filter(|p| prefixes.iter().any(|x| p.starts_with(x)))
         .collect();
-    assert!(offenders.is_empty(), "tracked private OMO runtime: {offenders:#?}");
+    assert!(
+        offenders.is_empty(),
+        "tracked private OMO runtime: {offenders:#?}"
+    );
 }
 
 #[test]
@@ -193,5 +217,8 @@ fn no_live_endpoints_in_plans() {
             offenders.push(path);
         }
     }
-    assert!(offenders.is_empty(), "live endpoints in plans: {offenders:#?}");
+    assert!(
+        offenders.is_empty(),
+        "live endpoints in plans: {offenders:#?}"
+    );
 }

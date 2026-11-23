@@ -13,7 +13,10 @@ const REPLACEMENT: char = '\u{FFFD}';
 /// `FINDINGS.md` — 4 символа на 2 строках, `STATE.md` — 2 символа на 1 строке.
 /// Живой журнал `.stellwerk/FINDINGS.md` внутренний и не публикуется; фикстура замораживает
 /// исторический baseline кодировки, чтобы тест не зависел от приватных файлов.
-const BASELINE: &[(&str, usize)] = &[("xtask/tests/fixtures/ledger_encoding/FINDINGS.md", 4), ("xtask/tests/fixtures/ledger_encoding/STATE.md", 2)];
+const BASELINE: &[(&str, usize)] = &[
+    ("xtask/tests/fixtures/ledger_encoding/FINDINGS.md", 4),
+    ("xtask/tests/fixtures/ledger_encoding/STATE.md", 2),
+];
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
