@@ -1,0 +1,23 @@
+name: spec (expected RED)
+
+# Expected-RED specification suite for the active milestones. A red result is
+# the specification, not a regression: this workflow is intentionally allowed
+# to fail and must stay that way. It is NOT a required check — required checks
+# are configured in branch protection, and this workflow is deliberately absent
+# there (ADR-0027). Do not soften a step to make it green.
+on: { push: {}, pull_request: {} }
+
+jobs:
+  spec:
+    name: spec (expected RED)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - name: Install sandbox prerequisites
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap python3
+      - name: Task runner specification (expected RED)
+        run: cargo test -p stellwerk-task --locked --no-fail-fast
+      - name: Gateway specification (expected RED)
+        run: cargo test -p stellwerk-gateway --locked --no-fail-fast

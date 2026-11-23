@@ -9,6 +9,7 @@
 //! The expected-RED spec suite is deliberately NOT part of this gate: it lives
 //! in a separate workflow (task 19) and must stay out of branch protection.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -30,6 +31,30 @@ fn workspace_root() -> PathBuf {
 fn ci_yaml() -> String {
     fs::read_to_string(workspace_root().join(".github/workflows/ci.yml"))
         .expect("read .github/workflows/ci.yml")
+}
+
+fn spec_yaml() -> String {
+    fs::read_to_string(workspace_root().join(".github/workflows/spec.yml"))
+        .expect("read .github/workflows/spec.yml")
+}
+
+/// Collect every `-p stellwerk-<crate>` target mentioned in a workflow.
+fn test_crates(yaml: &str) -> BTreeSet<String> {
+    const NEEDLE: &str = "-p stellwerk-";
+    let mut crates = BTreeSet::new();
+    let mut rest = yaml;
+    while let Some(pos) = rest.find(NEEDLE) {
+        let tail = &rest[pos + NEEDLE.len()..];
+        let name: String = tail
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+            .collect();
+        if !name.is_empty() {
+            crates.insert(format!("stellwerk-{name}"));
+        }
+        rest = &tail[name.len()..];
+    }
+    crates
 }
 
 #[test]
@@ -124,4 +149,73 @@ fn adr_0027_records_the_gate_boundary() {
             "ADR-0027 must state the `{token}` boundary:\n{adr}"
         );
     }
+}
+
+#[test]
+fn spec_workflow_exists_and_is_named_expected_red() {
+    let yaml = spec_yaml();
+    assert!(!yaml.trim().is_empty(), "spec.yml must not be empty");
+    assert!(
+        yaml.contains("spec (expected RED)"),
+        "the RED suite must be visibly named in the workflow:\n{yaml}"
+    );
+}
+
+#[test]
+fn spec_workflow_is_hard_with_no_forgiving_steps() {
+    let yaml = spec_yaml();
+    assert!(
+        !yaml.contains("|| true"),
+        "`|| true` would hide a RED spec failure:\n{yaml}"
+    );
+    assert!(
+        !yaml.contains("continue-on-error"),
+        "`continue-on-error` would hide a RED spec failure:\n{yaml}"
+    );
+}
+
+#[test]
+fn spec_workflow_runs_exactly_task_and_gateway() {
+    let yaml = spec_yaml();
+    for cmd in [
+        "cargo test -p stellwerk-task --locked --no-fail-fast",
+        "cargo test -p stellwerk-gateway --locked --no-fail-fast",
+    ] {
+        assert!(yaml.contains(cmd), "missing spec command `{cmd}`:\n{yaml}");
+    }
+    let expected: BTreeSet<String> = ["stellwerk-task", "stellwerk-gateway"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        test_crates(&yaml),
+        expected,
+        "spec.yml must run exactly task and gateway, no other product crates:\n{yaml}"
+    );
+}
+
+#[test]
+fn spec_workflow_has_full_history_and_red_prerequisites() {
+    let yaml = spec_yaml();
+    for token in [
+        "push",
+        "pull_request",
+        "fetch-depth: 0",
+        "apt-get install -y bubblewrap python3",
+        "--no-fail-fast",
+    ] {
+        assert!(
+            yaml.contains(token),
+            "missing spec prerequisite `{token}`:\n{yaml}"
+        );
+    }
+}
+
+#[test]
+fn spec_workflow_is_not_a_required_check() {
+    let yaml = spec_yaml();
+    assert!(
+        yaml.contains("branch protection"),
+        "spec.yml must document that it is not a required check:\n{yaml}"
+    );
 }
