@@ -59,3 +59,7 @@
 .omo/evidence/
 .omo/drafts/
 .omo/archive/
+
+# Laufzeit-Artefakte aus dem Orchestrator (erwartet untracked, nie committen)
+.omo/start-work/
+.playwright-mcp/
