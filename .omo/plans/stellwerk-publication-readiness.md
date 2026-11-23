@@ -298,7 +298,7 @@ Your next move: подтвердить три пункта выше и пере�
   QA scenarios: happy — tier-1 зелёный, tier-2 либо зелёный, либо exit 2 с именами; failure — добавить `/home/izyabretatel` в `docs/`, guard в клоне падает. Evidence `.omo/evidence/publication/task-21-stellwerk-publication-readiness.md`
   Commit: Y | `test(release): prove a clean clone with named tiers`
 
-- [ ] 22. Tag v0.0.1 and publish tensorov/stellwerk
+- [~] 22. Tag v0.0.1 and publish tensorov/stellwerk
   What to do: preflight fail-closed: `test -z "$(git status --porcelain)"`; ветка `main`; `just check`; `bash scripts/scan-history.sh`; `bash scripts/verify-fresh-clone.sh` (0 или 2); `gh auth status`; `gh api repos/tensorov/stellwerk` → **404 = отсутствует**, любой другой ненулевой код (401/403/5xx/сеть) = BLOCKED; `git remote -v` пуст; `git tag -l v0.0.1` пуст; `git config user.name` = `Aleksei Molchanov`, `git config user.email` = `aleksei.v.molchanov@gmail.com`, `git log -1 --format='%an <%ae>'` = `Aleksei Molchanov <aleksei.v.molchanov@gmail.com>`. Затем `git tag -a v0.0.1 -m "stellwerk 0.0.1"`; `gh repo create tensorov/stellwerk --public --source=. --remote=origin --push` (только текущая ветка); `git push origin v0.0.1`; проверка `git ls-remote --heads --tags origin` = ровно 2 строки (`refs/heads/main`, `refs/tags/v0.0.1`). Повторный запуск при существующем непустом репозитории — отказ.
   Must NOT do: force-push; `git push --all|--tags|--mirror`; менять owner/repo; продолжать без `gh auth`; публиковать при грязном дереве; добавлять новые коммиты в конфиг/планы сверх todo 23 — при tracked-модификациях BLOCKED.
   Parallelization: Wave 5 | Blocked by: 2,3,4,5,9,13,14,16,21,23 | Blocks: —
