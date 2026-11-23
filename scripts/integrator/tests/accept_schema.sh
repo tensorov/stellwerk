@@ -134,7 +134,7 @@ mk "$TMP/plans/TUI/packet-01.md" '# TUI-01 — fixture
 ## Приёмка
 
 ```sh
-ssh 192.168.1.11 "cd ~/gits/stellwerk && cargo build --workspace --all-targets"
+ssh example.invalid "cd ~/gits/stellwerk && cargo build --workspace --all-targets"
 ```
 '
 out="$(accept TUI packet-01 "$S")"; rc=$?
