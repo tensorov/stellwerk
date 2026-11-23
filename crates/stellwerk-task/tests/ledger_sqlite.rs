@@ -140,6 +140,7 @@ fn storage_failure_is_returned_not_lost() {
                 "причина отказа сохранена дословно, иначе расследование получает выдуманный ответ: {reason:?}"
             );
         }
+        LedgerError::Poisoned => panic!("duplicate id must not poison the mutex"),
     }
     assert_eq!(
         ledger.entries(TASK).len(),
