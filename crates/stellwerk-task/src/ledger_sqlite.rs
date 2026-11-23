@@ -126,7 +126,10 @@ mod tests {
                 panic!("poison");
             }
         }));
-        assert!(ledger.conn.is_poisoned(), "mutex must be poisoned by the panic");
+        assert!(
+            ledger.conn.is_poisoned(),
+            "mutex must be poisoned by the panic"
+        );
         ledger
     }
 

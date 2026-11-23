@@ -968,9 +968,6 @@ mod tests {
         let result = record_output(&output, "agent answer");
 
         // Then: типизированная WorkerError, а не паника
-        assert_eq!(
-            result,
-            Err(WorkerError("output mutex poisoned".to_owned()))
-        );
+        assert_eq!(result, Err(WorkerError("output mutex poisoned".to_owned())));
     }
 }
