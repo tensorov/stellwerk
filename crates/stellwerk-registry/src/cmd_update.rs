@@ -209,7 +209,15 @@ pub fn run_with(args: &NameArgs, root: &Path, bins: &Bins) -> Result<(), UpdateE
 
     let dest = std::env::temp_dir().join(format!("stellwerk-update-{name}-{}", std::process::id()));
 
-    let outcome = pipeline(root, &name, &url, &rev, &command, &dest, bins);
+    let outcome = pipeline(PipelineArgs {
+        root,
+        name: &name,
+        url: &url,
+        rev: &rev,
+        command: &command,
+        dest: &dest,
+        bins,
+    });
 
     match outcome {
         Ok(report) => {
@@ -251,32 +259,36 @@ pub fn run_with(args: &NameArgs, root: &Path, bins: &Bins) -> Result<(), UpdateE
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn pipeline(
-    root: &Path,
-    name: &str,
-    url: &str,
-    rev: &str,
-    command: &str,
-    dest: &Path,
-    bins: &Bins,
-) -> Result<cmd_measure::MeasureReport, UpdateError> {
+struct PipelineArgs<'a> {
+    root: &'a Path,
+    name: &'a str,
+    url: &'a str,
+    rev: &'a str,
+    command: &'a str,
+    dest: &'a Path,
+    bins: &'a Bins,
+}
+
+fn pipeline(args: PipelineArgs<'_>) -> Result<cmd_measure::MeasureReport, UpdateError> {
     // 1. fetch
-    fetch_source(&bins.git, url, rev, dest)?;
+    fetch_source(&args.bins.git, args.url, args.rev, args.dest)?;
     // 2. build
-    if build_if_rust(&bins.cargo, dest)? {
-        println!("update {name}: cargo build ok");
+    if build_if_rust(&args.bins.cargo, args.dest)? {
+        println!("update {}: cargo build ok", args.name);
     } else {
-        println!("update {name}: no Cargo.toml, build skipped");
+        println!("update {}: no Cargo.toml, build skipped", args.name);
     }
     // 3. smoke — audit is packet-09; the MCP handshake below is the real smoke
     if AUDIT_IMPLEMENTED {
-        println!("update {name}: audit ok");
+        println!("update {}: audit ok", args.name);
     } else {
-        println!("update {name}: audit DEFERRED (packet-09), smoke = MCP handshake");
+        println!(
+            "update {}: audit DEFERRED (packet-09), smoke = MCP handshake",
+            args.name
+        );
     }
     // 4. measure (also writes modules.lock)
-    let report = cmd_measure::measure_module(root, name, command)?;
+    let report = cmd_measure::measure_module(args.root, args.name, args.command)?;
     Ok(report)
 }
 
